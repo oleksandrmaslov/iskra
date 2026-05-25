@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($env:PATH = \"$env:LOCALAPPDATA\\\\Microsoft\\\\dotnet;$env:PATH\"; dotnet build --nologo -v minimal)",
+      "PowerShell($env:PATH = \"$env:LOCALAPPDATA\\\\Microsoft\\\\dotnet;$env:PATH\"; dotnet test --nologo --no-build -v minimal)",
+      "PowerShell($env:PATH = \"$env:LOCALAPPDATA\\\\Microsoft\\\\dotnet;$env:PATH\"; dotnet test --nologo -v minimal)",
+      "PowerShell($env:PATH = \"$env:LOCALAPPDATA\\\\Microsoft\\\\dotnet;$env:PATH\"; dotnet run --no-build --project src/FlashlightApp.Cli -- --help)",
+      "PowerShell($env:PATH = \"$env:LOCALAPPDATA\\\\Microsoft\\\\dotnet;$env:PATH\"; dotnet run --no-build --project src/FlashlightApp.Cli -- --elf C:\\\\fw\\\\x.elf --port COM30 --product pocket-light --target PY32F002A --flash-kb 32 --operator Iryna --batch B1 --gdb-path C:\\\\does-not-exist\\\\arm-none-eabi-gdb.exe; \"exit=$LASTEXITCODE\")",
+      "PowerShell($env:PATH = \"$env:LOCALAPPDATA\\\\Microsoft\\\\dotnet;$env:PATH\"; dotnet run --no-build --project src/FlashlightApp.Cli -- --list-probes)",
+      "PowerShell($env:PATH = \"$env:LOCALAPPDATA\\\\Microsoft\\\\dotnet;$env:PATH\"; dotnet build --nologo -v minimal | Out-Null; dotnet run --no-build --project src/FlashlightApp.Cli -- --list-probes)",
+      "PowerShell($env:PATH = \"$env:LOCALAPPDATA\\\\Microsoft\\\\dotnet;$env:PATH\"; dotnet run --no-build --project src/FlashlightApp.Cli -- --elf c:\\\\Users\\\\Alexandr\\\\py32f0-template-project\\\\Build\\\\app.elf --product pocket-light --target PY32F002A --flash-kb 32 --operator Oleksandr --batch dry-001 --dry-run)",
+      "Bash(ls \"C:\\\\Users\\\\IMT - Teilnehmer\\\\.claude\\\\projects\\\\c--Users-Alexandr-flashlight-app\\\\memory\\\\\" 2>/dev/null || echo \"memory dir empty or missing\")",
+      "Read(//c/Users/IMT - Teilnehmer/.claude/projects/c--Users-Alexandr-flashlight-app/memory\" 2>/dev/**)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\IMT - Teilnehmer\\.claude\\projects\\c--Users-Alexandr-flashlight-app"
+    ]
+  }
+}

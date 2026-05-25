@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace FlashlightApp.Core;
 
@@ -51,6 +52,8 @@ public sealed class GdbProcess
             RedirectStandardError = true,
             RedirectStandardInput = false,
             CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (var a in processArgs) psi.ArgumentList.Add(a);
 

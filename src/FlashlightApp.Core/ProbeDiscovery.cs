@@ -1,0 +1,102 @@
+using System.Runtime.Versioning;
+using Microsoft.Win32;
+
+namespace FlashlightApp.Core;
+
+public enum ProbeInterface { Gdb, Uart, Unknown }
+
+public sealed record ProbeInfo(
+    string PortName,
+    string? FriendlyName,
+    string DeviceInstanceId,
+    ProbeInterface Interface);
+
+/// <summary>
+/// Locates Black Magic Probe COM ports on Windows by walking the USB device tree
+/// in the registry. BMP exposes two CDC-ACM serial interfaces; we identify the
+/// GDB one by FriendlyName and fall back to "lowest COM number" if naming differs.
+/// VID 0x1D50, PID 0x6018 is the official Black Magic Probe USB ID.
+/// </summary>
+public static class ProbeDiscovery
+{
+    private const string BmpVidPidPrefix = "VID_1D50&PID_6018";
+    private const string UsbEnumRoot = @"SYSTEM\CurrentControlSet\Enum\USB";
+
+    public static IReadOnlyList<ProbeInfo> FindAll()
+    {
+        if (!OperatingSystem.IsWindows()) return Array.Empty<ProbeInfo>();
+        return EnumerateWindows();
+    }
+
+    public static IReadOnlyList<ProbeInfo> FindGdbPorts()
+    {
+        var all = FindAll();
+        var named = all.Where(p => p.Interface == ProbeInterface.Gdb).ToList();
+        if (named.Count > 0) return named;
+
+        // Fallback: Windows 10/11 uses the generic CDC-ACM driver, which gives
+        // both BMP interfaces the same nondescript FriendlyName. BMP firmware
+        // convention is GDB on the lower-numbered port of each consecutive pair;
+        // sort and keep one port per pair.
+        if (all.Count == 0) return all;
+        var sorted = all.OrderBy(p => ParseComNumber(p.PortName)).ToList();
+        return sorted.Where((_, i) => i % 2 == 0).ToList();
+    }
+
+    /// <summary>
+    /// Pure: classify a FriendlyName string into GDB / UART / Unknown. Tested directly.
+    /// </summary>
+    public static ProbeInterface ClassifyInterface(string? friendlyName)
+    {
+        if (string.IsNullOrEmpty(friendlyName)) return ProbeInterface.Unknown;
+        var s = friendlyName;
+        if (s.Contains("GDB", StringComparison.OrdinalIgnoreCase)) return ProbeInterface.Gdb;
+        if (s.Contains("UART", StringComparison.OrdinalIgnoreCase)) return ProbeInterface.Uart;
+        return ProbeInterface.Unknown;
+    }
+
+    public static int ParseComNumber(string portName)
+    {
+        // "COM30" → 30; non-numeric tail → int.MaxValue (sorts last)
+        if (string.IsNullOrEmpty(portName)) return int.MaxValue;
+        int i = 0;
+        while (i < portName.Length && !char.IsDigit(portName[i])) i++;
+        return int.TryParse(portName.AsSpan(i), out var n) ? n : int.MaxValue;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static List<ProbeInfo> EnumerateWindows()
+    {
+        var results = new List<ProbeInfo>();
+        using var enumKey = Registry.LocalMachine.OpenSubKey(UsbEnumRoot);
+        if (enumKey is null) return results;
+
+        foreach (var vidPidName in enumKey.GetSubKeyNames())
+        {
+            if (!vidPidName.StartsWith(BmpVidPidPrefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            using var vidPidKey = enumKey.OpenSubKey(vidPidName);
+            if (vidPidKey is null) continue;
+
+            foreach (var instanceName in vidPidKey.GetSubKeyNames())
+            {
+                using var instanceKey = vidPidKey.OpenSubKey(instanceName);
+                if (instanceKey is null) continue;
+
+                var friendly = instanceKey.GetValue("FriendlyName") as string;
+                using var devParams = instanceKey.OpenSubKey("Device Parameters");
+                var port = devParams?.GetValue("PortName") as string;
+
+                if (port is null) continue;
+
+                results.Add(new ProbeInfo(
+                    PortName: port,
+                    FriendlyName: friendly,
+                    DeviceInstanceId: $"{vidPidName}/{instanceName}",
+                    Interface: ClassifyInterface(friendly)));
+            }
+        }
+        return results;
+    }
+}
