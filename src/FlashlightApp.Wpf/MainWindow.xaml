@@ -46,17 +46,22 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Оператор:" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
                         <TextBox   Grid.Row="0" Grid.Column="1" x:Name="OperatorBox" FontSize="16" Padding="6,4" Margin="0,0,0,8" />
                         <TextBlock Grid.Row="0" Grid.Column="3" Text="Партія:" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
-                        <TextBox   Grid.Row="0" Grid.Column="4" x:Name="BatchBox" FontSize="16" Padding="6,4" Margin="0,0,0,8" />
+                        <TextBox   Grid.Row="0" Grid.Column="4" x:Name="BatchBox" FontSize="16" Padding="6,4" Margin="0,0,0,8" TextChanged="BatchBox_TextChanged" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Продукт:" VerticalAlignment="Center" FontSize="15" />
                         <ComboBox  Grid.Row="1" Grid.Column="1" x:Name="ProductCombo" FontSize="16" Padding="6,4" SelectionChanged="ProductCombo_SelectionChanged" />
                         <TextBlock Grid.Row="1" Grid.Column="3" Text="Версія:" VerticalAlignment="Center" FontSize="15" />
                         <TextBlock Grid.Row="1" Grid.Column="4" x:Name="VersionLabel" Text="—" VerticalAlignment="Center" FontSize="16" />
+
+                        <TextBlock x:Name="BatchLockLabel" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5"
+                                   Margin="0,6,0,0" Text="" FontSize="13" Foreground="#1B8A1B"
+                                   TextWrapping="Wrap" />
                     </Grid>
 
                     <Border Grid.Row="1" x:Name="ResultBanner" Margin="20,8,20,8" CornerRadius="10" Background="#E8E8E8">
@@ -99,8 +104,12 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" x:Name="BatchSummary" FontSize="15" Text="Завантаження..." VerticalAlignment="Center" />
-                        <Button Grid.Column="1" x:Name="HistoryRefresh" Content="Оновити" Padding="14,6" Click="HistoryRefresh_Click" />
+                        <TextBlock Grid.Column="0" x:Name="BatchSummary" FontSize="15" Text="Завантаження..." VerticalAlignment="Center" TextWrapping="Wrap" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <Button Content="Експорт CSV (партія)" Padding="12,6" Margin="0,0,6,0" Click="ExportCsvBatch_Click" />
+                            <Button Content="Експорт CSV (все)"    Padding="12,6" Margin="0,0,6,0" Click="ExportCsvAll_Click" />
+                            <Button x:Name="HistoryRefresh" Content="Оновити" Padding="14,6" Click="HistoryRefresh_Click" />
+                        </StackPanel>
                     </Grid>
 
                     <DataGrid Grid.Row="1" x:Name="HistoryGrid"
@@ -124,6 +133,89 @@
                             <DataGridTextColumn Header="Ціль (BMP)" Binding="{Binding TargetDetected}" Width="*" />
                         </DataGrid.Columns>
                     </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <!-- ============================ CATALOG TAB ============================ -->
+            <TabItem Header="Каталог" FontSize="14">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" x:Name="CatalogHeader" VerticalAlignment="Center" FontSize="15" Text="Каталог не завантажено." />
+                        <Button Grid.Column="1" Content="Перезавантажити" Padding="14,6" Click="CatalogReload_Click" />
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="CatalogProductsList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,0,12" Padding="14" Background="White" BorderBrush="#DDD" BorderThickness="1" CornerRadius="6">
+                                        <StackPanel>
+                                            <TextBlock>
+                                                <Run Text="{Binding ProductId}" FontWeight="Bold" FontSize="16" />
+                                                <Run Text=" — " />
+                                                <Run Text="{Binding DisplayName}" FontSize="14" />
+                                            </TextBlock>
+
+                                            <Grid Margin="0,8,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="110" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="Ціль:" Foreground="#666" />
+                                                <TextBlock Grid.Column="1">
+                                                    <Run Text="{Binding Target.BmpMatch}" FontWeight="Bold" />
+                                                    <Run Text=" (" />
+                                                    <Run Text="{Binding Target.PartNumber}" />
+                                                    <Run Text=", " />
+                                                    <Run Text="{Binding Target.FlashKb}" />
+                                                    <Run Text=" KB)" />
+                                                </TextBlock>
+                                            </Grid>
+
+                                            <TextBlock Margin="0,10,0,4" Foreground="#666">
+                                                <Run Text="Релізи (за замовчуванням: " />
+                                                <Run Text="{Binding DefaultRelease}" FontWeight="Bold" />
+                                                <Run Text="):" />
+                                            </TextBlock>
+
+                                            <ItemsControl ItemsSource="{Binding Releases}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="#F6F6F6" Padding="10" Margin="0,2,0,2" CornerRadius="4">
+                                                            <StackPanel>
+                                                                <TextBlock>
+                                                                    <Run Text="v" />
+                                                                    <Run Text="{Binding Version}" FontWeight="Bold" />
+                                                                </TextBlock>
+                                                                <TextBlock Text="{Binding ElfFilename}" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="#444" />
+                                                                <TextBlock FontFamily="Cascadia Mono, Consolas" FontSize="11" Foreground="#666">
+                                                                    <Run Text="SHA-256: " />
+                                                                    <Run Text="{Binding ElfSha256}" />
+                                                                </TextBlock>
+                                                                <TextBlock FontSize="11" Foreground="#888">
+                                                                    <Run Text="Дата: " />
+                                                                    <Run Text="{Binding ReleasedAt, StringFormat=yyyy-MM-dd}" />
+                                                                </TextBlock>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
                 </Grid>
             </TabItem>
 

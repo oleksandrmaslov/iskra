@@ -97,35 +97,42 @@ Rotate to a production key before factory deployment:
 3. Re-sign the production `catalog.json` with the new private key.
 4. Store the production private key in an HSM / vault; never on the lab box.
 
-### Sprint 4 — WPF UI (MVP done, more screens pending)
+### Sprint 4 — WPF UI ✅ DONE
 
 User picked **Sprint 4 as MVP first, then Sprint 3**.
 
-Sprint 4 sub-plan:
-
 1. ✅ **MVP single-screen WPF** — `src/FlashlightApp.Wpf/`. Status strip,
    operator + batch + product form, giant PASS/FAIL banner, FLASH button,
-   gdb output panel. Wires to Core; logs to `%LOCALAPPDATA%\FlashlightApp\flash_log.db`.
-2. ✅ **History tab + Settings tab + persistence** — `MainWindow` is now a
-   `TabControl` (Прошивка / Історія / Налаштування). History tab shows
-   recent attempts via `SqliteLogStore.QueryRecent` in a `DataGrid` and a
-   per-batch PASS/FAIL summary line. Settings tab edits catalog path,
-   `require_signed_catalog` toggle, gdb path override, BMP frequency,
-   power mode (external/probe), connect-under-reset, timeout, log db path,
-   station id — persisted to `%LOCALAPPDATA%\FlashlightApp\settings.json`
-   via `AppSettings` + `AppSettingsStore` (atomic `.tmp` rename).
-   Flash logic now reads from `_settings`; explicit "Зберегти" rediscovers
-   gdb + reloads catalog.
-3. ⏳ **Catalog browser tab** — shows the catalog: products, versions,
-   target descriptors, SHA-256s, signature status. (Settings already covers
-   most of this; this tab is the human-readable view.)
-4. ⏳ **Batch locking** — once a batch starts, firmware version is locked;
-   switching product or version mid-batch errors with a clear message.
-5. ⏳ **CSV export** — per-batch and full-history CSV download from the
-   History tab.
-6. ⏳ **WiX installer** — single `.msi` that chains the ARM toolchain MSI,
-   drops `FlashlightApp.exe` + `catalog.json` + `catalog.json.sig` into
-   `%ProgramFiles%\FlashlightApp\`, adds Start Menu + Desktop shortcuts.
+   gdb output panel. Wires to Core.
+2. ✅ **History + Settings tabs + persistence** — `MainWindow` is a
+   `TabControl` with four tabs (Прошивка / Історія / Каталог / Налаштування).
+   Settings persisted to `%LOCALAPPDATA%\FlashlightApp\settings.json` via
+   `AppSettings` + atomic `.tmp` rename. Flash logic reads frequency,
+   power, connect-reset, timeout, gdb path, db path from settings.
+3. ✅ **Catalog browser tab** — read-only view of the parsed catalog:
+   each product as a card showing target descriptor (BMP match, part number,
+   flash KB) and all releases (version, ELF filename, SHA-256, release
+   date). Header shows trust status + count. "Перезавантажити" button.
+4. ✅ **Batch locking** — first PASS/FAIL row in a batch determines the
+   product+version lock. Subsequent flash attempts with a different
+   product or version fail with `E_BATCH_LOCKED` (Ukrainian hint
+   suggests changing the batch ID). Refused attempts are themselves
+   excluded from lock determination via the SQL filter in
+   `SqliteLogStore.GetBatchLock`. Live UI hint on the Flash tab shows
+   the current lock state as the operator types the batch ID.
+5. ✅ **CSV export** — `SqliteLogStore.ExportCsv` streams the full
+   `flash_attempts` table (or one batch's slice) to a UTF-8 CSV.
+   RFC 4180 escaping via `CsvWriter`. Two buttons on the History tab:
+   "Експорт CSV (партія)" and "Експорт CSV (все)" + SaveFileDialog.
+6. ✅ **WiX installer** — `installer/Product.wxs` (WiX 5; UI extension
+   pinned to 5.0.2). MSI codepage 1251 + language 1058 (Ukrainian).
+   `installer/build-installer.ps1` runs `dotnet publish` (single-file,
+   self-contained, win-x64) then `wix build` → `installer/out/FlashlightApp-<ver>-x64.msi`.
+   Per-machine scope, installs to `C:\Program Files\FlashlightApp\`,
+   Start Menu shortcut, examples/catalog.json + .sig bundled.
+   **Does NOT yet chain the ARM toolchain MSI** — operator installs that
+   separately. Bundle/chain support is a follow-up (needs an Arm GNU
+   Toolchain MSI URL or local file).
 
 ### Beyond Sprint 4
 

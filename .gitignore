@@ -62,3 +62,9 @@ tools/gdb/
 *.bin
 *.hex
 *.priv
+
+# Installer / publish output
+publish/
+installer/out/
+*.msi
+*.wixpdb

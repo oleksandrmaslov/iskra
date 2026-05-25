@@ -134,6 +134,64 @@ public sealed class SqliteLogStore : IDisposable
         return rows;
     }
 
+    /// <summary>
+    /// First (product_id, firmware_version) ever logged for this batch — the row
+    /// that "locks" the batch. Returns null if no rows exist for the batch yet.
+    /// Lock-defining rows include both PASS and FAIL attempts (any successful
+    /// scan that produced a state-machine outcome). Rows where the lock check
+    /// itself refused the attempt (E_BATCH_LOCKED) should NOT be lock-defining,
+    /// so this query excludes them.
+    /// </summary>
+    public (string ProductId, string FirmwareVersion)? GetBatchLock(string batchId)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT product_id, firmware_version FROM flash_attempts
+            WHERE batch_id = $batch
+              AND (error_code IS NULL OR error_code != 'E_BATCH_LOCKED')
+            ORDER BY id ASC
+            LIMIT 1;
+            """;
+        cmd.Parameters.AddWithValue("$batch", batchId);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return null;
+        return (reader.GetString(0), reader.GetString(1));
+    }
+
+    /// <summary>
+    /// Streams the full <c>flash_attempts</c> table (or one batch's slice) into a
+    /// UTF-8 CSV at <paramref name="outputPath"/>. Header row included.
+    /// Escaping per RFC 4180 (quotes, commas, newlines).
+    /// </summary>
+    public int ExportCsv(string outputPath, string? batchId = null)
+    {
+        var sql = batchId is null
+            ? "SELECT * FROM flash_attempts ORDER BY id ASC"
+            : "SELECT * FROM flash_attempts WHERE batch_id = $batch ORDER BY id ASC";
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = sql;
+        if (batchId is not null) cmd.Parameters.AddWithValue("$batch", batchId);
+
+        using var reader = cmd.ExecuteReader();
+        using var writer = new StreamWriter(outputPath, append: false, new System.Text.UTF8Encoding(false));
+
+        var cols = new string[reader.FieldCount];
+        for (int i = 0; i < reader.FieldCount; i++) cols[i] = reader.GetName(i);
+        writer.WriteLine(CsvWriter.JoinRow(cols));
+
+        int rows = 0;
+        var values = new string[reader.FieldCount];
+        while (reader.Read())
+        {
+            for (int i = 0; i < reader.FieldCount; i++)
+                values[i] = reader.IsDBNull(i) ? "" : reader.GetValue(i).ToString() ?? "";
+            writer.WriteLine(CsvWriter.JoinRow(values));
+            rows++;
+        }
+        return rows;
+    }
+
     public (int Total, int Pass, int Fail) CountsForBatch(string batchId)
     {
         using var cmd = _conn.CreateCommand();

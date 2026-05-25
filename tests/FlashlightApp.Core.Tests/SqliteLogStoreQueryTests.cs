@@ -72,6 +72,79 @@ public class SqliteLogStoreQueryTests
     }
 
     [Fact]
+    public void GetBatchLock_returns_null_for_unknown_batch()
+    {
+        using var store = new SqliteLogStore(":memory:");
+        Assert.Null(store.GetBatchLock("never-flashed"));
+    }
+
+    [Fact]
+    public void GetBatchLock_returns_first_product_version_for_known_batch()
+    {
+        using var store = new SqliteLogStore(":memory:");
+        store.Append(Sample(batchId: "A") with { ProductId = "pocket-light", FirmwareVersion = "1.0.0" });
+        store.Append(Sample(batchId: "A") with { ProductId = "pocket-light", FirmwareVersion = "1.0.0" });
+        var locked = store.GetBatchLock("A");
+        Assert.NotNull(locked);
+        Assert.Equal("pocket-light", locked!.Value.ProductId);
+        Assert.Equal("1.0.0", locked.Value.FirmwareVersion);
+    }
+
+    [Fact]
+    public void GetBatchLock_ignores_batch_locked_refusals_when_picking_first_row()
+    {
+        // Refused attempts (E_BATCH_LOCKED) shouldn't be the lock-defining row,
+        // otherwise an operator-mistyped first attempt would lock the batch.
+        using var store = new SqliteLogStore(":memory:");
+        store.Append(Sample(batchId: "B", result: FlashResult.Fail, err: "E_BATCH_LOCKED")
+            with { ProductId = "wrong-thing", FirmwareVersion = "9.9.9" });
+        store.Append(Sample(batchId: "B")
+            with { ProductId = "pocket-light", FirmwareVersion = "1.0.0" });
+
+        var locked = store.GetBatchLock("B");
+        Assert.NotNull(locked);
+        Assert.Equal("pocket-light", locked!.Value.ProductId);
+        Assert.Equal("1.0.0", locked.Value.FirmwareVersion);
+    }
+
+    [Fact]
+    public void ExportCsv_writes_header_and_all_rows_with_escaping()
+    {
+        using var store = new SqliteLogStore(":memory:");
+        store.Append(Sample() with { Operator = "First, Last" });
+        store.Append(Sample(result: FlashResult.Fail, err: "E_VERIFY_MISMATCH"));
+
+        var csv = Path.Combine(Path.GetTempPath(), $"export-{Guid.NewGuid():N}.csv");
+        try
+        {
+            var n = store.ExportCsv(csv);
+            Assert.Equal(2, n);
+            var contents = File.ReadAllText(csv);
+            Assert.Contains("ts_utc,operator,station_id,batch_id", contents); // header
+            Assert.Contains("\"First, Last\"", contents); // escaped comma
+            Assert.Contains("E_VERIFY_MISMATCH", contents);
+        }
+        finally { if (File.Exists(csv)) File.Delete(csv); }
+    }
+
+    [Fact]
+    public void ExportCsv_with_batchId_restricts_rows()
+    {
+        using var store = new SqliteLogStore(":memory:");
+        store.Append(Sample(batchId: "X"));
+        store.Append(Sample(batchId: "X"));
+        store.Append(Sample(batchId: "Y"));
+
+        var csv = Path.Combine(Path.GetTempPath(), $"export-{Guid.NewGuid():N}.csv");
+        try
+        {
+            var n = store.ExportCsv(csv, batchId: "X");
+            Assert.Equal(2, n);
+        }
+        finally { if (File.Exists(csv)) File.Delete(csv); }
+    }
+
+    [Fact]
     public void Roundtrip_pass_and_fail_appear_correctly_in_history()
     {
         var tmp = Path.Combine(Path.GetTempPath(), $"hist-{Guid.NewGuid():N}.db");

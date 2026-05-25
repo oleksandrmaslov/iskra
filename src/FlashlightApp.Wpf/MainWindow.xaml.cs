@@ -128,12 +128,25 @@ public partial class MainWindow : Window
                 ProductCombo.Items.Add(p.ProductId);
             if (ProductCombo.Items.Count > 0)
                 ProductCombo.SelectedIndex = 0;
+
+            // Catalog browser tab
+            CatalogHeader.Text =
+                $"{Path.GetFileName(_catalogPath)} · {_catalog.Products.Count} продукт(ів) · {trustText}";
+            CatalogProductsList.ItemsSource = _catalog.Products;
         }
         catch (CatalogParseException ex)
         {
             _catalog = null;
             StatusCatalog.Text = $"Каталог: помилка — {ex.Message}";
+            CatalogHeader.Text = $"Помилка читання каталогу: {ex.Message}";
+            CatalogProductsList.ItemsSource = null;
         }
+    }
+
+    private void CatalogReload_Click(object sender, RoutedEventArgs e)
+    {
+        LoadCatalog();
+        RefreshBatchLockStatus();
     }
 
     private void ProductCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -172,6 +185,31 @@ public partial class MainWindow : Window
         var product = _catalog.FindProduct(productId);
         var release = product?.Default();
         if (product is null || release is null) { Beep(); return; }
+
+        // Batch lock check — refuse if this batch was started with a different
+        // product/version. Operator must finish the batch or pick a new ID.
+        try
+        {
+            using var lockStore = new SqliteLogStore(ResolveDbPath());
+            var batchLock = lockStore.GetBatchLock(batch);
+            if (batchLock is { } locked
+                && (!string.Equals(locked.ProductId, product.ProductId, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(locked.FirmwareVersion, release.Version, StringComparison.OrdinalIgnoreCase)))
+            {
+                var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion}, attempted {product.ProductId} v{release.Version}";
+                ShowFail("E_BATCH_LOCKED", msg);
+                LogAttempt(op, batch, product, release, FlashResult.Fail,
+                    "E_BATCH_LOCKED", msg, 0, null, null);
+                RefreshHistory();
+                RefreshBatchLockStatus();
+                return;
+            }
+        }
+        catch
+        {
+            // If lock check itself fails (eg. db unreadable), fall through and let
+            // the normal flash flow surface the underlying error.
+        }
 
         var elfPath = Path.IsPathRooted(release.ElfFilename)
             ? release.ElfFilename
@@ -330,6 +368,88 @@ public partial class MainWindow : Window
     // ============================================================
 
     private void HistoryRefresh_Click(object sender, RoutedEventArgs e) => RefreshHistory();
+
+    private void BatchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        RefreshBatchLockStatus();
+    }
+
+    private void RefreshBatchLockStatus()
+    {
+        var batch = BatchBox.Text?.Trim();
+        if (string.IsNullOrEmpty(batch))
+        {
+            BatchLockLabel.Text = "";
+            return;
+        }
+        try
+        {
+            var dbPath = ResolveDbPath();
+            if (!File.Exists(dbPath))
+            {
+                BatchLockLabel.Text = "";
+                return;
+            }
+            using var store = new SqliteLogStore(dbPath);
+            var locked = store.GetBatchLock(batch);
+            BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
+            if (locked is { } l)
+                BatchLockLabel.Text = $"🔒 Партію заблоковано на {l.ProductId} v{l.FirmwareVersion}";
+            else
+                BatchLockLabel.Text = "Партія нова — перша прошивка визначить продукт + версію.";
+        }
+        catch
+        {
+            BatchLockLabel.Text = "";
+        }
+    }
+
+    private void ExportCsvBatch_Click(object sender, RoutedEventArgs e)
+        => ExportCsv(batchOnly: true);
+
+    private void ExportCsvAll_Click(object sender, RoutedEventArgs e)
+        => ExportCsv(batchOnly: false);
+
+    private void ExportCsv(bool batchOnly)
+    {
+        var dbPath = ResolveDbPath();
+        if (!File.Exists(dbPath))
+        {
+            BatchSummary.Text = "Журнал ще не створено — нічого експортувати.";
+            return;
+        }
+
+        string? batch = batchOnly ? BatchBox.Text?.Trim() : null;
+        if (batchOnly && string.IsNullOrEmpty(batch))
+        {
+            BatchSummary.Text = "Введіть Партію на вкладці Прошивка, щоб експортувати тільки її.";
+            return;
+        }
+
+        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        var defaultName = batchOnly
+            ? $"flash_log_{batch}_{stamp}.csv"
+            : $"flash_log_all_{stamp}.csv";
+
+        var dlg = new SaveFileDialog
+        {
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            Title = batchOnly ? $"Експорт партії {batch}" : "Експорт усього журналу",
+            FileName = defaultName,
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            using var store = new SqliteLogStore(dbPath);
+            var rows = store.ExportCsv(dlg.FileName, batch);
+            BatchSummary.Text = $"✓ Експортовано {rows} рядків у {Path.GetFileName(dlg.FileName)}";
+        }
+        catch (Exception ex)
+        {
+            BatchSummary.Text = $"Помилка експорту: {ex.Message}";
+        }
+    }
 
     private void RefreshHistory()
     {
