@@ -126,15 +126,17 @@ User picked **Sprint 4 as MVP first, then Sprint 3**.
    `flash_attempts` table (or one batch's slice) to a UTF-8 CSV.
    RFC 4180 escaping via `CsvWriter`. Two buttons on the History tab:
    "Експорт CSV (партія)" and "Експорт CSV (все)" + SaveFileDialog.
-6. ✅ **WiX installer** — `installer/Product.wxs` (WiX 5; UI extension
-   pinned to 5.0.2). MSI codepage 1251 + language 1058 (Ukrainian).
+6. ✅ **WiX installer** — `installer/Product.wxs` builds the app MSI
+   (WiX 5; UI extension pinned to 5.0.2). MSI codepage 1251 + language
+   1058 (Ukrainian). `installer/Bundle.wxs` builds the factory setup EXE
+   with `WixToolset.BootstrapperApplications.wixext/5.0.2`.
    `installer/build-installer.ps1` runs `dotnet publish` (single-file,
-   self-contained, win-x64) then `wix build` → `installer/out/Iskra-<ver>-x64.msi`.
-   Per-machine scope, installs to `C:\Program Files\Iskra\`,
-   Start Menu shortcut, examples/catalog.json + .sig bundled.
-   **Does NOT yet chain the ARM toolchain MSI** — operator installs that
-   separately. Bundle/chain support is a follow-up (needs an Arm GNU
-   Toolchain MSI URL or local file).
+   self-contained, win-x64), builds `installer/out/Iskra-<ver>-x64.msi`,
+   downloads/caches Arm GNU Toolchain 15.2.rel1, verifies SHA-256, then
+   builds `installer/out/Iskra-<ver>-setup-x64.exe`. The setup EXE chains
+   the Arm toolchain MSI first (`EULA=1`) and then Iskra. Per-machine
+   scope, installs to `C:\Program Files\Iskra\`, Start Menu shortcut,
+   examples/catalog.json + .sig bundled.
 
 ### Sprint 3 — done in code; live `--login` against the registered GitHub App is the only remaining gate
 

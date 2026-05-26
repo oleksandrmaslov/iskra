@@ -193,9 +193,14 @@ public partial class MainWindow : Window
             SetBannerNeutral("Заповніть Оператор і Партія", warning: true);
             return;
         }
-        if (_port is null || _gdbExe is null)
+        if (_gdbExe is null)
         {
-            SetBannerNeutral("Немає програматора або gdb", warning: true);
+            SetBannerNeutral("gdb не знайдено. Повторно запустіть інсталятор Iskra.", warning: true);
+            return;
+        }
+        if (_port is null)
+        {
+            SetBannerNeutral("Black Magic Probe не знайдено", warning: true);
             return;
         }
 

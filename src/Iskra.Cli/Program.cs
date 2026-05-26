@@ -175,7 +175,7 @@ var gdbExe = GdbDiscovery.Find(opts.GdbPath);
 if (gdbExe is null)
 {
     Console.Error.WriteLine("Помилка: arm-none-eabi-gdb не знайдено.");
-    Console.Error.WriteLine("Вкажіть шлях через --gdb-path або встановіть Arm GNU Toolchain.");
+    Console.Error.WriteLine("Вкажіть шлях через --gdb-path або повторно запустіть інсталятор Iskra.");
     return 3;
 }
 

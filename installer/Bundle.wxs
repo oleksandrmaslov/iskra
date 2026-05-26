@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+
+  <Bundle Name="Iskra"
+          Manufacturer="Oleksandr Maslov"
+          Version="$(var.AppVersion)"
+          UpgradeCode="72C2B704-48BD-4F11-A49C-D0805D9EB4E4"
+          Compressed="yes"
+          DisableModify="button">
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          Theme="hyperlinkLicense"
+          LicenseUrl=""
+          ShowVersion="yes"
+          SuppressOptionsUI="yes" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <!-- Third-party prerequisite. Keep it installed if Iskra is removed. -->
+      <MsiPackage Id="ArmGnuToolchain"
+                  SourceFile="$(var.ArmToolchainMsi)"
+                  DisplayName="Arm GNU Toolchain (arm-none-eabi)"
+                  Permanent="yes"
+                  Visible="yes"
+                  Vital="yes">
+        <MsiProperty Name="EULA" Value="1" />
+      </MsiPackage>
+
+      <MsiPackage Id="IskraMsi"
+                  SourceFile="$(var.IskraMsi)"
+                  DisplayName="Iskra"
+                  ForcePerMachine="yes"
+                  Visible="no"
+                  Vital="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

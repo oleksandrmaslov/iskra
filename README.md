@@ -1,72 +1,77 @@
 # Iskra
 
-Production flashing tool for PY32F0xx-based flashlight firmware. Drives a
-Black Magic Probe via `arm-none-eabi-gdb` and logs every flash attempt.
+Production Windows flashing tool for ARM Cortex-M targets supported by Black
+Magic Probe. It drives the probe through `arm-none-eabi-gdb`, validates signed
+firmware catalog metadata, and logs every flash attempt to SQLite.
 
-> **Status:** Sprint 1 scaffold. Not yet functional.
+> **Status:** WPF app, CLI, catalog/signature flow, logging, and installer are in place.
 
 ## Repository layout
 
-```
+```text
 Iskra.sln
 src/
-  Iskra.Core/       Class library — services, state machine, models
-  Iskra.Cli/        Console flasher (Sprint 1 deliverable)
+  Iskra.Core/       Class library: services, state machine, models
+  Iskra.Cli/        Console flasher
+  Iskra.Wpf/        Operator UI
 tests/
   Iskra.Core.Tests/ xUnit tests for the Core library
+installer/
+  Product.wxs       App MSI
+  Bundle.wxs        Factory setup bundle
 ```
-
-WPF UI lands in Sprint 4 as `src/Iskra.Wpf/`.
 
 ## Prerequisites
 
 - Windows 10 / 11
-- .NET 8 SDK (`dotnet --version` reports 8.x)
-- ARM GNU Toolchain — `arm-none-eabi-gdb` on PATH or at the default install
-  location (`C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\<ver>\bin`)
+- .NET 8 SDK for development builds
+- ARM GNU Toolchain for development runs, unless using the setup bundle
 - A Black Magic Probe attached to the target board
+
+## Installer
+
+Build the factory installer bundle:
+
+```powershell
+pwsh ./installer/build-installer.ps1 -Version 1.2.3
+```
+
+Use `installer/out/Iskra-<ver>-setup-x64.exe` on operator stations. It embeds
+Arm GNU Toolchain 15.2.rel1 and installs it before Iskra, so
+`arm-none-eabi-gdb` is available for Black Magic Probe flashing immediately
+after setup. The sibling `Iskra-<ver>-x64.msi` is app-only and is kept as a
+build artifact for diagnostics/IT use.
 
 ## Build
 
 ```powershell
+$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
 dotnet build
 ```
 
-## Run the CLI (Sprint 1)
-
-Sprint 1 target — flashing a single device end-to-end from the command line:
+## Run the CLI
 
 ```powershell
 dotnet run --project src/Iskra.Cli -- `
+  --catalog examples/catalog.json `
+  --product ci-clop `
   --elf .\path\to\app.elf `
   --port \\.\COM30 `
   --power probe `
   --freq 1000000 `
   --connect-reset `
-  --product ci-clop `
   --operator jdoe `
   --batch Lot-2026-05-25-A
 ```
 
-The current `Program.cs` is a stub that parses the option surface only.
-Real gdb subprocess + state machine + SQLite logging arrive in the next commit.
-
 ## Test
 
 ```powershell
+$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
 dotnet test
 ```
 
-## Roadmap
-
-| Sprint | Deliverable |
-|---|---|
-| 1 | Console flasher; reproduces `make flash-bmp` end to end + SQLite log |
-| 2 | Catalog + cache (signed manifest, SHA-256 verify, sideload mode) |
-| 3 | GitHub App auth + private firmware download |
-| 4 | WPF UI, batch locking, CSV export, installer |
-
-Detailed design lives in the firmware repo's session notes.
+Detailed design and sprint status live in `CLAUDE.md`.
 
 ## License
 

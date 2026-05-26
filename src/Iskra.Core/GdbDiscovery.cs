@@ -5,7 +5,8 @@ namespace Iskra.Core;
 /// <summary>
 /// Locates <c>arm-none-eabi-gdb</c> on the current machine. Search order:
 /// (1) explicit path, (2) PATH, (3) standard Arm GNU Toolchain install dirs on Windows.
-/// Sprint 4 installer chains the ARM toolchain MSI, so the standard paths will exist.
+/// The production installer chains the Arm GNU Toolchain MSI, so one of the
+/// standard paths should exist immediately after setup.
 /// </summary>
 public static class GdbDiscovery
 {
@@ -27,7 +28,7 @@ public static class GdbDiscovery
         {
             foreach (var dir in WindowsToolchainRoots())
             {
-                var candidate = LatestVersionedBin(dir, exe);
+                var candidate = FindUnderToolchainRoot(dir, exe);
                 if (candidate is not null) return candidate;
             }
         }
@@ -60,20 +61,30 @@ public static class GdbDiscovery
             if (string.IsNullOrEmpty(root)) continue;
             yield return Path.Combine(root, "Arm GNU Toolchain arm-none-eabi");
             yield return Path.Combine(root, "GNU Arm Embedded Toolchain");
+            yield return Path.Combine(root, "Arm", "GNU Toolchain mingw-w64-i686-arm-none-eabi");
         }
     }
 
     /// <summary>
-    /// Returns the newest-versioned <c>&lt;root&gt;/&lt;version&gt;/bin/&lt;exe&gt;</c>, or null.
+    /// Returns a matching gdb below a known toolchain root. Arm has used both
+    /// <c>root/bin</c> and <c>root/version/bin</c> layouts across Windows
+    /// installers, so check both without recursively walking Program Files.
     /// </summary>
-    private static string? LatestVersionedBin(string root, string exe)
+    private static string? FindUnderToolchainRoot(string root, string exe)
     {
         if (!Directory.Exists(root)) return null;
         try
         {
+            var direct = Path.Combine(root, "bin", exe);
+            if (File.Exists(direct)) return direct;
+
             return Directory.EnumerateDirectories(root)
                 .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
-                .Select(d => Path.Combine(d, "bin", exe))
+                .SelectMany(d => new[]
+                {
+                    Path.Combine(d, "bin", exe),
+                    Path.Combine(d, "arm-none-eabi", "bin", exe)
+                })
                 .FirstOrDefault(File.Exists);
         }
         catch

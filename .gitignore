@@ -66,5 +66,6 @@ tools/gdb/
 # Installer / publish output
 publish/
 installer/out/
+installer/deps/
 *.msi
 *.wixpdb
