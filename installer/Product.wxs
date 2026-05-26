@@ -54,6 +54,9 @@
       <Component>
         <File Source="$(var.PublishDir)\Iskra.exe" />
       </Component>
+      <Component>
+        <File Source="$(var.CliPublishDir)\Iskra.Cli.exe" />
+      </Component>
     </ComponentGroup>
 
     <ComponentGroup Id="ExampleFiles" Directory="ExamplesFolder">

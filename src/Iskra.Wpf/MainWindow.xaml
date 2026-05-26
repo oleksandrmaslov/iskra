@@ -58,7 +58,9 @@
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Продукт:" VerticalAlignment="Center" FontSize="15" />
                         <ComboBox  Grid.Row="1" Grid.Column="1" x:Name="ProductCombo" FontSize="16" Padding="6,4" SelectionChanged="ProductCombo_SelectionChanged" />
                         <TextBlock Grid.Row="1" Grid.Column="3" Text="Версія:" VerticalAlignment="Center" FontSize="15" />
-                        <TextBlock Grid.Row="1" Grid.Column="4" x:Name="VersionLabel" Text="—" VerticalAlignment="Center" FontSize="16" />
+                        <ComboBox  Grid.Row="1" Grid.Column="4" x:Name="VersionCombo" FontSize="16" Padding="6,4"
+                                   DisplayMemberPath="Version"
+                                   SelectionChanged="VersionCombo_SelectionChanged" />
 
                         <TextBlock x:Name="BatchLockLabel" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5"
                                    Margin="0,6,0,0" Text="" FontSize="13" Foreground="#1B8A1B"

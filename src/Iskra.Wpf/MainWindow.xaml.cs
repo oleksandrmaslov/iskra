@@ -153,16 +153,28 @@ public partial class MainWindow : Window
 
     private void ProductCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        VersionCombo.ItemsSource = null;
         if (_catalog is null || ProductCombo.SelectedItem is not string id)
         {
-            VersionLabel.Text = "—";
             RefreshAuthBanner(null);
             return;
         }
         var product = _catalog.FindProduct(id);
-        var release = product?.Default();
-        VersionLabel.Text = release?.Version is { } v ? v : "—";
-        RefreshAuthBanner(release);
+        if (product is null)
+        {
+            RefreshAuthBanner(null);
+            return;
+        }
+
+        VersionCombo.ItemsSource = product.Releases;
+        // Pre-select the default release; setting SelectedItem fires
+        // VersionCombo_SelectionChanged which refreshes the auth banner.
+        VersionCombo.SelectedItem = product.Default() ?? product.Releases.FirstOrDefault();
+    }
+
+    private void VersionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RefreshAuthBanner(VersionCombo.SelectedItem as FirmwareRelease);
     }
 
     // ============================================================
@@ -188,7 +200,7 @@ public partial class MainWindow : Window
         }
 
         var product = _catalog.FindProduct(productId);
-        var release = product?.Default();
+        var release = VersionCombo.SelectedItem as FirmwareRelease ?? product?.Default();
         if (product is null || release is null) { Beep(); return; }
 
         // Batch lock check — refuse if this batch was started with a different
@@ -714,6 +726,7 @@ public partial class MainWindow : Window
 
     private FirmwareRelease? CurrentSelectedRelease()
     {
+        if (VersionCombo.SelectedItem is FirmwareRelease r) return r;
         if (_catalog is null || ProductCombo.SelectedItem is not string id) return null;
         return _catalog.FindProduct(id)?.Default();
     }
