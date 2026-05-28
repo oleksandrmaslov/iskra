@@ -121,4 +121,69 @@ public class AppSettingsTests : IDisposable
         Assert.Equal("a", original.CatalogPath);
         Assert.Equal(500_000, original.BmpFrequencyHz);
     }
+
+    // Sprint 5 fields ------------------------------------------------------
+
+    [Fact]
+    public void Log_shipping_defaults_are_enabled_with_5_minute_interval()
+    {
+        var s = AppSettingsStore.Load(_path);
+        Assert.True(s.LogShippingEnabled);
+        Assert.Equal(5, s.LogShipIntervalMinutes);
+        Assert.Equal(AppSettings.DefaultLogShipperPrivateKeyPath, s.LogShipperPrivateKeyPath);
+    }
+
+    [Fact]
+    public void Default_private_key_path_is_under_programdata_iskra()
+    {
+        var path = AppSettings.DefaultLogShipperPrivateKeyPath;
+        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        Assert.StartsWith(programData, path);
+        Assert.EndsWith("station-app.pem", path);
+        Assert.Contains("Iskra", path);
+    }
+
+    [Fact]
+    public void Round_trip_preserves_sprint5_fields()
+    {
+        var original = new AppSettings
+        {
+            LogShippingEnabled       = false,
+            LogShipIntervalMinutes   = 30,
+            LogShipperPrivateKeyPath = @"D:\keys\station.pem",
+        };
+        AppSettingsStore.Save(original, _path);
+        var loaded = AppSettingsStore.Load(_path);
+        Assert.False(loaded.LogShippingEnabled);
+        Assert.Equal(30, loaded.LogShipIntervalMinutes);
+        Assert.Equal(@"D:\keys\station.pem", loaded.LogShipperPrivateKeyPath);
+    }
+
+    [Fact]
+    public void Clone_copies_sprint5_fields()
+    {
+        var original = new AppSettings
+        {
+            LogShippingEnabled       = false,
+            LogShipIntervalMinutes   = 17,
+            LogShipperPrivateKeyPath = @"X:\k.pem",
+        };
+        var copy = original.Clone();
+        copy.LogShippingEnabled     = true;
+        copy.LogShipIntervalMinutes = 1;
+        Assert.False(original.LogShippingEnabled);
+        Assert.Equal(17, original.LogShipIntervalMinutes);
+        Assert.Equal(@"X:\k.pem", original.LogShipperPrivateKeyPath);
+    }
+
+    [Fact]
+    public void Log_shipper_constants_start_unconfigured_and_repo_is_locked()
+    {
+        // Empty App ID / installation ID means the LogShipper stays dormant
+        // until the owner provisions the GitHub App. The repo coordinates,
+        // however, are hard-locked from day one.
+        Assert.False(GitHubAppConfig.IsLogShipperConfigured);
+        Assert.Equal("oleksandrmaslov", GitHubAppConfig.LogsRepoOwner);
+        Assert.Equal("iskra-logs",       GitHubAppConfig.LogsRepoName);
+    }
 }

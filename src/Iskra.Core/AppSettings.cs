@@ -60,23 +60,42 @@ public sealed class AppSettings
     // collapses to a single barcode swipe.
     public FlashHotkey FlashHotkey { get; set; } = FlashHotkey.Enter;
 
+    // Sprint 5: cloud log mirror (iskra-logs).
+    // LogShippingEnabled is the master switch; defaults on so any provisioned
+    // station starts shipping once GitHubAppConfig.IsLogShipperConfigured is
+    // true. LogShipIntervalMinutes is how often the background loop pushes
+    // pending rows when the queue isn't empty (end-of-batch always pushes
+    // synchronously regardless of this interval). The private key path is
+    // operator-tunable so the MSI can override during install.
+    public bool LogShippingEnabled { get; set; } = true;
+    public int LogShipIntervalMinutes { get; set; } = 5;
+    public string LogShipperPrivateKeyPath { get; set; } = DefaultLogShipperPrivateKeyPath;
+
+    public static string DefaultLogShipperPrivateKeyPath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "Iskra",
+        "station-app.pem");
+
     public AppSettings Clone() => new()
     {
-        CatalogPath          = CatalogPath,
-        RequireSignedCatalog = RequireSignedCatalog,
-        CatalogAutoUpdate    = CatalogAutoUpdate,
-        CatalogOwner         = CatalogOwner,
-        CatalogRepo          = CatalogRepo,
-        GdbPath              = GdbPath,
-        BmpFrequencyHz       = BmpFrequencyHz,
-        Power                = Power,
-        ConnectUnderReset    = ConnectUnderReset,
-        TimeoutSeconds       = TimeoutSeconds,
-        DbPath               = DbPath,
-        StationId            = StationId,
-        LastOperator         = LastOperator,
-        LastBatch            = LastBatch,
-        FlashHotkey          = FlashHotkey,
+        CatalogPath              = CatalogPath,
+        RequireSignedCatalog     = RequireSignedCatalog,
+        CatalogAutoUpdate        = CatalogAutoUpdate,
+        CatalogOwner             = CatalogOwner,
+        CatalogRepo              = CatalogRepo,
+        GdbPath                  = GdbPath,
+        BmpFrequencyHz           = BmpFrequencyHz,
+        Power                    = Power,
+        ConnectUnderReset        = ConnectUnderReset,
+        TimeoutSeconds           = TimeoutSeconds,
+        DbPath                   = DbPath,
+        StationId                = StationId,
+        LastOperator             = LastOperator,
+        LastBatch                = LastBatch,
+        FlashHotkey              = FlashHotkey,
+        LogShippingEnabled       = LogShippingEnabled,
+        LogShipIntervalMinutes   = LogShipIntervalMinutes,
+        LogShipperPrivateKeyPath = LogShipperPrivateKeyPath,
     };
 }
 
