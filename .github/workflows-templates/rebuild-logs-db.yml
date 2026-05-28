@@ -1,0 +1,52 @@
+# Template for: oleksandrmaslov/iskra-logs
+# Goes into: .github/workflows/rebuild-logs-db.yml
+#
+# Walks every stations/*/*.jsonl file in this repo, ingests each line as a
+# row of `flash_attempts`, and commits the resulting SQLite file as
+# `logs.db` at the repo root. Maintainers `git pull` and query with any
+# SQLite client. Read-only as far as factory stations are concerned —
+# stations write JSONL only; logs.db is a derived artifact.
+
+name: rebuild logs.db
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'stations/**/*.jsonl'
+  schedule:
+    # Daily at 03:17 UTC. Off-peak so it doesn't compete with batch shipping.
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rebuild-logs-db
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build logs.db from JSONL
+        run: python3 .github/scripts/build_logs_db.py logs.db stations
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- logs.db; then
+            echo "logs.db unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "iskra-logs-bot"
+          git config user.email "iskra-logs-bot@users.noreply.github.com"
+          git add logs.db
+          git commit -m "rebuild logs.db ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+          git push

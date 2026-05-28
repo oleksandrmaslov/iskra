@@ -1,12 +1,15 @@
-# Iskra Sprint 3.5 — CI workflow templates
+# Iskra — CI workflow templates
 
 These YAML files **are not active in this repo**. They live here as templates
-to copy into the two new repos that drive auto-discovery:
+to copy into the satellite repos that drive auto-discovery and the cloud log
+mirror:
 
 | File | Goes into | Purpose |
 |---|---|---|
 | `notify-iskra-catalog.yml` | every `*-firmware` repo, at `.github/workflows/` | On `release.published`, fires a `repository_dispatch` event at `iskra-catalog`. |
 | `regenerate-catalog.yml` | `oleksandrmaslov/iskra-catalog`, at `.github/workflows/` | Walks every `*-firmware` repo, collects `target.json` files, runs `Iskra.Cli --generate-catalog`, signs the result, publishes as a new release of `iskra-catalog`. |
+| `rebuild-logs-db.yml` | `oleksandrmaslov/iskra-logs`, at `.github/workflows/` | Walks `stations/<id>/*.jsonl` files pushed by every station, rebuilds a queryable SQLite `logs.db` at the repo root, commits if changed. |
+| `build_logs_db.py` | `oleksandrmaslov/iskra-logs`, at `.github/scripts/` | Helper called by `rebuild-logs-db.yml`. Idempotent: re-running on the same JSONL produces the same `logs.db`. |
 
 ## One-time setup
 
@@ -77,6 +80,95 @@ gh secret set ISKRA_CATALOG_DISPATCH_TOKEN --repo oleksandrmaslov/ci-clop-firmwa
 ```
 
 Commit + push the workflow file to the firmware repo. The next `gh release create` in that repo will automatically trigger the catalog regenerate.
+
+## Sprint 5 — iskra-logs setup
+
+### 1. Create the `iskra-logs` repo
+
+- New **private** repo: `oleksandrmaslov/iskra-logs`
+- No README needed; the workflow creates `logs.db` on first run.
+
+### 2. Register a write-only GitHub App for stations
+
+On https://github.com/settings/apps/new:
+
+- **Name:** `Iskra Log Shipper` (or similar)
+- **Homepage URL:** anything
+- **Webhook:** uncheck "Active"
+- **Repository permissions:**
+  - Contents: **Read and write**
+  - Metadata: Read-only (mandatory)
+  - everything else: No access
+- **Where can this GitHub App be installed?** "Only on this account"
+
+Save. Note the **App ID** (numeric). Generate a private key (.pem) and
+download it — this is the single most sensitive artifact of Sprint 5.
+
+Install the app on **iskra-logs only** (Settings → Install App → Only select
+repositories). Note the **Installation ID** (numeric, appears in the
+installation URL: `/settings/installations/<id>`).
+
+### 3. Bake the app config into the binary
+
+Edit `src/Iskra.Core/GitHubAppConfig.cs`:
+
+```csharp
+public const string LogShipperAppId          = "<app-id>";
+public const string LogShipperInstallationId = "<installation-id>";
+```
+
+Commit + cut a new app release. Until this is done, every station's log
+shipper stays dormant.
+
+### 4. Distribute the .pem to factory stations
+
+The MSI is the right place. Until the MSI is updated to include the .pem
+deployment step, manually copy:
+
+```
+%PROGRAMDATA%\Iskra\station-app.pem
+```
+
+on each station. Make sure ACLs are tight — this file lets anyone
+who reads it push to iskra-logs. Worst-case blast radius from a
+compromised .pem is "write garbage into iskra-logs"; firmware and catalog
+trust roots are untouched.
+
+### 5. Drop the workflow + script into iskra-logs
+
+```powershell
+# Workflow:
+Copy-Item .github\workflows-templates\rebuild-logs-db.yml `
+          c:\Users\Alexandr\iskra-logs\.github\workflows\rebuild-logs-db.yml
+
+# Helper script:
+New-Item -ItemType Directory c:\Users\Alexandr\iskra-logs\.github\scripts -Force
+Copy-Item .github\workflows-templates\build_logs_db.py `
+          c:\Users\Alexandr\iskra-logs\.github\scripts\build_logs_db.py
+```
+
+Commit + push to iskra-logs. Confirm with **Actions tab → Run workflow**
+that it succeeds against an empty `stations/` (produces an empty `logs.db`).
+
+### 6. First end-to-end smoke
+
+On a station with the new app installed:
+
+```powershell
+Iskra.Cli --ship-logs-now
+```
+
+This should report `Вивантажено: N рядк(ів) → 1 новий файл`. Within ~30s
+the nightly Action's `push` trigger fires (because `stations/**/*.jsonl`
+changed), and a fresh `logs.db` lands in the repo root.
+
+Query from your laptop:
+
+```powershell
+git clone https://github.com/oleksandrmaslov/iskra-logs
+cd iskra-logs
+sqlite3 logs.db "SELECT product_id, COUNT(*), SUM(result='PASS') FROM flash_attempts GROUP BY product_id;"
+```
 
 ## End-to-end smoke test
 
