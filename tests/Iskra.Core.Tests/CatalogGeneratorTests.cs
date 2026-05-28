@@ -214,6 +214,78 @@ public class CatalogGeneratorTests
     }
 
     [Fact]
+    public void ReadTargetsTree_strict_passes_when_tag_dir_matches_version()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-strict-ok-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "ci-clop", "v1.0.0"));
+            Directory.CreateDirectory(Path.Combine(root, "ci-clop", "v1.0.1"));
+            File.WriteAllText(Path.Combine(root, "ci-clop", "v1.0.0", "target.json"),
+                ToJson("ci-clop", "1.0.0", "PY32F002Ax5", "PY32Fxxx", 32, Sha));
+            File.WriteAllText(Path.Combine(root, "ci-clop", "v1.0.1", "target.json"),
+                ToJson("ci-clop", "1.0.1", "PY32F002Ax5", "PY32Fxxx", 32, Sha2));
+
+            var sidecars = CatalogGenerator.ReadTargetsTree(root, strictTagMatch: true);
+            Assert.Equal(2, sidecars.Count);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void ReadTargetsTree_strict_accepts_tag_dir_without_v_prefix()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-strict-bare-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "ci-clop", "1.0.0"));
+            File.WriteAllText(Path.Combine(root, "ci-clop", "1.0.0", "target.json"),
+                ToJson("ci-clop", "1.0.0", "PY32F002Ax5", "PY32Fxxx", 32, Sha));
+
+            var sidecars = CatalogGenerator.ReadTargetsTree(root, strictTagMatch: true);
+            Assert.Single(sidecars);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void ReadTargetsTree_strict_throws_when_tag_dir_disagrees_with_sidecar_version()
+    {
+        // This is the exact v1.0.1-with-stale-v1.0.0-assets footgun we hit.
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-strict-bad-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "ci-clop", "v1.0.1"));
+            File.WriteAllText(Path.Combine(root, "ci-clop", "v1.0.1", "target.json"),
+                ToJson("ci-clop", "1.0.0", "PY32F002Ax5", "PY32Fxxx", 32, Sha));
+
+            var ex = Assert.Throws<CatalogGeneratorException>(() =>
+                CatalogGenerator.ReadTargetsTree(root, strictTagMatch: true));
+            Assert.Contains("v1.0.1", ex.Message);
+            Assert.Contains("1.0.0", ex.Message);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void ReadTargetsTree_lenient_mode_ignores_tag_dir_mismatch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-lenient-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "ci-clop", "v1.0.1"));
+            File.WriteAllText(Path.Combine(root, "ci-clop", "v1.0.1", "target.json"),
+                ToJson("ci-clop", "1.0.0", "PY32F002Ax5", "PY32Fxxx", 32, Sha));
+
+            // Default (lenient) mode: no exception, sidecar accepted at face value.
+            var sidecars = CatalogGenerator.ReadTargetsTree(root);
+            Assert.Single(sidecars);
+            Assert.Equal("1.0.0", sidecars[0].Version);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public void TargetSidecar_rejects_missing_required_fields()
     {
         var bad = """{ "version": "1.0.0", "part_number": "X", "bmp_match": "Y", "flash_kb": 32, "elf_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }""";

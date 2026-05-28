@@ -27,7 +27,7 @@ public sealed record GdbRunResult(
 /// Knows nothing about target families or product IDs — pure process wrapper.
 /// The state machine layer interprets the captured lines.
 /// </summary>
-public sealed class GdbProcess
+public class GdbProcess
 {
     private readonly string _gdbExe;
 
@@ -113,7 +113,7 @@ public sealed class GdbProcess
     /// <summary>
     /// Convenience: build args from flash options and run.
     /// </summary>
-    public Task<GdbRunResult> RunFlashAsync(
+    public virtual Task<GdbRunResult> RunFlashAsync(
         string comPort,
         PowerMode power,
         int frequencyHz,
@@ -133,7 +133,7 @@ public sealed class GdbProcess
     /// Does not touch flash on the target. Used before <see cref="RunFlashAsync"/>
     /// to abort safely on wrong-target-family boards.
     /// </summary>
-    public Task<GdbRunResult> RunScanAsync(
+    public virtual Task<GdbRunResult> RunScanAsync(
         string comPort,
         PowerMode power,
         int frequencyHz,

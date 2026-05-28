@@ -100,11 +100,15 @@ jobs:
       - name: Generate catalog.json
         run: |
           set -euo pipefail
+          # --strict-tag-match: refuse to build if any target.json's version
+          # field disagrees with its release tag directory (catches stale
+          # assets re-uploaded onto a bumped tag — see iskra CLAUDE.md).
           dotnet run --project iskra-app/src/Iskra.Cli --no-restore \
             -- --generate-catalog \
                --from-targets targets \
                --out catalog.json \
-               --owner "$OWNER"
+               --owner "$OWNER" \
+               --strict-tag-match
           ls -la catalog.json
           cat catalog.json | head -50
 

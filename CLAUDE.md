@@ -341,8 +341,26 @@ Planned Sprint 6 deliverables:
   (50-PASS row) still needs to be re-run since the gdb sequence changed.
 - **Probe serial capture** — read USB serial from registry to populate
   `probe_serial` column (currently always NULL).
-- **Auto-retry on `E_PROBE_BUSY`** — BMP occasionally fumbles a re-enumerate;
-  one silent retry would smooth that out.
+- ✅ **Auto-retry on `E_PROBE_BUSY`** — `FlashStateMachine.RunAsync` retries
+  the scan phase once (configurable via `probeBusyRetries`, default 1)
+  with a 500 ms backoff when scan classification yields `E_PROBE_BUSY`.
+  Only `E_PROBE_BUSY` triggers retry — every other failure bails immediately.
+- ✅ **Strict tag/version match in catalog generator** —
+  `CatalogGenerator.ReadTargetsTree(rootDir, strictTagMatch: true)` and CLI
+  flag `--strict-tag-match` refuse to build when a release's tag directory
+  disagrees with the sidecar's `version` field. The iskra-catalog workflow
+  template passes this flag so stale assets (e.g. v1.0.1 release carrying
+  leftover v1.0.0 ELF + sidecar) fail loudly in CI instead of silently
+  shadowing the release in the published catalog.
+- ✅ **Configurable flash hotkey** — `AppSettings.FlashHotkey` enum
+  (`None`/`Space`/`Enter`/`F2`/`F5`, default `Enter`). Window-level
+  `PreviewKeyDown` fires the FLASH button when the Flash tab is active
+  and the button isn't mid-flash. Space is suppressed while a TextBox has
+  focus (so the operator can still type spaces); Enter and F-keys are
+  captured everywhere (which is also what barcode scanners want — the
+  scanner emits Enter as line terminator so "scan batch → flash" is one
+  swipe). The FLASH button has a tooltip and a smaller subtitle line
+  reflecting the configured key.
 - **`.hex` firmware support** — alongside ELF. Two viable paths: (a) let gdb
   load Intel HEX directly via its BFD support (works for some targets but
   flaky for bare-metal where ELF entry/section info is needed), or (b)

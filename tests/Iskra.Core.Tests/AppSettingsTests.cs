@@ -28,6 +28,7 @@ public class AppSettingsTests : IDisposable
         Assert.Equal(Environment.MachineName, s.StationId);
         Assert.Null(s.CatalogPath);
         Assert.Null(s.GdbPath);
+        Assert.Equal(FlashHotkey.Enter, s.FlashHotkey);
     }
 
     [Fact]
@@ -46,6 +47,7 @@ public class AppSettingsTests : IDisposable
             StationId             = "BENCH-7",
             LastOperator          = "Iryna",
             LastBatch             = "B-2026-099",
+            FlashHotkey           = FlashHotkey.Space,
         };
         AppSettingsStore.Save(original, _path);
         var loaded = AppSettingsStore.Load(_path);
@@ -61,6 +63,7 @@ public class AppSettingsTests : IDisposable
         Assert.Equal(original.StationId,            loaded.StationId);
         Assert.Equal(original.LastOperator,         loaded.LastOperator);
         Assert.Equal(original.LastBatch,            loaded.LastBatch);
+        Assert.Equal(original.FlashHotkey,          loaded.FlashHotkey);
     }
 
     [Fact]

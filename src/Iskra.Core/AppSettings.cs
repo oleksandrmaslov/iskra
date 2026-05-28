@@ -4,6 +4,22 @@ using System.Text.Json.Serialization;
 namespace Iskra.Core;
 
 /// <summary>
+/// Operator-configurable keyboard shortcut that triggers the FLASH button
+/// on the WPF main window. <see cref="None"/> disables the shortcut entirely.
+/// Choices are intentionally limited to keys that don't clash with common
+/// text-entry: Enter and the F-keys are always safe; Space is suppressed
+/// while focus is on a text input.
+/// </summary>
+public enum FlashHotkey
+{
+    None,
+    Space,
+    Enter,
+    F2,
+    F5,
+}
+
+/// <summary>
 /// User-facing app settings: catalog source, debugger/BMP knobs, log location.
 /// Persisted as JSON in the per-user appdata directory. Used by the WPF UI;
 /// the CLI continues to take everything via flags, but can read defaults from
@@ -35,6 +51,12 @@ public sealed class AppSettings
     public string? LastOperator { get; set; }
     public string? LastBatch { get; set; }
 
+    // Operator-configurable hotkey that triggers the FLASH button on the
+    // Flash tab. Default Enter — barcode scanners emit it as the line
+    // terminator, so the typical operator flow "scan batch → press flash"
+    // collapses to a single barcode swipe.
+    public FlashHotkey FlashHotkey { get; set; } = FlashHotkey.Enter;
+
     public AppSettings Clone() => new()
     {
         CatalogPath          = CatalogPath,
@@ -51,6 +73,7 @@ public sealed class AppSettings
         StationId            = StationId,
         LastOperator         = LastOperator,
         LastBatch            = LastBatch,
+        FlashHotkey          = FlashHotkey,
     };
 }
 

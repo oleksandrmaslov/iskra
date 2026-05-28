@@ -3,6 +3,7 @@ using System.IO;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using Iskra.Core;
 using Microsoft.Win32;
@@ -22,6 +23,10 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded += MainWindow_Loaded;
+        // Window-level KeyDown so the operator hotkey works from anywhere on
+        // the Flash tab — even with focus on the Operator/Batch boxes (Enter
+        // is what barcode scanners emit as a line terminator).
+        PreviewKeyDown += MainWindow_PreviewKeyDown;
     }
 
     // ============================================================
@@ -600,7 +605,86 @@ public partial class MainWindow : Window
         SettingsTimeout.Text       = _settings.TimeoutSeconds.ToString(CultureInfo.InvariantCulture);
         SettingsDbPath.Text        = _settings.DbPath ?? "";
         SettingsStationId.Text     = _settings.StationId;
+        SelectHotkeyComboItem(_settings.FlashHotkey);
+        RefreshFlashHotkeyHint();
     }
+
+    private void SelectHotkeyComboItem(FlashHotkey hk)
+    {
+        foreach (var obj in SettingsFlashHotkey.Items)
+        {
+            if (obj is ComboBoxItem item && item.Tag is string tag
+                && string.Equals(tag, hk.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                SettingsFlashHotkey.SelectedItem = item;
+                return;
+            }
+        }
+        SettingsFlashHotkey.SelectedIndex = 0;
+    }
+
+    private FlashHotkey ReadHotkeyComboSelection()
+    {
+        if (SettingsFlashHotkey.SelectedItem is ComboBoxItem item
+            && item.Tag is string tag
+            && Enum.TryParse<FlashHotkey>(tag, ignoreCase: true, out var hk))
+            return hk;
+        return FlashHotkey.None;
+    }
+
+    /// <summary>
+    /// Refreshes the small subtitle under the giant FLASH button and its tooltip
+    /// so the operator can see at a glance which key fires the flash.
+    /// </summary>
+    private void RefreshFlashHotkeyHint()
+    {
+        var (label, _) = HotkeyDisplay(_settings.FlashHotkey);
+        if (_settings.FlashHotkey == FlashHotkey.None)
+        {
+            FlashHotkeyHint.Text = "";
+            FlashButtonTooltipText.Text = "Запустити прошивку поточної плати";
+        }
+        else
+        {
+            FlashHotkeyHint.Text = $"(або натисніть {label})";
+            FlashButtonTooltipText.Text = $"Запустити прошивку. Гаряча клавіша: {label}";
+        }
+    }
+
+    private static (string Label, Key Key) HotkeyDisplay(FlashHotkey hk) => hk switch
+    {
+        FlashHotkey.Space => ("Пробіл", Key.Space),
+        FlashHotkey.Enter => ("Enter",  Key.Enter),
+        FlashHotkey.F2    => ("F2",     Key.F2),
+        FlashHotkey.F5    => ("F5",     Key.F5),
+        _                 => ("",       Key.None),
+    };
+
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_settings.FlashHotkey == FlashHotkey.None) return;
+        var (_, key) = HotkeyDisplay(_settings.FlashHotkey);
+        if (e.Key != key) return;
+
+        // Only fire when the Flash tab is the active one — otherwise the
+        // operator could land on a TextBox in another tab and unintentionally
+        // trigger a flash on Enter.
+        if ((MainTabs.SelectedItem as TabItem)?.Header as string is not "Прошивка") return;
+
+        // Don't fire when the button is disabled (mid-flash) — and don't double-fire
+        // for keys repeated while held down.
+        if (!FlashButton.IsEnabled || e.IsRepeat) return;
+
+        // Space inside a TextBox should still type a space, not flash. Enter and
+        // the F-keys are safe to capture even with focus on a single-line TextBox.
+        if (_settings.FlashHotkey == FlashHotkey.Space
+            && Keyboard.FocusedElement is TextBox)
+            return;
+
+        e.Handled = true;
+        FlashButton_Click(FlashButton, new RoutedEventArgs());
+    }
+
 
     private void SettingsSave_Click(object sender, RoutedEventArgs e)
     {
@@ -630,7 +714,10 @@ public partial class MainWindow : Window
                 throw new FormatException("Тайм-аут повинен бути додатнім цілим (секунди).");
             _settings.TimeoutSeconds = t;
 
+            _settings.FlashHotkey = ReadHotkeyComboSelection();
+
             AppSettingsStore.Save(_settings);
+            RefreshFlashHotkeyHint();
 
             // Re-discover with new settings in case catalog/gdb paths changed.
             DiscoverGdb();

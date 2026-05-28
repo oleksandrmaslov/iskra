@@ -366,11 +366,13 @@ static int GenerateCatalog(string[] args)
     int ownerIdx = Array.IndexOf(args, "--owner");
     var owner = ownerIdx >= 0 && ownerIdx + 1 < args.Length ? args[ownerIdx + 1] : "oleksandrmaslov";
 
+    var strictTagMatch = args.Contains("--strict-tag-match");
+
     var targetsDir = args[from + 1];
     var outPath    = args[outIdx + 1];
 
     List<TargetSidecar> sidecars;
-    try { sidecars = CatalogGenerator.ReadTargetsTree(targetsDir); }
+    try { sidecars = CatalogGenerator.ReadTargetsTree(targetsDir, strictTagMatch); }
     catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
     catch (TargetSidecarException ex)    { Console.Error.WriteLine(ex.Message); return 2; }
 

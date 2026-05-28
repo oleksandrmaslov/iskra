@@ -22,7 +22,7 @@
             </StackPanel>
         </Border>
 
-        <TabControl Grid.Row="1" Background="Transparent" BorderThickness="0" Padding="0">
+        <TabControl Grid.Row="1" x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0">
 
             <!-- ============================ FLASH TAB ============================ -->
             <TabItem Header="Прошивка" FontSize="14">
@@ -90,10 +90,22 @@
                         </Grid>
                     </Border>
 
-                    <Button Grid.Row="3" x:Name="FlashButton" Content="ПРОШИТИ ПЛАТУ"
-                            FontSize="28" FontWeight="Bold" Height="76"
+                    <Button Grid.Row="3" x:Name="FlashButton" Height="76"
                             Margin="20,0,20,12" Click="FlashButton_Click"
-                            Background="#0078D7" Foreground="White" BorderThickness="0" />
+                            Background="#0078D7" Foreground="White" BorderThickness="0">
+                        <Button.ToolTip>
+                            <TextBlock x:Name="FlashButtonTooltipText"
+                                       Text="Запустити прошивку поточної плати"
+                                       FontSize="13" />
+                        </Button.ToolTip>
+                        <StackPanel>
+                            <TextBlock Text="ПРОШИТИ ПЛАТУ" FontSize="26" FontWeight="Bold"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock x:Name="FlashHotkeyHint" Text="(або натисніть Enter)"
+                                       FontSize="12" Opacity="0.85"
+                                       HorizontalAlignment="Center" Margin="0,2,0,0" />
+                        </StackPanel>
+                    </Button>
 
                     <Grid Grid.Row="4" Margin="20,0,20,16">
                         <Grid.RowDefinitions>
@@ -382,6 +394,30 @@
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="ID станції:" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="1" Grid.Column="1" x:Name="SettingsStationId" Margin="0,4,8,4" />
+                        </Grid>
+
+                        <!-- Operator-configurable flash hotkey -->
+                        <TextBlock Text="Інтерфейс оператора" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Гаряча клавіша прошивки:"
+                                       VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="SettingsFlashHotkey"
+                                      Margin="0,4,8,4" Padding="6,3"
+                                      ToolTip="Клавіша, що натискає кнопку «Прошити плату». Enter зручно поєднується зі сканером штрих-кодів.">
+                                <ComboBoxItem Content="(вимкнено)" Tag="None" />
+                                <ComboBoxItem Content="Enter"      Tag="Enter" />
+                                <ComboBoxItem Content="Пробіл"     Tag="Space" />
+                                <ComboBoxItem Content="F2"         Tag="F2" />
+                                <ComboBoxItem Content="F5"         Tag="F5" />
+                            </ComboBox>
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">

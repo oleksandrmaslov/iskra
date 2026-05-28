@@ -93,8 +93,15 @@ public static class CatalogGenerator
     /// <summary>
     /// Reads every <c>target.json</c> under <paramref name="rootDir"/> (recursive)
     /// and returns the parsed sidecars. Filename must literally be <c>target.json</c>.
+    /// <para>When <paramref name="strictTagMatch"/> is set, the path must look
+    /// like <c>&lt;root&gt;/&lt;product&gt;/&lt;tag&gt;/target.json</c>, and each
+    /// sidecar's <c>version</c> field must equal <c>tag</c> (optional leading
+    /// <c>v</c> stripped). This catches the failure mode where a release tag
+    /// gets bumped but its <c>target.json</c> asset is left over from the
+    /// previous version — silent "vX.Y.Z disappeared from catalog" turns into
+    /// a loud build error.</para>
     /// </summary>
-    public static List<TargetSidecar> ReadTargetsTree(string rootDir)
+    public static List<TargetSidecar> ReadTargetsTree(string rootDir, bool strictTagMatch = false)
     {
         if (!Directory.Exists(rootDir))
             throw new CatalogGeneratorException($"targets directory not found: {rootDir}");
@@ -102,7 +109,24 @@ public static class CatalogGenerator
         if (files.Length == 0)
             throw new CatalogGeneratorException($"no target.json files under {rootDir}");
         var result = new List<TargetSidecar>(files.Length);
-        foreach (var f in files) result.Add(TargetSidecar.ParseFile(f));
+        foreach (var f in files)
+        {
+            var s = TargetSidecar.ParseFile(f);
+            if (strictTagMatch)
+            {
+                var tagDir = Path.GetFileName(Path.GetDirectoryName(f)) ?? "";
+                var expected = tagDir.StartsWith('v') || tagDir.StartsWith('V')
+                    ? tagDir[1..] : tagDir;
+                if (!string.Equals(expected, s.Version, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new CatalogGeneratorException(
+                        $"{f}: tag directory '{tagDir}' implies version '{expected}', " +
+                        $"but target.json declares version '{s.Version}'. " +
+                        "Re-cut the release with matching assets, or omit --strict-tag-match.");
+                }
+            }
+            result.Add(s);
+        }
         return result;
     }
 

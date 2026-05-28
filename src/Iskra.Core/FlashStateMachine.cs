@@ -15,27 +15,52 @@ namespace Iskra.Core;
 /// </summary>
 public static class FlashStateMachine
 {
+    /// <summary>
+    /// Default backoff before retrying scan on <c>E_PROBE_BUSY</c>. BMP usually
+    /// frees the USB endpoint within a few hundred ms after a previous session
+    /// closes; 500 ms is long enough to ride out the typical re-enumerate without
+    /// noticeably slowing the operator down on a real failure.
+    /// </summary>
+    public static readonly TimeSpan ProbeBusyRetryDelay = TimeSpan.FromMilliseconds(500);
+
     public static async Task<FlashOutcome> RunAsync(
         GdbProcess gdb,
         FlashOptions options,
         TimeSpan timeout,
         Action<GdbLine>? onLine = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        int probeBusyRetries = 1)
     {
         // Phase 1: scan only — bail safely before touching flash on a wrong board.
+        // On E_PROBE_BUSY, retry up to probeBusyRetries times — BMP occasionally
+        // fumbles a USB re-enumerate between consecutive flashes; a quick retry
+        // smooths that out without misclassifying real probe-conflict failures.
         var scanTimeout = timeout < TimeSpan.FromSeconds(8) ? timeout : TimeSpan.FromSeconds(8);
-        var scanRun = await gdb.RunScanAsync(
-            options.Port,
-            options.Power,
-            options.BmpFrequencyHz,
-            options.ConnectUnderReset,
-            scanTimeout,
-            onLine,
-            ct).ConfigureAwait(false);
+        TimeSpan accumulatedScanDuration = TimeSpan.Zero;
+        GdbRunResult scanRun = null!;
+        FlashOutcome? scanOutcome;
+        int attempt = 0;
+        while (true)
+        {
+            scanRun = await gdb.RunScanAsync(
+                options.Port,
+                options.Power,
+                options.BmpFrequencyHz,
+                options.ConnectUnderReset,
+                scanTimeout,
+                onLine,
+                ct).ConfigureAwait(false);
+            accumulatedScanDuration += scanRun.Duration;
 
-        var scanOutcome = ClassifyScan(scanRun, options.TargetBmpMatch);
-        if (scanOutcome is not null)
-            return scanOutcome;
+            scanOutcome = ClassifyScan(scanRun, options.TargetBmpMatch);
+            if (scanOutcome is null) break; // clean scan — proceed to flash
+            if (scanOutcome.ErrorCode != "E_PROBE_BUSY" || attempt >= probeBusyRetries)
+                return scanOutcome with { Duration = accumulatedScanDuration };
+
+            attempt++;
+            try { await Task.Delay(ProbeBusyRetryDelay, ct).ConfigureAwait(false); }
+            catch (TaskCanceledException) { return scanOutcome with { Duration = accumulatedScanDuration }; }
+        }
 
         // Phase 2: flash — only reached when scan passed.
         var flashRun = await gdb.RunFlashAsync(
@@ -53,7 +78,7 @@ public static class FlashStateMachine
         // true end-to-end time. Tail stays from the flash phase (operators want
         // verify lines), the scan run is captured live via onLine if the caller
         // is logging.
-        return outcome with { Duration = scanRun.Duration + outcome.Duration };
+        return outcome with { Duration = accumulatedScanDuration + outcome.Duration };
     }
 
     /// <summary>
