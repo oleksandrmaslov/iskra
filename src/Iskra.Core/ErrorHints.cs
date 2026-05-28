@@ -25,6 +25,7 @@ public static class ErrorHints
         ["E_AUTH_EXPIRED"]     = "Сесія GitHub застаріла (>6 міс). Увійдіть знову у Налаштуваннях.",
         ["E_FW_DOWNLOAD_FAILED"] = "Не вдалося завантажити прошивку з GitHub. Перевірте мережу.",
         ["E_ASSET_NOT_FOUND"]  = "У релізі GitHub немає очікуваного файлу прошивки. Зверніться до інженера.",
+        ["E_RELEASE_REVOKED"]  = "Цю версію прошивки відкликано в каталозі. Оновіть каталог і виберіть іншу версію.",
     };
 
     public static string For(string? errorCode)

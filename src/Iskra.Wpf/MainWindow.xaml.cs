@@ -151,8 +151,10 @@ public partial class MainWindow : Window
                 ProductCombo.SelectedIndex = 0;
 
             // Catalog browser tab
+            var revokedCount = _catalog.Revoked?.Count ?? 0;
+            var revokedSuffix = revokedCount > 0 ? $" · {revokedCount} відкликано" : "";
             CatalogHeader.Text =
-                $"{Path.GetFileName(_catalogPath)} · {_catalog.Products.Count} продукт(ів) · {trustText}";
+                $"{Path.GetFileName(_catalogPath)} · {_catalog.Products.Count} продукт(ів) · {trustText}{revokedSuffix}";
             CatalogProductsList.ItemsSource = _catalog.Products;
         }
         catch (CatalogParseException ex)
@@ -226,6 +228,23 @@ public partial class MainWindow : Window
         var product = _catalog.FindProduct(productId);
         var release = VersionCombo.SelectedItem as FirmwareRelease ?? product?.Default();
         if (product is null || release is null) { Beep(); return; }
+
+        // Sprint 6: revocation gate. If the catalog (which we already verified
+        // is signed + parseable) explicitly disables this release, fail fast
+        // before any work — even before the batch lock check, so an operator
+        // can immediately see the version is dead and pick another.
+        var revocation = _catalog.FindRevocation(product.ProductId, release.Version);
+        if (revocation is not null)
+        {
+            var msg = string.IsNullOrWhiteSpace(revocation.Reason)
+                ? $"{product.ProductId} v{release.Version} revoked in catalog"
+                : $"{product.ProductId} v{release.Version} revoked: {revocation.Reason}";
+            ShowFail("E_RELEASE_REVOKED", msg);
+            LogAttempt(op, batch, product, release, FlashResult.Fail,
+                "E_RELEASE_REVOKED", msg, 0, null, null);
+            RefreshHistory();
+            return;
+        }
 
         // Batch lock check — refuse if this batch was started with a different
         // product/version. Operator must finish the batch or pick a new ID.
@@ -595,8 +614,11 @@ public partial class MainWindow : Window
         SettingsCatalogPath.Text   = _settings.CatalogPath ?? "";
         SettingsRequireSigned.IsChecked = _settings.RequireSignedCatalog;
         SettingsCatalogAutoUpdate.IsChecked = _settings.CatalogAutoUpdate;
-        SettingsCatalogOwner.Text  = _settings.CatalogOwner;
-        SettingsCatalogRepo.Text   = _settings.CatalogRepo;
+        // Sprint 6: catalog source is hard-locked. Display the official source
+        // read-only — AppSettings.Load already clamped any settings.json values
+        // back to CatalogTrust.OfficialCatalogSource on construction.
+        var src = CatalogTrust.OfficialCatalogSource;
+        SettingsCatalogSourceLocked.Text = $"{src.Owner}/{src.Repo}";
         SettingsGdbPath.Text       = _settings.GdbPath ?? "";
         SettingsBmpFreq.Text       = _settings.BmpFrequencyHz.ToString(CultureInfo.InvariantCulture);
         SettingsPowerExternal.IsChecked = _settings.Power == PowerMode.External;
@@ -693,10 +715,11 @@ public partial class MainWindow : Window
             _settings.CatalogPath          = NullIfEmpty(SettingsCatalogPath.Text);
             _settings.RequireSignedCatalog = SettingsRequireSigned.IsChecked == true;
             _settings.CatalogAutoUpdate    = SettingsCatalogAutoUpdate.IsChecked == true;
-            _settings.CatalogOwner         = string.IsNullOrWhiteSpace(SettingsCatalogOwner.Text)
-                                              ? "oleksandrmaslov" : SettingsCatalogOwner.Text.Trim();
-            _settings.CatalogRepo          = string.IsNullOrWhiteSpace(SettingsCatalogRepo.Text)
-                                              ? "iskra-catalog" : SettingsCatalogRepo.Text.Trim();
+            // Sprint 6: owner/repo are hard-locked to the embedded allowlist —
+            // not user-editable. Always persist the canonical values so a stale
+            // settings.json from a prior dev build doesn't linger.
+            _settings.CatalogOwner         = CatalogTrust.OfficialCatalogSource.Owner;
+            _settings.CatalogRepo          = CatalogTrust.OfficialCatalogSource.Repo;
             _settings.GdbPath              = NullIfEmpty(SettingsGdbPath.Text);
             _settings.Power                = SettingsPowerProbe.IsChecked == true
                                               ? PowerMode.Probe : PowerMode.External;
@@ -1060,12 +1083,7 @@ public partial class MainWindow : Window
         CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
         CatalogCacheStatus.Text = "Перевірка…";
 
-        // Apply any pending owner/repo edits BEFORE the fetch so the user
-        // doesn't have to click Save first.
-        _settings.CatalogOwner = string.IsNullOrWhiteSpace(SettingsCatalogOwner.Text)
-            ? "oleksandrmaslov" : SettingsCatalogOwner.Text.Trim();
-        _settings.CatalogRepo  = string.IsNullOrWhiteSpace(SettingsCatalogRepo.Text)
-            ? "iskra-catalog" : SettingsCatalogRepo.Text.Trim();
+        // Sprint 6: source is hard-locked; no user-editable owner/repo to read.
 
         try
         {

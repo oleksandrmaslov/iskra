@@ -289,23 +289,25 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="Авто-оновлення:" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <CheckBox  Grid.Row="0" Grid.Column="1" x:Name="SettingsCatalogAutoUpdate" Margin="0,8,0,4"
                                        Content="Завантажувати свіжий каталог з iskra-catalog при запуску" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Власник:" VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <TextBox   Grid.Row="1" Grid.Column="1" x:Name="SettingsCatalogOwner" Margin="0,4,8,4" />
+                            <!-- Sprint 6: catalog source is hard-locked to CatalogTrust.OfficialCatalogSource.
+                                 Settings.json values that disagree are clamped back on load. The official source
+                                 is displayed read-only here so the operator can see what the station trusts. -->
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Джерело (заблоковано):" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="SettingsCatalogSourceLocked"
+                                       VerticalAlignment="Center" Margin="0,4,8,4" FontFamily="Cascadia Mono, Consolas"
+                                       Foreground="#444" Text="…"
+                                       ToolTip="Джерело каталогу зашите у застосунок (CatalogTrust.AllowedCatalogSources). Змінюється лише новою збіркою." />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Репозиторій:" VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <TextBox   Grid.Row="2" Grid.Column="1" x:Name="SettingsCatalogRepo" Margin="0,4,8,4" />
-
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Поточна версія:" VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <TextBlock Grid.Row="3" Grid.Column="1" x:Name="CatalogCacheStatus"
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Поточна версія:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="CatalogCacheStatus"
                                        VerticalAlignment="Center" Margin="0,4,8,4" Text="…" TextWrapping="Wrap" />
-                            <Button    Grid.Row="3" Grid.Column="2" x:Name="CatalogUpdateButton"
+                            <Button    Grid.Row="2" Grid.Column="2" x:Name="CatalogUpdateButton"
                                        Content="Перевірити оновлення" Padding="14,4" Margin="0,4,0,4"
                                        Click="CatalogUpdate_Click" />
                         </Grid>

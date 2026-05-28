@@ -32,6 +32,8 @@ public enum RemoteCatalogStatus
     BadSignature,         // download succeeded but signature didn't verify
     AssetsMissing,        // release doesn't have catalog.json + catalog.json.sig
     ParseError,           // catalog.json downloaded but failed to parse
+    SourceNotAllowed,     // owner/repo isn't in CatalogTrust.AllowedCatalogSources
+    RollbackRejected,     // signed catalog's generated_at < last accepted (anti-rollback)
 }
 
 /// <summary>
@@ -50,6 +52,10 @@ public sealed class RemoteCatalogClient
     public const string CatalogFileName        = "latest.json";
     public const string SignatureFileName      = "latest.json.sig";
     public const string TagFileName            = "latest.tag";
+    /// <summary>Anti-rollback floor: ISO-8601 UTC of the most recently committed catalog's
+    /// <c>generated_at</c>. We refuse to overwrite the cache with an older catalog even
+    /// when the signature is valid.</summary>
+    public const string GeneratedAtFileName    = "latest.generated_at";
 
     public const string ApiBaseUrl  = "https://api.github.com";
     public const string ApiAccept   = "application/vnd.github+json";
@@ -59,20 +65,33 @@ public sealed class RemoteCatalogClient
     private readonly string _owner;
     private readonly string _repo;
     private readonly string _cacheDir;
+    private readonly bool _enforceAllowlist;
 
     public RemoteCatalogClient(
         HttpClient http,
-        string owner = "oleksandrmaslov",
-        string repo  = "iskra-catalog",
-        string? cacheDirOverride = null)
+        string? owner = null,
+        string? repo  = null,
+        string? cacheDirOverride = null,
+        bool enforceAllowlist = true)
     {
         if (http is null) throw new ArgumentNullException(nameof(http));
+        // Default to the canonical official source. Callers can pass the
+        // allowlisted values explicitly; non-allowlisted values are refused
+        // here so a tampered AppSettings.json can never cause an HTTP request
+        // to a non-official catalog.
+        owner ??= CatalogTrust.OfficialCatalogSource.Owner;
+        repo  ??= CatalogTrust.OfficialCatalogSource.Repo;
         if (string.IsNullOrWhiteSpace(owner)) throw new ArgumentException("owner required", nameof(owner));
         if (string.IsNullOrWhiteSpace(repo))  throw new ArgumentException("repo required",  nameof(repo));
+        if (enforceAllowlist && !CatalogTrust.IsAllowedCatalogSource(owner, repo))
+            throw new ArgumentException(
+                $"'{owner}/{repo}' is not in CatalogTrust.AllowedCatalogSources",
+                nameof(owner));
         _http  = http;
         _owner = owner;
         _repo  = repo;
         _cacheDir = cacheDirOverride ?? DefaultCacheDir();
+        _enforceAllowlist = enforceAllowlist;
     }
 
     public static string DefaultCacheDir()
@@ -81,9 +100,31 @@ public sealed class RemoteCatalogClient
         return Path.Combine(local, DefaultDirectoryName, DefaultSubdirectoryName);
     }
 
-    public string CatalogPath   => Path.Combine(_cacheDir, CatalogFileName);
-    public string SignaturePath => Path.Combine(_cacheDir, SignatureFileName);
-    public string TagPath       => Path.Combine(_cacheDir, TagFileName);
+    public string CatalogPath        => Path.Combine(_cacheDir, CatalogFileName);
+    public string SignaturePath      => Path.Combine(_cacheDir, SignatureFileName);
+    public string TagPath            => Path.Combine(_cacheDir, TagFileName);
+    public string GeneratedAtPath    => Path.Combine(_cacheDir, GeneratedAtFileName);
+
+    /// <summary>
+    /// Reads the cached anti-rollback floor (catalog <c>generated_at</c> of the
+    /// last successful commit). Returns <see cref="DateTime.MinValue"/> when
+    /// nothing is cached or the file is unparseable — i.e. any catalog is
+    /// acceptable on first run.
+    /// </summary>
+    public DateTime CachedGeneratedAt()
+    {
+        if (!File.Exists(GeneratedAtPath)) return DateTime.MinValue;
+        try
+        {
+            var s = File.ReadAllText(GeneratedAtPath).Trim();
+            if (DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal
+                    | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt))
+                return dt;
+        }
+        catch { /* fall through */ }
+        return DateTime.MinValue;
+    }
 
     /// <summary>
     /// Returns the catalog cached on disk from a previous successful fetch,
@@ -195,11 +236,24 @@ public sealed class RemoteCatalogClient
             try { catalog = CatalogJson.Parse(System.Text.Encoding.UTF8.GetString(catalogBytes)); }
             catch (CatalogParseException ex) { return Failure(RemoteCatalogStatus.ParseError, ex.Message); }
 
+            // 4a) Anti-rollback: the catalog body itself is signed, so its
+            // generated_at field cannot be forged. Reject anything older than
+            // the most recently committed catalog — protects against an
+            // attacker re-serving an older signed catalog (e.g. one whose
+            // revocation list hasn't yet blocked a since-revoked release).
+            var floor = CachedGeneratedAt();
+            var incoming = catalog.GeneratedAt.ToUniversalTime();
+            if (floor != DateTime.MinValue && incoming < floor)
+                return Failure(RemoteCatalogStatus.RollbackRejected,
+                    $"catalog generated_at {incoming:O} < cached floor {floor:O} (rollback refused)");
+
             // 5) Atomic commit: write .tmp files then rename.
             Directory.CreateDirectory(_cacheDir);
             WriteAtomic(CatalogPath,   catalogBytes);
             WriteAtomic(SignaturePath, sigBytes);
             WriteAtomic(TagPath,       System.Text.Encoding.UTF8.GetBytes(tagName));
+            WriteAtomic(GeneratedAtPath,
+                System.Text.Encoding.UTF8.GetBytes(incoming.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
 
             return new RemoteCatalogResult(
                 Catalog: catalog, LocalCatalogPath: CatalogPath, LocalSignaturePath: SignaturePath,

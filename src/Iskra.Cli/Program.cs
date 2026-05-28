@@ -368,6 +368,11 @@ static int GenerateCatalog(string[] args)
 
     var strictTagMatch = args.Contains("--strict-tag-match");
 
+    int revokedIdx = Array.IndexOf(args, "--revoked");
+    string? revokedPath = revokedIdx >= 0 && revokedIdx + 1 < args.Length
+        ? args[revokedIdx + 1]
+        : null;
+
     var targetsDir = args[from + 1];
     var outPath    = args[outIdx + 1];
 
@@ -376,8 +381,12 @@ static int GenerateCatalog(string[] args)
     catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
     catch (TargetSidecarException ex)    { Console.Error.WriteLine(ex.Message); return 2; }
 
+    IReadOnlyList<RevokedRelease> revoked;
+    try { revoked = CatalogGenerator.ReadRevokedFile(revokedPath); }
+    catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
+
     Catalog catalog;
-    try { catalog = CatalogGenerator.Build(sidecars, owner, DateTime.UtcNow); }
+    try { catalog = CatalogGenerator.Build(sidecars, owner, DateTime.UtcNow, revoked); }
     catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
     catch (CatalogParseException ex)     { Console.Error.WriteLine($"generated catalog failed validation: {ex.Message}"); return 2; }
 
@@ -385,6 +394,8 @@ static int GenerateCatalog(string[] args)
     File.WriteAllBytes(outPath, CatalogJson.WriteUtf8(catalog));
     Console.WriteLine($"generated → {outPath}");
     Console.WriteLine($"  {catalog.Products.Count} product(s), {catalog.Products.Sum(p => p.Releases.Count)} release(s)");
+    if (revoked.Count > 0)
+        Console.WriteLine($"  · {revoked.Count} revoked release(s)");
     foreach (var p in catalog.Products)
         Console.WriteLine($"  · {p.ProductId} → default v{p.DefaultRelease} ({p.Releases.Count} release(s))");
     return 0;

@@ -69,6 +69,18 @@ public static class CatalogResolver
                 return ResolveResult.Failure($"{productId}: no default release");
         }
 
+        // Sprint 6: revocation gate. Refuse to resolve a revoked release so the
+        // CLI never proceeds to flash. The catalog itself signs this list.
+        var revocation = catalog.FindRevocation(product.ProductId, release.Version);
+        if (revocation is not null)
+        {
+            var why = string.IsNullOrWhiteSpace(revocation.Reason)
+                ? "revoked in catalog"
+                : revocation.Reason;
+            return ResolveResult.Failure(
+                $"E_RELEASE_REVOKED: {product.ProductId} v{release.Version} {why}");
+        }
+
         var resolved = StripFlag(args, "--catalog").ToList();
         AddIfMissing(resolved, "--target",           product.Target.BmpMatch);
         AddIfMissing(resolved, "--flash-kb",         product.Target.FlashKb.ToString());

@@ -267,57 +267,87 @@ Open Sprint 3.5 items are deployment-only, not code:
 - **First end-to-end run:** cut a real release in `ci-clop-firmware` and
   watch iskra-catalog Actions regenerate the signed catalog within ~30 s.
 
-### Sprint 6 — planned: production release governance + anti-tamper hardening
+### Sprint 6 — done in code; rotate-prod-key + GitHub repo settings are owner-action
 
-Current code already has the core trust boundary: Ed25519-signed catalogs,
-embedded public key verification, SHA-256 firmware checks, GitHub release
-downloads, and cache re-hashing. The remaining risk is production governance:
-today WPF settings still expose editable `CatalogOwner` / `CatalogRepo`
-fields for development convenience. In production, stations must not trust an
-operator-entered GitHub username/repo, and they must not require Oleksandr to
-sign in to his personal GitHub account on each factory PC.
+The trust root is now hard-locked. A compromised GitHub release alone cannot
+cause a station to flash bad firmware — the attacker would also need:
+1. the embedded public key's matching private key (to forge a signature), AND
+2. a catalog `generated_at` newer than the station's anti-rollback floor.
 
-Planned Sprint 6 deliverables:
-
-1. **Production catalog lock / allowlist** — add a production-mode policy that
-   accepts only the official catalog source, initially
-   `oleksandrmaslov/iskra-catalog`. The WPF owner/repo text fields stay
-   available only in dev/lab mode; release builds either hide or disable them.
-   `RemoteCatalogClient` should reject non-allowlisted catalog sources before
-   any network request.
-2. **Production signing-key custody** — rotate from the dev key to a
-   production Ed25519 keypair. Embed only the production public key in the
-   release app. Keep the private key outside this repo and outside normal
-   factory PCs: preferred storage is offline media, HSM, or a tightly
-   controlled vault. GitHub Actions may build draft catalogs, but only
-   Oleksandr or a protected approval environment can produce the production
-   signature.
-3. **No maintainer GitHub login on stations** — factory PCs must not use
-   Oleksandr's personal GitHub login or PAT. Preferred deployment is public
-   read-only catalog/firmware assets with trust enforced by signature +
-   SHA-256. If private assets are required, use a read-only GitHub App,
-   machine/service account, or backend download proxy — never the maintainer's
-   personal credentials.
-4. **Anti-rollback catalog policy** — extend the catalog/cache metadata with a
-   monotonic catalog sequence or signed `published_at`/epoch field. Store the
-   newest accepted value locally and reject older signed catalogs by default.
-   Provide a deliberate engineering override for lab recovery only.
-5. **Release revocation** — add a signed `revoked_releases` /
-   `disabled_releases` section to the catalog so a bad firmware version can be
-   blocked even if it was previously signed and cached.
-6. **GitHub repository governance** — protect `main` on app, catalog, and
-   firmware repos: no force-push, required PR, required status checks, signed
-   commits/tags where practical, CODEOWNERS with Oleksandr as required owner,
-   GitHub Actions minimum permissions, and protected environments/manual
-   approval for signing or publishing production catalog releases.
-7. **Security tests** — add tests for wrong catalog repo, unsigned catalog,
-   bad signature, hash mismatch, rollback attempt, revoked release, tampered
-   cache file, and production-mode owner/repo override attempts.
-8. **Operational recovery** — document key rotation and incident response:
-   if GitHub is compromised, re-publish a clean signed catalog; if the signing
-   key is compromised, rotate the embedded public key and ship a new app
-   version. A compromised GitHub release alone must not be enough to make a
-   station flash bad firmware.
+1. ✅ **Production catalog lock / allowlist** —
+   [`CatalogTrust.AllowedCatalogSources`](src/Iskra.Core/CatalogTrust.cs) lists
+   `oleksandrmaslov/iskra-catalog` as the only accepted source. The
+   `RemoteCatalogClient` constructor throws `ArgumentException` for anything
+   else (allowlist enforcement on by default; `enforceAllowlist: false` is
+   test-only). `AppSettingsStore.Load` clamps any non-allowlisted owner/repo
+   in `settings.json` back to `CatalogTrust.OfficialCatalogSource`. WPF
+   Settings tab no longer exposes editable `CatalogOwner`/`CatalogRepo` —
+   replaced by a read-only label showing the locked source.
+2. ⏸️ **Production signing-key custody** — OWNER ACTION. Code is ready; rotation
+   is intentionally a manual step. To rotate:
+   1. On a clean workstation (NOT a factory PC):
+      `Iskra.Cli --gen-keypair <secure-dir>` — produces
+      `catalog-key.pub` + `catalog-key.priv`.
+   2. Paste the printed public key into
+      [`CatalogTrust.EmbeddedPublicKeyBase64`](src/Iskra.Core/CatalogTrust.cs).
+   3. Commit + cut a new app release.
+   4. Move the private key to offline media / HSM / vault. Do not store on
+      any factory PC. Do not commit anywhere.
+   5. Update the `CATALOG_PRIV_KEY` secret in iskra-catalog with the new key.
+      The current catalog will need to be re-signed by the new key.
+   6. Until then, the dev key embedded in the app is what's protecting things —
+      treat it as low-trust. Rotate before factory deployment.
+3. ⏸️ **No maintainer GitHub login on stations** — already true in code: the
+   catalog repo is public, `RemoteCatalogClient` uses anonymous HTTP. The
+   firmware downloader (Sprint 3) still uses Device Flow login if a release
+   is private; the OWNER ACTION is to either keep firmware repos public
+   (preferred — trust comes from signature + SHA-256 anyway) or stand up a
+   read-only service account / GitHub App for private firmware fetches.
+4. ✅ **Anti-rollback catalog policy** — the catalog's `generated_at` is
+   inside the signed body. On every successful commit, the cached value at
+   `%LOCALAPPDATA%\Iskra\catalog\latest.generated_at` is updated. On every
+   fetch, an incoming catalog with an earlier `generated_at` is refused via
+   new `RemoteCatalogStatus.RollbackRejected`. First-run accepts any catalog
+   (floor is `DateTime.MinValue`). Operator override = manually delete the
+   `latest.generated_at` file (lab recovery only — undocumented in the UI).
+5. ✅ **Release revocation** — catalog schema gained an optional top-level
+   [`revoked`](src/Iskra.Core/Catalog.cs) list of
+   `{ product_id, version, reason }`. Both the WPF flash flow and the CLI
+   `CatalogResolver` refuse to flash any listed release with new error code
+   `E_RELEASE_REVOKED` (Ukrainian hint added). The catalog browser shows the
+   revoked count in the tab header. CLI `--generate-catalog` accepts
+   `--revoked <revoked.json>`; the regen workflow template autodetects a
+   `revoked.json` at the iskra-catalog repo root and passes it through.
+6. ⏸️ **GitHub repository governance** — OWNER ACTION on the GitHub web UI.
+   Checklist for each of `iskra`, `iskra-catalog`, `*-firmware`:
+   - Settings → Branches → add a rule for `main`: require PR, require status
+     checks, no force-push, no deletions.
+   - Settings → General → enable "Require signed commits" once the maintainer
+     is set up with commit signing (gpg or ssh).
+   - Settings → Code security and analysis → Dependabot alerts.
+   - Settings → Actions → restrict workflow permissions to the minimum.
+   - iskra-catalog specifically: create a `signing` environment with
+     "Required reviewers" gating; move the `CATALOG_PRIV_KEY` secret into
+     it so the maintainer must approve each publish.
+   - CODEOWNERS file with `oleksandrmaslov` as the required reviewer for
+     `src/`, `installer/`, and `.github/`.
+7. ✅ **Security tests** — [Sprint6SecurityTests.cs](tests/Iskra.Core.Tests/Sprint6SecurityTests.cs)
+   covers allowlist (positive, negative, case-insensitive), RemoteCatalogClient
+   constructor refusal, AppSettings clamp on tampered settings.json,
+   anti-rollback cache file round-trip, catalog revoked-list parsing + dedupe,
+   `IsRevoked` case-insensitive lookup, and `CatalogResolver` refusal of a
+   revoked release with `E_RELEASE_REVOKED`.
+8. ⏸️ **Operational recovery** — OWNER ACTION write-up. The high-level model:
+   - **Compromised GitHub release / iskra-catalog**: revert the bad catalog
+     release, publish a clean one. Stations refuse the bad one anyway
+     (anti-rollback + signature checks).
+   - **Compromised private signing key**: rotate (step 2 above), ship a new
+     app release. Old catalogs signed with the old key continue to verify
+     until stations update; rollback floor offers no protection here, so
+     this is a hard-rotate event. Document and rehearse.
+   - **Compromised station**: re-image the station; nothing on a station can
+     widen the trust boundary because catalog source / public key /
+     allowlist are all compiled into the app.
 
 ### Beyond Sprint 3.5
 
@@ -326,7 +356,7 @@ Planned Sprint 6 deliverables:
 | 2.5 | Sideload-from-folder (`--sideload-dir`) — synthesises a catalog from `<id>_v<ver>_<part>.elf` + sidecar files |
 | 2.6 | Per-product flasher overrides — optional `frequency_hz` / `power_mode` / `connect_reset` / `timeout_s` in catalog `target` block; override global Settings at flash time |
 | 5 | Cloud DB mirror — keep local SQLite writes (offline-safe), batch-push to a central DB (likely Postgres/Supabase) when network is up. Schema mirrors `flash_attempts` + adds `station_id` index |
-| 6 | Production release governance + anti-tamper hardening — lock catalog source, protect signing keys, no maintainer GitHub login on stations, anti-rollback, release revocation, repo protections |
+| ~~6~~ | ✅ Done in code (catalog allowlist, anti-rollback, revocation, security tests). Owner-actions outstanding: prod key rotation + GitHub repo settings |
 | 7 | Auto-pick product by board ID — needs firmware cooperation (write a board-ID byte to a known flash offset OR use chip UID + a per-product mapping table). Reads via `monitor read_mem`; matches against catalog before flashing |
 
 ### Polish backlog (fold in opportunistically)

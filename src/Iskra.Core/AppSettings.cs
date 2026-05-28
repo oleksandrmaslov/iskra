@@ -31,10 +31,13 @@ public sealed class AppSettings
     public string? CatalogPath { get; set; }
     public bool RequireSignedCatalog { get; set; }
 
-    // Remote catalog auto-update (Sprint 3.5)
+    // Remote catalog auto-update (Sprint 3.5). Sprint 6: the catalog source
+    // is no longer settings-controlled in production. The defaults come from
+    // CatalogTrust.OfficialCatalogSource; AppSettingsStore.Load clamps these
+    // back to the allowlist if a tampered settings.json supplies anything else.
     public bool CatalogAutoUpdate { get; set; } = true;
-    public string CatalogOwner { get; set; } = "oleksandrmaslov";
-    public string CatalogRepo  { get; set; } = "iskra-catalog";
+    public string CatalogOwner { get; set; } = CatalogTrust.OfficialCatalogSource.Owner;
+    public string CatalogRepo  { get; set; } = CatalogTrust.OfficialCatalogSource.Repo;
 
     // Debugger / Black Magic Probe
     public string? GdbPath { get; set; }
@@ -99,16 +102,26 @@ public static class AppSettingsStore
     {
         path ??= DefaultPath;
         if (!File.Exists(path)) return new AppSettings();
+        AppSettings settings;
         try
         {
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
         }
         catch
         {
             // Corrupt settings file shouldn't break the app — fall back to defaults.
             return new AppSettings();
         }
+        // Sprint 6: a tampered settings.json cannot widen the catalog-source
+        // allowlist. If the on-disk owner/repo isn't allowed, snap back to the
+        // canonical official source. Hard-lock — no warning, no toggle.
+        if (!CatalogTrust.IsAllowedCatalogSource(settings.CatalogOwner, settings.CatalogRepo))
+        {
+            settings.CatalogOwner = CatalogTrust.OfficialCatalogSource.Owner;
+            settings.CatalogRepo  = CatalogTrust.OfficialCatalogSource.Repo;
+        }
+        return settings;
     }
 
     public static void Save(AppSettings settings, string? path = null)

@@ -103,12 +103,22 @@ jobs:
           # --strict-tag-match: refuse to build if any target.json's version
           # field disagrees with its release tag directory (catches stale
           # assets re-uploaded onto a bumped tag — see iskra CLAUDE.md).
+          # --revoked: optional sidecar (revoked.json at the iskra-catalog
+          # repo root) listing { product_id, version, reason } entries. The
+          # signed catalog carries this list; the app refuses to flash any
+          # listed release. Maintained by hand by the catalog owner.
+          REVOKED_ARGS=""
+          if [ -f revoked.json ]; then
+            REVOKED_ARGS="--revoked revoked.json"
+            echo "Including revocation list from revoked.json"
+          fi
           dotnet run --project iskra-app/src/Iskra.Cli --no-restore \
             -- --generate-catalog \
                --from-targets targets \
                --out catalog.json \
                --owner "$OWNER" \
-               --strict-tag-match
+               --strict-tag-match \
+               $REVOKED_ARGS
           ls -la catalog.json
           cat catalog.json | head -50
 

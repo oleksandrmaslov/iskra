@@ -66,6 +66,21 @@ public static class CatalogJson
 
         var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in c.Products) ValidateProduct(p, seenIds);
+
+        if (c.Revoked is not null)
+        {
+            var seenRev = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in c.Revoked)
+            {
+                if (string.IsNullOrWhiteSpace(r.ProductId))
+                    throw new CatalogParseException("revoked entry missing product_id");
+                if (string.IsNullOrWhiteSpace(r.Version))
+                    throw new CatalogParseException($"revoked entry for '{r.ProductId}' missing version");
+                if (!seenRev.Add($"{r.ProductId}|{r.Version}"))
+                    throw new CatalogParseException(
+                        $"duplicate revocation for {r.ProductId} v{r.Version}");
+            }
+        }
     }
 
     private static void ValidateProduct(Product p, HashSet<string> seenIds)

@@ -27,7 +27,8 @@ public static class CatalogGenerator
     public static Catalog Build(
         IEnumerable<TargetSidecar> sidecars,
         string owner,
-        DateTime generatedAtUtc)
+        DateTime generatedAtUtc,
+        IReadOnlyList<RevokedRelease>? revoked = null)
     {
         if (sidecars is null) throw new ArgumentNullException(nameof(sidecars));
         if (string.IsNullOrWhiteSpace(owner))
@@ -82,12 +83,38 @@ public static class CatalogGenerator
         var catalog = new Catalog(
             SchemaVersion: CatalogJson.CurrentSchemaVersion,
             GeneratedAt:   generatedAtUtc,
-            Products:      products);
+            Products:      products,
+            Revoked:       revoked is null || revoked.Count == 0 ? null : revoked);
 
         // Run the catalog validator on the way out — if we produced something
         // unparseable, fail loudly inside CI rather than at app startup.
         CatalogJson.Validate(catalog);
         return catalog;
+    }
+
+    /// <summary>
+    /// Loads a <c>revoked.json</c> sidecar (JSON array of
+    /// <see cref="RevokedRelease"/> records) into a strongly-typed list, or
+    /// returns an empty list if the file is missing. Throws
+    /// <see cref="CatalogGeneratorException"/> for malformed input. Called from
+    /// CI before <see cref="Build"/> so the production catalog carries the
+    /// signed revocation list.
+    /// </summary>
+    public static IReadOnlyList<RevokedRelease> ReadRevokedFile(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            return Array.Empty<RevokedRelease>();
+        try
+        {
+            var json = File.ReadAllText(path);
+            var list = System.Text.Json.JsonSerializer.Deserialize<List<RevokedRelease>>(
+                json, CatalogJson.DefaultOptions);
+            return list ?? new List<RevokedRelease>();
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            throw new CatalogGeneratorException($"{path}: invalid revoked.json — {ex.Message}", ex);
+        }
     }
 
     /// <summary>

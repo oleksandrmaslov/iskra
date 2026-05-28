@@ -56,12 +56,40 @@ public sealed record Product(
     public FirmwareRelease? Default() => FindRelease(DefaultRelease);
 }
 
+/// <summary>
+/// A signed entry that disables a previously-shipped firmware release. The
+/// flash gate refuses to flash any <c>(product_id, version)</c> in this list,
+/// even if the matching release entry is still present (operators may have
+/// stale cached releases too). <c>Reason</c> is shown to the operator.
+/// </summary>
+public sealed record RevokedRelease(
+    string ProductId,
+    string Version,
+    string? Reason = null);
+
 public sealed record Catalog(
     int SchemaVersion,
     DateTime GeneratedAt,
-    IReadOnlyList<Product> Products)
+    IReadOnlyList<Product> Products,
+    IReadOnlyList<RevokedRelease>? Revoked = null)
 {
     public Product? FindProduct(string productId) =>
         Products.FirstOrDefault(p =>
             string.Equals(p.ProductId, productId, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when the catalog explicitly revokes <c>(productId, version)</c>.
+    /// Compared case-insensitively. Treat the catalog as authoritative — a
+    /// cached release on disk that's now revoked must not be flashed.
+    /// </summary>
+    public bool IsRevoked(string productId, string version) =>
+        Revoked is not null && Revoked.Any(r =>
+            string.Equals(r.ProductId, productId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.Version,   version,   StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Returns the revocation entry for a release, or <c>null</c> if not revoked.</summary>
+    public RevokedRelease? FindRevocation(string productId, string version) =>
+        Revoked?.FirstOrDefault(r =>
+            string.Equals(r.ProductId, productId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.Version,   version,   StringComparison.OrdinalIgnoreCase));
 }

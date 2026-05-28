@@ -21,8 +21,13 @@ public class RemoteCatalogClientTests : IDisposable
         if (Directory.Exists(_cacheDir)) Directory.Delete(_cacheDir, recursive: true);
     }
 
+    // Tests run against a stub HTTP handler with a fictitious owner; the
+    // allowlist would refuse the construction. Pass enforceAllowlist:false to
+    // exercise the rest of the fetch/cache flow. Allowlist enforcement itself
+    // is tested separately in CatalogTrustTests + dedicated tests below.
     private RemoteCatalogClient NewClient(StubHandler h)
-        => new(new HttpClient(h), owner: "o", repo: "iskra-catalog", cacheDirOverride: _cacheDir);
+        => new(new HttpClient(h), owner: "o", repo: "iskra-catalog",
+               cacheDirOverride: _cacheDir, enforceAllowlist: false);
 
     // The signature verification uses CatalogTrust.EmbeddedPublicKey, so for
     // tests we override the verification path by writing a stub catalog signed
