@@ -34,6 +34,9 @@ if (args.Contains("--logout"))
 if (args.Contains("--whoami"))
     return await WhoamiAsync();
 
+if (args.Contains("--ship-logs-now"))
+    return await ShipLogsNowAsync(args);
+
 bool requireSigned = args.Contains("--require-signed-catalog");
 args = args.Where(a => a != "--require-signed-catalog").ToArray();
 
@@ -570,6 +573,82 @@ static async Task<int> WhoamiAsync()
     return 0;
 }
 
+static async Task<int> ShipLogsNowAsync(string[] args)
+{
+    var settings = AppSettingsStore.Load();
+    if (!settings.LogShippingEnabled)
+    {
+        Console.WriteLine("Вивантаження журналу вимкнено в налаштуваннях (LogShippingEnabled = false).");
+        return 0;
+    }
+
+    if (!GitHubAppConfig.IsLogShipperConfigured)
+    {
+        Console.Error.WriteLine("Помилка: GitHub App для журналу не налаштовано (зверніться до розробника).");
+        Console.Error.WriteLine("(LogShipperAppId / LogShipperInstallationId порожні у GitHubAppConfig)");
+        return 5;
+    }
+
+    var keyPath = ArgValue(args, "--key") ?? settings.LogShipperPrivateKeyPath;
+    if (!File.Exists(keyPath))
+    {
+        Console.Error.WriteLine($"Помилка: приватний ключ GitHub App не знайдено: {keyPath}");
+        Console.Error.WriteLine("Перевстановіть Iskra або вкажіть шлях через --key <path>.");
+        return 5;
+    }
+
+    var dbPath = ArgValue(args, "--db-path")
+        ?? settings.DbPath
+        ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db");
+    if (!File.Exists(dbPath))
+    {
+        Console.WriteLine($"Журнал ще порожній ({dbPath}). Нічого вивантажувати.");
+        return 0;
+    }
+
+    using var store = new SqliteLogStore(dbPath);
+    int pending = store.CountUnsynced();
+    if (pending == 0)
+    {
+        Console.WriteLine("Всі рядки вже вивантажено.");
+        return 0;
+    }
+    Console.WriteLine($"Знайдено {pending} рядк(ів) для вивантаження. Журнал: {dbPath}");
+
+    using var http = new HttpClient();
+    var tokens = new GitHubAppInstallationTokenProvider(
+        http,
+        GitHubAppConfig.LogShipperAppId,
+        GitHubAppConfig.LogShipperInstallationId,
+        () => GitHubAppInstallationTokenProvider.LoadPemKey(keyPath));
+    var shipper = new LogShipper(
+        store, tokens, http,
+        GitHubAppConfig.LogsRepoOwner,
+        GitHubAppConfig.LogsRepoName);
+
+    ShipReport report;
+    try
+    {
+        report = await shipper.ShipPendingAsync();
+    }
+    catch (GitHubAppAuthException ex)
+    {
+        Console.Error.WriteLine($"Помилка авторизації GitHub App: {ex.Message}");
+        return 5;
+    }
+    catch (LogShipperException ex)
+    {
+        Console.Error.WriteLine($"Помилка вивантаження: {ex.Message}");
+        return 5;
+    }
+
+    Console.WriteLine($"✓ Вивантажено: {report.RowsPushed} рядк(ів) → "
+        + $"{report.FilesCreated} нових файл(ів) + {report.FilesUpdated} оновлено.");
+    if (report.RowsLeftover > 0)
+        Console.WriteLine($"  ({report.RowsLeftover} рядк(ів) залишилось — запустіть знову, щоб дослати.)");
+    return 0;
+}
+
 static async Task<string> FetchRemoteFirmwareAsync(GitHubReleaseRef src, string expectedSha)
 {
     using var http = new HttpClient();
@@ -850,6 +929,12 @@ static void PrintUsage()
                                      в %PROGRAMDATA%\Iskra\auth.bin.
           Iskra.Cli --logout         видалити збережені токени.
           Iskra.Cli --whoami         показати GitHub-користувача та строки дії.
+
+        Хмарний журнал (Sprint 5):
+          Iskra.Cli --ship-logs-now [--key <pem>] [--db-path <db>]
+                                     одноразово виштовхнути всі несинхронізовані
+                                     рядки журналу до iskra-logs (GitHub).
+                                     Журнал та ключ беруться з налаштувань.
 
         Підпис каталогу (Sprint 2):
           [--require-signed-catalog]   обовʼязковий Ed25519-підпис .sig поруч
