@@ -177,12 +177,16 @@ public class AppSettingsTests : IDisposable
     }
 
     [Fact]
-    public void Log_shipper_constants_start_unconfigured_and_repo_is_locked()
+    public void Log_shipper_configuration_state_matches_ids_and_repo_is_locked()
     {
-        // Empty App ID / installation ID means the LogShipper stays dormant
-        // until the owner provisions the GitHub App. The repo coordinates,
-        // however, are hard-locked from day one.
-        Assert.False(GitHubAppConfig.IsLogShipperConfigured);
+        // The App ID / installation ID may be blank in a fresh checkout or
+        // populated after the owner provisions the GitHub App. The reported
+        // configuration state must reflect the constants either way.
+        var expectedConfigured =
+            !string.IsNullOrWhiteSpace(GitHubAppConfig.LogShipperAppId) &&
+            !string.IsNullOrWhiteSpace(GitHubAppConfig.LogShipperInstallationId);
+
+        Assert.Equal(expectedConfigured, GitHubAppConfig.IsLogShipperConfigured);
         Assert.Equal("oleksandrmaslov", GitHubAppConfig.LogsRepoOwner);
         Assert.Equal("iskra-logs",       GitHubAppConfig.LogsRepoName);
     }

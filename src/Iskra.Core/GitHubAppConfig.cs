@@ -43,8 +43,8 @@ public static class GitHubAppConfig
     ///   <item>Paste the App ID and Installation ID below.</item>
     /// </list>
     /// </summary>
-    public const string LogShipperAppId          = "3866978";
-    public const string LogShipperInstallationId = "135704864";
+    public const string LogShipperAppId          = "3904653";
+    public const string LogShipperInstallationId = "136542553";
 
     public static bool IsLogShipperConfigured =>
         !string.IsNullOrWhiteSpace(LogShipperAppId) &&
