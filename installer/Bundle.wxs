@@ -26,10 +26,18 @@
                      Variable="ArmGdb15Exists"
                      Result="exists"
                      Path="[ProgramFiles64Folder]Arm\GNU Toolchain mingw-w64-i686-arm-none-eabi\bin\arm-none-eabi-gdb.exe" />
+    <util:FileSearch Id="ArmGdb15X86Search"
+                     Variable="ArmGdb15X86Exists"
+                     Result="exists"
+                     Path="[ProgramFilesFolder]Arm\GNU Toolchain mingw-w64-i686-arm-none-eabi\bin\arm-none-eabi-gdb.exe" />
     <util:FileSearch Id="ArmGdbLegacyArm15Search"
                      Variable="ArmGdbLegacyArm15Exists"
                      Result="exists"
                      Path="[ProgramFiles64Folder]Arm GNU Toolchain arm-none-eabi\15.2 rel1\bin\arm-none-eabi-gdb.exe" />
+    <util:FileSearch Id="ArmGdbLegacyArm15X86Search"
+                     Variable="ArmGdbLegacyArm15X86Exists"
+                     Result="exists"
+                     Path="[ProgramFilesFolder]Arm GNU Toolchain arm-none-eabi\15.2 rel1\bin\arm-none-eabi-gdb.exe" />
     <util:FileSearch Id="ArmGdbLegacyX86Search"
                      Variable="ArmGdbLegacyX86Exists"
                      Result="exists"
@@ -44,7 +52,7 @@
       <MsiPackage Id="ArmGnuToolchain"
                   SourceFile="$(var.ArmToolchainMsi)"
                   DisplayName="Arm GNU Toolchain (arm-none-eabi)"
-                  InstallCondition="NOT ArmGdb15Exists AND NOT ArmGdbLegacyArm15Exists AND NOT ArmGdbLegacyX86Exists AND NOT ArmGdbLegacyArmX86Exists"
+                  InstallCondition="NOT ArmGdb15Exists AND NOT ArmGdb15X86Exists AND NOT ArmGdbLegacyArm15Exists AND NOT ArmGdbLegacyArm15X86Exists AND NOT ArmGdbLegacyX86Exists AND NOT ArmGdbLegacyArmX86Exists"
                   Permanent="yes"
                   Visible="yes"
                   Vital="yes">

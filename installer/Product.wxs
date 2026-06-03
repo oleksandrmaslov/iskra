@@ -26,10 +26,22 @@
         <FileSearch Id="SearchArmGdb15File" Name="arm-none-eabi-gdb.exe" />
       </DirectorySearch>
     </Property>
+    <Property Id="ARM_GDB_15_X86_PATH">
+      <DirectorySearch Id="SearchArmGdb15X86Dir"
+                       Path="[ProgramFilesFolder]Arm\GNU Toolchain mingw-w64-i686-arm-none-eabi\bin">
+        <FileSearch Id="SearchArmGdb15X86File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
     <Property Id="ARM_GDB_LEGACY_ARM_15_PATH">
       <DirectorySearch Id="SearchArmGdbLegacyArm15Dir"
                        Path="[ProgramFiles64Folder]Arm GNU Toolchain arm-none-eabi\15.2 rel1\bin">
         <FileSearch Id="SearchArmGdbLegacyArm15File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="ARM_GDB_LEGACY_ARM_15_X86_PATH">
+      <DirectorySearch Id="SearchArmGdbLegacyArm15X86Dir"
+                       Path="[ProgramFilesFolder]Arm GNU Toolchain arm-none-eabi\15.2 rel1\bin">
+        <FileSearch Id="SearchArmGdbLegacyArm15X86File" Name="arm-none-eabi-gdb.exe" />
       </DirectorySearch>
     </Property>
     <Property Id="ARM_GDB_LEGACY_ARM_10_PATH">
@@ -49,7 +61,7 @@
          The setup EXE uses Burn's real Windows 10+ check; the MSI uses this native x64 gate. -->
     <Launch Condition="VersionNT64 &gt;= 603"
             Message="Потрібна Windows 10/11 x64. Встановлення Iskra зупинено." />
-    <Launch Condition="Installed OR ARM_GDB_15_PATH OR ARM_GDB_LEGACY_ARM_15_PATH OR ARM_GDB_LEGACY_ARM_10_PATH OR ARM_GDB_LEGACY_GNU_10_PATH"
+    <Launch Condition="Installed OR ARM_GDB_15_PATH OR ARM_GDB_15_X86_PATH OR ARM_GDB_LEGACY_ARM_15_PATH OR ARM_GDB_LEGACY_ARM_15_X86_PATH OR ARM_GDB_LEGACY_ARM_10_PATH OR ARM_GDB_LEGACY_GNU_10_PATH"
             Message="Arm GNU Toolchain (arm-none-eabi-gdb.exe) не знайдено. Запустіть Iskra setup EXE або встановіть Arm GNU Toolchain перед MSI." />
 
     <!-- Default Wix UI: progress + EULA-less minimal install -->

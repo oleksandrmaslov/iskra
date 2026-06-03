@@ -442,6 +442,7 @@ Open Sprint 5 items are deployment-only, not code:
 | 2.6 | Per-product flasher overrides — optional `frequency_hz` / `power_mode` / `connect_reset` / `timeout_s` in catalog `target` block; override global Settings at flash time |
 | ~~5~~ | ✅ Done in code (JSONL + GitHub App + LogShipper + WPF UX + iskra-logs workflow). Owner-actions outstanding: register App, install on iskra-logs, distribute .pem, drop workflow into iskra-logs |
 | ~~6~~ | ✅ Done in code (catalog allowlist, anti-rollback, revocation, security tests). Owner-actions outstanding: prod key rotation + GitHub repo settings |
+| 6.5 | Cross-station production batch lock — current `E_BATCH_LOCKED` is local SQLite only. Production needs a shared lock source (likely `iskra-logs`/cloud metadata or a small central API) so if station A starts batch `B` with product/version `X`, station B immediately knows batch `B` is locked and refuses any different product/version before flashing. Must remain offline-safe: when the shared lock source is unreachable, choose an explicit policy (`fail closed` for production, or supervisor override for lab recovery). |
 | 7 | Auto-pick product by board ID — needs firmware cooperation (write a board-ID byte to a known flash offset OR use chip UID + a per-product mapping table). Reads via `monitor read_mem`; matches against catalog before flashing |
 
 ### Polish backlog (fold in opportunistically)
@@ -527,6 +528,10 @@ Open Sprint 5 items are deployment-only, not code:
 - **Logging:** SQLite per station; CSV export per batch.
 - **Production safety:** batches lock the firmware version. The app NEVER
   auto-updates firmware silently during a batch.
+- **Cross-station batch safety:** current batch locking is local to one
+  station's SQLite DB. Before full production, add a shared batch-lock check
+  so all stations know when a production batch ID is already locked to a
+  product/version and refuse conflicting attempts.
 - **Hardware-in-the-loop testing** is available — use it from day one of
   Sprint 1 implementation. Don't build to a mock.
 
