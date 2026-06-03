@@ -57,4 +57,12 @@ public static class GitHubAppConfig
     /// </summary>
     public const string LogsRepoOwner = "oleksandrmaslov";
     public const string LogsRepoName  = "iskra-logs";
+
+    /// <summary>
+    /// Public app release repository used by the WPF Settings tab to check
+    /// whether a newer Iskra installer is available. The app only opens the
+    /// release page; it does not self-install while running.
+    /// </summary>
+    public const string AppUpdatesRepoOwner = "oleksandrmaslov";
+    public const string AppUpdatesRepoName  = "iskra";
 }

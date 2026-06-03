@@ -145,6 +145,7 @@ dotnet publish src/Iskra.Wpf `
     --self-contained true `
     -p:PublishSingleFile=true `
     -p:IncludeAllContentForSelfExtract=true `
+    -p:Version=$Version `
     -o $publishDir | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish WPF failed (exit $LASTEXITCODE)" }
 
@@ -160,6 +161,7 @@ dotnet publish src/Iskra.Cli `
     --self-contained true `
     -p:PublishSingleFile=true `
     -p:IncludeAllContentForSelfExtract=true `
+    -p:Version=$Version `
     -o $cliPublishDir | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish CLI failed (exit $LASTEXITCODE)" }
 

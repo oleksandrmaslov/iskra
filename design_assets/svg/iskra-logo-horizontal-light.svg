@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2200 720" role="img" aria-label="Iskra logo">
+  <title>Iskra horizontal logo</title>
+  <defs><clipPath id="clip-hex"><path d="M 453.12 108.01 Q 512.00 74.00 570.88 108.01 L 801.12 240.99 Q 860.00 275.00 860.00 343.00 L 860.00 681.00 Q 860.00 749.00 801.12 783.01 L 570.88 915.99 Q 512.00 950.00 453.12 915.99 L 222.88 783.01 Q 164.00 749.00 164.00 681.00 L 164.00 343.00 Q 164.00 275.00 222.88 240.99 Z"/></clipPath></defs>
+  <rect width="2200" height="720" fill="#FFFFFF"/>
+  <g id="mark" transform="translate(115 80) scale(0.54)">
+    <g id="split-hex" clip-path="url(#clip-hex)">
+      <rect id="hex-left-blue" x="0" y="0" width="512" height="1024" fill="#007FFF"/>
+      <rect id="hex-right-yellow" x="512" y="0" width="512" height="1024" fill="#FFED00"/>
+    </g>
+    <path id="spark-negative-space" d="M 512 224 C 546 363 630 442 792 512 C 630 582 546 661 512 800 C 478 661 394 582 232 512 C 394 442 478 363 512 224 Z" fill="#FFFFFF"/>
+  </g>
+  <g id="wordmark">
+    <text id="brand-name" x="780" y="333" font-family="Inter Display, Lato, Inter, Segoe UI, Arial, sans-serif" font-size="186" font-weight="900" letter-spacing="24" fill="#05070A">ISKRA</text>
+    
+    <text id="tagline" x="790" y="453" font-family="Inter Display, Lato, Inter, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800" letter-spacing="15" fill="#007FFF">SAFE FLASHING</text>
+    <text id="tagline2" x="790" y="535" font-family="Inter Display, Lato, Inter, Segoe UI, Arial, sans-serif" font-size="41" letter-spacing="3" fill="#495466">for real devices</text>
+  </g>
+</svg>

@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -18,6 +20,7 @@ public partial class MainWindow : Window
     private string? _catalogDir;
     private string? _gdbExe;
     private string? _port;
+    private string? _lastAppUpdateUrl;
 
     public MainWindow()
     {
@@ -49,6 +52,7 @@ public partial class MainWindow : Window
         RefreshHistory();
         RefreshAuthStatus();
         RefreshCatalogCacheStatus();
+        RefreshAppUpdateStatus();
         RefreshCloudSyncStatus();
 
         // Sprint 3.5: kick off a non-blocking background fetch of the remote
@@ -637,6 +641,7 @@ public partial class MainWindow : Window
         SettingsLogShipInterval.Text         = _settings.LogShipIntervalMinutes.ToString(CultureInfo.InvariantCulture);
         SettingsLogShipperKey.Text           = _settings.LogShipperPrivateKeyPath;
         SettingsLogsSourceLocked.Text        = $"{GitHubAppConfig.LogsRepoOwner}/{GitHubAppConfig.LogsRepoName} (read-only)";
+        AppUpdateSourceLocked.Text           = $"{GitHubAppConfig.AppUpdatesRepoOwner}/{GitHubAppConfig.AppUpdatesRepoName}";
     }
 
     private void SelectHotkeyComboItem(FlashHotkey hk)
@@ -1150,6 +1155,111 @@ public partial class MainWindow : Window
         var api = new GitHubReleaseAssetClient(http);
         var cache = new FirmwareCache(api, provider.GetFreshAccessTokenAsync);
         return await cache.GetOrDownloadAsync(release.ElfSource, release.ElfSha256);
+    }
+
+    // ============================================================
+    // App update check
+    // ============================================================
+
+    private static string CurrentAppVersion()
+    {
+        var asm = Assembly.GetEntryAssembly() ?? typeof(MainWindow).Assembly;
+        var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (string.IsNullOrWhiteSpace(info))
+            info = asm.GetName().Version?.ToString();
+        if (string.IsNullOrWhiteSpace(info))
+            return "0.0.0";
+
+        var plus = info.IndexOf('+');
+        return (plus >= 0 ? info[..plus] : info).Trim();
+    }
+
+    private void RefreshAppUpdateStatus()
+    {
+        _lastAppUpdateUrl = null;
+        AppUpdateCurrentVersion.Text = CurrentAppVersion();
+        AppUpdateSourceLocked.Text = $"{GitHubAppConfig.AppUpdatesRepoOwner}/{GitHubAppConfig.AppUpdatesRepoName}";
+        AppUpdateOpenButton.IsEnabled = false;
+        AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
+        AppUpdateStatusLabel.Text = "Натисніть «Перевірити», щоб знайти новий інсталятор Iskra.";
+    }
+
+    private async void AppUpdateCheck_Click(object sender, RoutedEventArgs e)
+    {
+        AppUpdateCheckButton.IsEnabled = false;
+        AppUpdateOpenButton.IsEnabled = false;
+        _lastAppUpdateUrl = null;
+        AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
+        AppUpdateStatusLabel.Text = "Перевірка релізів GitHub...";
+
+        try
+        {
+            using var http = new HttpClient();
+            var client = new AppUpdateClient(
+                http,
+                GitHubAppConfig.AppUpdatesRepoOwner,
+                GitHubAppConfig.AppUpdatesRepoName);
+            var result = await client.CheckLatestAsync(CurrentAppVersion());
+
+            _lastAppUpdateUrl = result.ReleaseUrl ?? result.SetupDownloadUrl ?? result.MsiDownloadUrl;
+            AppUpdateOpenButton.IsEnabled = !string.IsNullOrWhiteSpace(_lastAppUpdateUrl);
+
+            switch (result.Status)
+            {
+                case AppUpdateStatus.UpdateAvailable:
+                    AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
+                    AppUpdateStatusLabel.Text =
+                        $"Доступна версія {result.LatestVersion} ({result.TagName}). " +
+                        (result.SetupDownloadUrl is not null
+                            ? "Відкрийте реліз і запустіть setup EXE після завершення роботи."
+                            : "Відкрийте реліз і завантажте інсталятор.");
+                    break;
+                case AppUpdateStatus.UpToDate:
+                    AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
+                    AppUpdateStatusLabel.Text = $"✓ Поточна версія актуальна: {result.CurrentVersion}.";
+                    break;
+                case AppUpdateStatus.NoRelease:
+                    AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
+                    AppUpdateStatusLabel.Text = "У репозиторії Iskra ще немає релізів.";
+                    break;
+                case AppUpdateStatus.NetworkError:
+                    AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                    AppUpdateStatusLabel.Text = $"✗ Мережна помилка: {result.Message}";
+                    break;
+                case AppUpdateStatus.ParseError:
+                    AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                    AppUpdateStatusLabel.Text = $"✗ Реліз неможливо прочитати: {result.Message}";
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+            AppUpdateStatusLabel.Text = $"✗ {ex.Message}";
+        }
+        finally
+        {
+            AppUpdateCheckButton.IsEnabled = true;
+        }
+    }
+
+    private void AppUpdateOpen_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_lastAppUpdateUrl))
+            return;
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(_lastAppUpdateUrl)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+            AppUpdateStatusLabel.Text = $"✗ Не вдалося відкрити браузер: {ex.Message}";
+        }
     }
 
     // ============================================================
