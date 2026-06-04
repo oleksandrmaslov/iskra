@@ -86,6 +86,19 @@ function Find-BmpPorts {
     $usbRoot = "HKLM:\SYSTEM\CurrentControlSet\Enum\USB"
     if (-not (Test-Path $usbRoot)) { return $ports }
 
+    $activeComPorts = @{}
+    $serialComm = "HKLM:\HARDWARE\DEVICEMAP\SERIALCOMM"
+    if (Test-Path $serialComm) {
+        $serialProps = Get-ItemProperty -LiteralPath $serialComm -ErrorAction SilentlyContinue
+        if ($null -ne $serialProps) {
+            foreach ($prop in $serialProps.PSObject.Properties) {
+                if ($prop.Value -is [string] -and $prop.Value -like "COM*") {
+                    $activeComPorts[$prop.Value.ToUpperInvariant()] = $true
+                }
+            }
+        }
+    }
+
     Get-ChildItem $usbRoot -ErrorAction SilentlyContinue |
         Where-Object { $_.PSChildName -like "VID_1D50&PID_6018*" } |
         ForEach-Object {
@@ -97,6 +110,9 @@ function Find-BmpPorts {
                     $port = (Get-ItemProperty -LiteralPath $params -ErrorAction SilentlyContinue).PortName
                 }
                 if ($port) {
+                    if ($activeComPorts.Count -gt 0 -and -not $activeComPorts.ContainsKey($port.ToUpperInvariant())) {
+                        return
+                    }
                     $ports += [pscustomobject]@{
                         PortName = $port
                         FriendlyName = $friendly

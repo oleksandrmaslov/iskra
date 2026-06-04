@@ -55,6 +55,21 @@ public static class ProbeDiscovery
         return ProbeInterface.Unknown;
     }
 
+    public static ProbeInterface ClassifyInterface(string? friendlyName, string? deviceInstanceId)
+    {
+        var byName = ClassifyInterface(friendlyName);
+        if (byName != ProbeInterface.Unknown) return byName;
+
+        // Generic usbser.sys names on Windows 10/11 often say only
+        // "USB Serial Device (COMx)". Official BMP exposes GDB on MI_00 and
+        // UART on MI_02, so use the interface number when the friendly name is
+        // not descriptive.
+        if (string.IsNullOrEmpty(deviceInstanceId)) return ProbeInterface.Unknown;
+        if (deviceInstanceId.Contains("&MI_00", StringComparison.OrdinalIgnoreCase)) return ProbeInterface.Gdb;
+        if (deviceInstanceId.Contains("&MI_02", StringComparison.OrdinalIgnoreCase)) return ProbeInterface.Uart;
+        return ProbeInterface.Unknown;
+    }
+
     public static int ParseComNumber(string portName)
     {
         // "COM30" → 30; non-numeric tail → int.MaxValue (sorts last)
@@ -68,6 +83,7 @@ public static class ProbeDiscovery
     private static List<ProbeInfo> EnumerateWindows()
     {
         var results = new List<ProbeInfo>();
+        var activeComPorts = ActiveWindowsComPorts();
         using var enumKey = Registry.LocalMachine.OpenSubKey(UsbEnumRoot);
         if (enumKey is null) return results;
 
@@ -89,14 +105,41 @@ public static class ProbeDiscovery
                 var port = devParams?.GetValue("PortName") as string;
 
                 if (port is null) continue;
+                if (activeComPorts.Count > 0 && !activeComPorts.Contains(port))
+                    continue;
+
+                var deviceInstanceId = $"{vidPidName}/{instanceName}";
 
                 results.Add(new ProbeInfo(
                     PortName: port,
                     FriendlyName: friendly,
-                    DeviceInstanceId: $"{vidPidName}/{instanceName}",
-                    Interface: ClassifyInterface(friendly)));
+                    DeviceInstanceId: deviceInstanceId,
+                    Interface: ClassifyInterface(friendly, deviceInstanceId)));
             }
         }
         return results;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static HashSet<string> ActiveWindowsComPorts()
+    {
+        var ports = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DEVICEMAP\SERIALCOMM");
+            if (key is null) return ports;
+
+            foreach (var name in key.GetValueNames())
+            {
+                if (key.GetValue(name) is string port && port.StartsWith("COM", StringComparison.OrdinalIgnoreCase))
+                    ports.Add(port);
+            }
+        }
+        catch
+        {
+            // If the live COM map cannot be read, fall back to the USB enum data
+            // instead of hiding a real probe.
+        }
+        return ports;
     }
 }

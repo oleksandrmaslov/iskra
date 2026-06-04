@@ -17,6 +17,19 @@ public class ProbeDiscoveryTests
     }
 
     [Theory]
+    [InlineData("Устройство с последовательным интерфейсом USB (COM30)", "VID_1D50&PID_6018&MI_00/6&abc&0&0000", ProbeInterface.Gdb)]
+    [InlineData("USB Serial Device (COM31)", "VID_1D50&PID_6018&MI_02/6&abc&0&0002", ProbeInterface.Uart)]
+    [InlineData("Black Magic GDB Server (COM30)", "VID_1D50&PID_6018&MI_02/6&abc&0&0002", ProbeInterface.Gdb)]
+    [InlineData("USB Serial Device (COM32)", "VID_1D50&PID_6018&MI_04/6&abc&0&0004", ProbeInterface.Unknown)]
+    public void ClassifyInterface_uses_usb_interface_number_when_name_is_generic(
+        string? friendly,
+        string? deviceInstanceId,
+        ProbeInterface expected)
+    {
+        Assert.Equal(expected, ProbeDiscovery.ClassifyInterface(friendly, deviceInstanceId));
+    }
+
+    [Theory]
     [InlineData("COM30", 30)]
     [InlineData("COM3",  3)]
     [InlineData("COM",   int.MaxValue)]
