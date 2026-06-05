@@ -17,7 +17,9 @@ public sealed record FlashOptions(
     string FirmwareVersion,
     string FirmwareSha256,
     string? GdbPath,
-    string? DbPath)
+    string? DbPath,
+    FirmwareKind FirmwareKind = FirmwareKind.Elf,
+    int TimeoutSeconds = 15)
 {
     public static FlashOptions? Parse(string[] args)
     {
@@ -27,7 +29,9 @@ public sealed record FlashOptions(
         string station = Environment.MachineName;
         string fwVersion = "unknown";
         string fwSha = "unknown";
+        FirmwareKind firmwareKind = FirmwareKind.Elf;
         int flashKb = 0;
+        int timeoutSeconds = 15;
         PowerMode power = PowerMode.External;
         int freq = 1_000_000;
         bool connectReset = false;
@@ -58,6 +62,12 @@ public sealed record FlashOptions(
                     break;
                 case "--firmware-version": fwVersion = Next(args, ref i) ?? fwVersion; break;
                 case "--firmware-sha256":  fwSha = Next(args, ref i) ?? fwSha; break;
+                case "--firmware-kind":
+                    if (!TryParseFirmwareKind(Next(args, ref i), out firmwareKind)) return null;
+                    break;
+                case "--timeout":
+                    if (!int.TryParse(Next(args, ref i), out timeoutSeconds) || timeoutSeconds <= 0) return null;
+                    break;
                 case "--gdb-path":      gdbPath = Next(args, ref i); break;
                 case "--db-path":       dbPath = Next(args, ref i); break;
                 default:                return null;
@@ -72,12 +82,30 @@ public sealed record FlashOptions(
             elf, port, power, freq, connectReset,
             product, op, batch, station,
             target, flashKb, fwVersion, fwSha,
-            gdbPath, dbPath);
+            gdbPath, dbPath, firmwareKind, timeoutSeconds);
     }
 
     private static string? Next(string[] args, ref int i)
     {
         if (i + 1 >= args.Length) return null;
         return args[++i];
+    }
+
+    private static bool TryParseFirmwareKind(string? value, out FirmwareKind kind)
+    {
+        kind = FirmwareKind.Elf;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "elf" => Set(out kind, FirmwareKind.Elf),
+            "hex" => Set(out kind, FirmwareKind.Hex),
+            _     => false,
+        };
+    }
+
+    private static bool Set(out FirmwareKind target, FirmwareKind value)
+    {
+        target = value;
+        return true;
     }
 }

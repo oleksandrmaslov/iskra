@@ -52,7 +52,7 @@ Open Sprint 1 item is bench-time only, not code:
   This is the production-safety acceptance test. Run when convenient; failures
   will surface parser gaps the fixture tests can't predict.
 
-### Sprint 2 — Catalog + integrity + signature (chunks 1–4 done, chunk 5 deferred)
+### Sprint 2 — Catalog + integrity + signature ✅ DONE
 
 1. ✅ **Lock-in + catalog data model** — `Catalog` / `Product` /
    `FirmwareRelease` / `TargetDescriptor` records; `CatalogJson` parser with
@@ -68,11 +68,10 @@ Open Sprint 1 item is bench-time only, not code:
    (`catalog.json` + `catalog.json.sig`, base64); dev public key embedded
    in `CatalogTrust.EmbeddedPublicKeyBase64`. CLI flag
    `--require-signed-catalog` rejects unsigned / bad-signature catalogs.
-5. ⏸️ **Sideload-from-folder** (deferred — minor convenience, easy to add
-   later) — `--sideload-dir <path>` would scan a directory for
-   `<product-id>_v<X.Y.Z>_<part-number>.elf` + `target.json` sidecars and
-   synthesise an in-memory catalog. Use case: ad-hoc test ELFs before a
-   release is added to the signed catalog.
+5. ✅ **Sideload-from-folder** — `--sideload-dir <path>` scans a directory for
+   `<product-id>_v<X.Y.Z>_<part-number>.<elf|hex>` + `target.json` sidecars and
+   synthesises an in-memory unsigned catalog. WPF also accepts a sideload
+   directory in the catalog path setting when signed-catalog enforcement is off.
 
 ### Dev catalog signing workflow
 
@@ -364,7 +363,7 @@ untouched.
 
 1. ✅ **`synced_at_utc` column + GetUnsynced/MarkSynced** — additive
    migration in [`SqliteLogStore`](src/Iskra.Core/SqliteLogStore.cs);
-   partial index on rows still pending; idempotent re-marking; legacy
+   partial index on unsynced rows; idempotent re-marking; legacy
    Sprint-4-era DBs auto-migrate.
 2. ✅ **JSONL wire format** — [`FlashAttemptJsonl`](src/Iskra.Core/FlashAttemptJsonl.cs).
    schema_version 1, snake_case fields matching the SQLite columns, nulls
@@ -438,8 +437,8 @@ Open Sprint 5 items are deployment-only, not code:
 
 | Sprint | Deliverable |
 |---|---|
-| 2.5 | Sideload-from-folder (`--sideload-dir`) — synthesises a catalog from `<id>_v<ver>_<part>.elf` + sidecar files |
-| 2.6 | Per-product flasher overrides — optional `frequency_hz` / `power_mode` / `connect_reset` / `timeout_s` in catalog `target` block; override global Settings at flash time |
+| ~~2.5~~ | ✅ Done in code: sideload-from-folder (`--sideload-dir`) synthesises a catalog from `<id>_v<ver>_<part>.<elf|hex>` + sidecar files; WPF accepts a sideload directory in the catalog path setting |
+| ~~2.6~~ | ✅ Done in code: per-product flasher overrides via optional `frequency_hz` / `power_mode` / `connect_reset` / `timeout_s` in catalog `target` block; override global Settings at flash time |
 | ~~5~~ | ✅ Done in code (JSONL + GitHub App + LogShipper + WPF UX + iskra-logs workflow). Owner-actions outstanding: register App, install on iskra-logs, distribute .pem, drop workflow into iskra-logs |
 | ~~6~~ | ✅ Done in code (catalog allowlist, anti-rollback, revocation, security tests). Owner-actions outstanding: prod key rotation + GitHub repo settings |
 | 6.5 | Cross-station production batch lock — current `E_BATCH_LOCKED` is local SQLite only. Production needs a shared lock source (likely `iskra-logs`/cloud metadata or a small central API) so if station A starts batch `B` with product/version `X`, station B immediately knows batch `B` is locked and refuses any different product/version before flashing. Must remain offline-safe: when the shared lock source is unreachable, choose an explicit policy (`fail closed` for production, or supervisor override for lab recovery). |
@@ -455,8 +454,9 @@ Open Sprint 5 items are deployment-only, not code:
   invocation. Scan phase has its own timeout (min(8s, total) ceiling).
   Duration reported to logs is scan+flash wall-clock. Bench acceptance
   (50-PASS row) still needs to be re-run since the gdb sequence changed.
-- **Probe serial capture** — read USB serial from registry to populate
-  `probe_serial` column (currently always NULL).
+- ✅ **Probe serial capture** — reads the BMP USB serial / stable parent-id
+  from the registry, shows it in `--list-probes` / the WPF status strip, and
+  populates the `probe_serial` column.
 - ✅ **Auto-retry on `E_PROBE_BUSY`** — `FlashStateMachine.RunAsync` retries
   the scan phase once (configurable via `probeBusyRetries`, default 1)
   with a 500 ms backoff when scan classification yields `E_PROBE_BUSY`.
@@ -477,13 +477,10 @@ Open Sprint 5 items are deployment-only, not code:
   scanner emits Enter as line terminator so "scan batch → flash" is one
   swipe). The FLASH button has a tooltip and a smaller subtitle line
   reflecting the configured key.
-- **`.hex` firmware support** — alongside ELF. Two viable paths: (a) let gdb
-  load Intel HEX directly via its BFD support (works for some targets but
-  flaky for bare-metal where ELF entry/section info is needed), or (b)
-  convert hex → elf at flash time via `arm-none-eabi-objcopy -I ihex -O
-  elf32-little`. Catalog schema would gain a `firmware_kind: "elf" | "hex"`
-  field per release; SHA-256 is computed over the on-disk firmware bytes
-  regardless of kind.
+- ✅ **`.hex` firmware support** — catalog schema has
+  `firmware_kind: "elf" | "hex"` per release. ELF stays the default. HEX is
+  preflighted as Intel HEX (including checksum + EOF), SHA-256 is computed over
+  the on-disk firmware bytes, and gdb receives the selected file directly.
 
 ---
 
@@ -657,8 +654,8 @@ The app flashes firmware released from any product repo (`ci-clop-firmware`
 is the first) via GitHub Releases. Release asset naming convention:
 
 ```
-<product-id>_v<X.Y.Z>_<part-number>.elf
-<product-id>_v<X.Y.Z>_<part-number>.elf.sha256
+<product-id>_v<X.Y.Z>_<part-number>.elf    # or .hex when firmware_kind = "hex"
+<product-id>_v<X.Y.Z>_<part-number>.<elf|hex>.sha256
 target.json                              # one per release
 ```
 
@@ -676,7 +673,12 @@ catalog generator and the app can verify firmware ↔ hardware pairing:
   "part_number":  "PY32F002Ax5",
   "bmp_match":    "PY32F002A",
   "flash_kb":     32,
-  "elf_sha256":   "<hex>"
+  "elf_sha256":   "<hex>",
+  "firmware_kind": "elf",
+  "frequency_hz": 1000000,
+  "power_mode":   "external",
+  "connect_reset": false,
+  "timeout_s":    15
 }
 ```
 

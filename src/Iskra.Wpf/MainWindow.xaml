@@ -228,6 +228,10 @@
                                                                     <Run Text="v" />
                                                                     <Run Text="{Binding Version}" FontWeight="Bold" />
                                                                 </TextBlock>
+                                                                <TextBlock FontSize="12" Foreground="#444">
+                                                                    <Run Text="Тип: " />
+                                                                    <Run Text="{Binding FirmwareKind}" FontWeight="Bold" />
+                                                                </TextBlock>
                                                                 <TextBlock Text="{Binding ElfFilename}" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="#444" />
                                                                 <TextBlock FontFamily="Cascadia Mono, Consolas" FontSize="11" Foreground="#666">
                                                                     <Run Text="SHA-256: " />
@@ -269,7 +273,7 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Шлях до catalog.json:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="catalog.json / sideload:" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="0" Grid.Column="1" x:Name="SettingsCatalogPath" Margin="0,4,8,4" />
                             <Button    Grid.Row="0" Grid.Column="2" Content="..." Width="40" Margin="0,4,0,4" Click="PickCatalogPath_Click" />
 

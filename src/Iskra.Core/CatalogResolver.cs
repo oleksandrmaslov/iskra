@@ -18,26 +18,44 @@ public sealed record ResolveResult(
 }
 
 /// <summary>
-/// Resolves catalog-derived CLI flags. If <c>--catalog &lt;path&gt;</c> is present,
-/// reads the catalog, finds the product (by <c>--product</c>) and a release
+/// Resolves catalog-derived CLI flags. If <c>--catalog &lt;path&gt;</c> or
+/// <c>--sideload-dir &lt;path&gt;</c> is present, reads a catalog, finds the product
+/// (by <c>--product</c>) and a release
 /// (by <c>--firmware-version</c> or the product's default), then fills in any
 /// missing flags — <c>--target</c>, <c>--flash-kb</c>, <c>--firmware-version</c>,
-/// <c>--firmware-sha256</c>, <c>--elf</c> — from the catalog entry. Explicit
-/// CLI flags always win (dev override).
+/// <c>--firmware-sha256</c>, <c>--firmware-kind</c>, <c>--elf</c>, and optional
+/// target overrides — from the catalog entry. Explicit CLI flags always win
+/// (dev override).
 /// </summary>
 public static class CatalogResolver
 {
     public static ResolveResult Resolve(string[] args)
     {
         var catalogPath = FindValue(args, "--catalog");
-        if (catalogPath is null) return ResolveResult.Passthrough(args);
+        var sideloadDir = FindValue(args, "--sideload-dir");
+        if (catalogPath is null && sideloadDir is null) return ResolveResult.Passthrough(args);
+        if (catalogPath is not null && sideloadDir is not null)
+            return ResolveResult.Failure("use either --catalog or --sideload-dir, not both");
 
         Catalog catalog;
-        try { catalog = CatalogJson.ParseFile(catalogPath); }
-        catch (CatalogParseException ex) { return ResolveResult.Failure(ex.Message); }
+        string catalogDir;
+        string[] resolveArgs;
+        if (catalogPath is not null)
+        {
+            try { catalog = CatalogJson.ParseFile(catalogPath); }
+            catch (CatalogParseException ex) { return ResolveResult.Failure(ex.Message); }
+            catalogDir = Path.GetDirectoryName(Path.GetFullPath(catalogPath)) ?? "";
+            resolveArgs = args;
+        }
+        else
+        {
+            try { catalog = SideloadCatalogBuilder.BuildFromDirectory(sideloadDir!); }
+            catch (SideloadCatalogException ex) { return ResolveResult.Failure(ex.Message); }
+            catalogDir = Path.GetFullPath(sideloadDir!);
+            resolveArgs = StripFlag(args, "--sideload-dir").ToArray();
+        }
 
-        var catalogDir = Path.GetDirectoryName(Path.GetFullPath(catalogPath)) ?? "";
-        return ResolveWithCatalog(args, catalog, catalogDir);
+        return ResolveWithCatalog(resolveArgs, catalog, catalogDir);
     }
 
     /// <summary>
@@ -47,7 +65,7 @@ public static class CatalogResolver
     {
         var productId = FindValue(args, "--product");
         if (productId is null)
-            return ResolveResult.Failure("--catalog requires --product <id>");
+            return ResolveResult.Failure("catalog resolution requires --product <id>");
 
         var product = catalog.FindProduct(productId);
         if (product is null)
@@ -86,6 +104,15 @@ public static class CatalogResolver
         AddIfMissing(resolved, "--flash-kb",         product.Target.FlashKb.ToString());
         AddIfMissing(resolved, "--firmware-version", release.Version);
         AddIfMissing(resolved, "--firmware-sha256",  release.ElfSha256);
+        AddIfMissing(resolved, "--firmware-kind",    release.FirmwareKind.ToString().ToLowerInvariant());
+        if (product.Target.FrequencyHz is { } frequencyHz)
+            AddIfMissing(resolved, "--freq", frequencyHz.ToString());
+        if (product.Target.PowerMode is { } powerMode)
+            AddIfMissing(resolved, "--power", powerMode.ToString().ToLowerInvariant());
+        if (product.Target.ConnectReset == true && !resolved.Contains("--connect-reset"))
+            resolved.Add("--connect-reset");
+        if (product.Target.TimeoutSeconds is { } timeoutSeconds)
+            AddIfMissing(resolved, "--timeout", timeoutSeconds.ToString());
 
         var explicitElf = FindValue(args, "--elf") is not null;
         if (!explicitElf && !release.IsRemote)

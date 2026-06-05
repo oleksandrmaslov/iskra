@@ -24,7 +24,7 @@ public static class CatalogJson
         WriteIndented = true,
         AllowTrailingCommas = false,
         ReadCommentHandling = JsonCommentHandling.Skip,
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
     };
 
     public static Catalog Parse(string json)
@@ -100,6 +100,10 @@ public static class CatalogJson
             throw new CatalogParseException($"{p.ProductId}: target.part_number missing");
         if (p.Target.FlashKb <= 0)
             throw new CatalogParseException($"{p.ProductId}: target.flash_kb must be > 0");
+        if (p.Target.FrequencyHz is <= 0)
+            throw new CatalogParseException($"{p.ProductId}: target.frequency_hz must be > 0");
+        if (p.Target.TimeoutSeconds is <= 0)
+            throw new CatalogParseException($"{p.ProductId}: target.timeout_s must be > 0");
 
         if (p.Releases is null || p.Releases.Count == 0)
             throw new CatalogParseException($"{p.ProductId}: no releases");
@@ -130,6 +134,9 @@ public static class CatalogJson
         if (r.ElfSha256.Length != 64 || !r.ElfSha256.All(IsHex))
             throw new CatalogParseException(
                 $"{productId} v{r.Version}: elf_sha256 must be 64 hex chars (got {r.ElfSha256.Length})");
+        if (!Enum.IsDefined(typeof(FirmwareKind), r.FirmwareKind))
+            throw new CatalogParseException(
+                $"{productId} v{r.Version}: firmware_kind invalid");
         if (r.ElfSource is not null) ValidateElfSource(productId, r.Version, r.ElfSource);
     }
 

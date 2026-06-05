@@ -39,6 +39,19 @@ public class ProbeDiscoveryTests
         Assert.Equal(expected, ProbeDiscovery.ParseComNumber(port));
     }
 
+    [Theory]
+    [InlineData("BMP123456", null, "BMP123456")]
+    [InlineData("6&2b8a123&0&0000", "6&2b8a123&0", "6&2b8a123&0")]
+    [InlineData("", "parent-prefix", "parent-prefix")]
+    [InlineData(null, null, null)]
+    public void StableSerialFromInstanceName_prefers_real_usb_serial_then_parent_prefix(
+        string? instanceName,
+        string? parentPrefix,
+        string? expected)
+    {
+        Assert.Equal(expected, ProbeDiscovery.StableSerialFromInstanceName(instanceName, parentPrefix));
+    }
+
     [Fact]
     public void FindAll_returns_empty_or_real_list_without_throwing()
     {

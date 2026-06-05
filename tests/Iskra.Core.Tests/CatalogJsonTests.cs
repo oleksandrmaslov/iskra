@@ -204,11 +204,98 @@ public class CatalogJsonTests
     }
 
     [Fact]
+    public void Parse_target_overrides_and_hex_release()
+    {
+        var json = """
+            {
+              "schema_version": 1,
+              "generated_at": "2026-05-26T12:00:00Z",
+              "products": [
+                {
+                  "product_id": "ci-clop",
+                  "display_name": "CI-CLOP",
+                  "target": {
+                    "bmp_match": "PY32Fxxx",
+                    "part_number": "PY32F002Ax5",
+                    "flash_kb": 32,
+                    "frequency_hz": 4000000,
+                    "power_mode": "probe",
+                    "connect_reset": true,
+                    "timeout_s": 28
+                  },
+                  "releases": [
+                    {
+                      "version": "1.0.0",
+                      "elf_filename": "ci-clop_v1.0.0_PY32F002Ax5.hex",
+                      "elf_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                      "elf_url": null,
+                      "released_at": "2026-05-20T12:00:00Z",
+                      "notes": null,
+                      "firmware_kind": "hex"
+                    }
+                  ],
+                  "default_release": "1.0.0"
+                }
+              ]
+            }
+            """;
+
+        var c = CatalogJson.Parse(json);
+        var target = c.Products[0].Target;
+        Assert.Equal(4_000_000, target.FrequencyHz);
+        Assert.Equal(PowerMode.Probe, target.PowerMode);
+        Assert.True(target.ConnectReset);
+        Assert.Equal(28, target.TimeoutSeconds);
+        Assert.Equal(FirmwareKind.Hex, c.Products[0].Releases[0].FirmwareKind);
+    }
+
+    [Fact]
     public void Release_without_elf_source_is_local()
     {
         var c = CatalogJson.Parse(ValidJson);
         Assert.Null(c.Products[0].Releases[0].ElfSource);
         Assert.False(c.Products[0].Releases[0].IsRemote);
+        Assert.Equal(FirmwareKind.Elf, c.Products[0].Releases[0].FirmwareKind);
+    }
+
+    [Theory]
+    [InlineData("\"frequency_hz\": 4000000", "\"frequency_hz\": 0", "frequency_hz")]
+    [InlineData("\"timeout_s\": 28", "\"timeout_s\": 0", "timeout_s")]
+    public void Invalid_target_overrides_are_rejected(string find, string replace, string expectedInMsg)
+    {
+        var json = """
+            {
+              "schema_version": 1,
+              "generated_at": "2026-05-26T12:00:00Z",
+              "products": [
+                {
+                  "product_id": "ci-clop",
+                  "display_name": "CI-CLOP",
+                  "target": {
+                    "bmp_match": "PY32Fxxx",
+                    "part_number": "PY32F002Ax5",
+                    "flash_kb": 32,
+                    "frequency_hz": 4000000,
+                    "timeout_s": 28
+                  },
+                  "releases": [
+                    {
+                      "version": "1.0.0",
+                      "elf_filename": "ci-clop_v1.0.0_PY32F002Ax5.elf",
+                      "elf_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                      "elf_url": null,
+                      "released_at": "2026-05-20T12:00:00Z",
+                      "notes": null
+                    }
+                  ],
+                  "default_release": "1.0.0"
+                }
+              ]
+            }
+            """;
+        var bad = json.Replace(find, replace);
+        var ex = Assert.Throws<CatalogParseException>(() => CatalogJson.Parse(bad));
+        Assert.Contains(expectedInMsg, ex.Message);
     }
 
     [Theory]

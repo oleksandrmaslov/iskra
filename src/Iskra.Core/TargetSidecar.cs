@@ -25,7 +25,12 @@ public sealed record TargetSidecar(
     string ElfSha256,
     string? DisplayName = null,
     DateTime? ReleasedAt = null,
-    string? Notes = null)
+    string? Notes = null,
+    FirmwareKind FirmwareKind = FirmwareKind.Elf,
+    int? FrequencyHz = null,
+    PowerMode? PowerMode = null,
+    bool? ConnectReset = null,
+    [property: JsonPropertyName("timeout_s")] int? TimeoutSeconds = null)
 {
     public static JsonSerializerOptions JsonOpts { get; } = new()
     {
@@ -35,6 +40,7 @@ public sealed record TargetSidecar(
         AllowTrailingCommas = false,
         ReadCommentHandling = JsonCommentHandling.Skip,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
     };
 
     public static TargetSidecar Parse(string json)
@@ -67,5 +73,9 @@ public sealed record TargetSidecar(
         if (s.FlashKb <= 0)                           throw new TargetSidecarException("flash_kb must be > 0");
         if (!FirmwareIntegrity.IsValidSha256Hex(s.ElfSha256))
             throw new TargetSidecarException("elf_sha256 must be 64 hex chars");
+        if (!Enum.IsDefined(typeof(FirmwareKind), s.FirmwareKind))
+            throw new TargetSidecarException("firmware_kind invalid");
+        if (s.FrequencyHz is <= 0)   throw new TargetSidecarException("frequency_hz must be > 0");
+        if (s.TimeoutSeconds is <= 0) throw new TargetSidecarException("timeout_s must be > 0");
     }
 }

@@ -79,7 +79,8 @@ if (resolution.Product is not null && resolution.Release is not null)
 {
     var p = resolution.Product;
     var r = resolution.Release;
-    Console.WriteLine($"Каталог: {p.ProductId} → v{r.Version} ({p.Target.BmpMatch}, {p.Target.FlashKb} KB)");
+    Console.WriteLine($"Каталог: {p.ProductId} → v{r.Version} "
+        + $"({p.Target.BmpMatch}, {p.Target.FlashKb} KB, {FirmwarePreflight.DisplayName(r.FirmwareKind)})");
 }
 
 // Remote release + no explicit --elf → download from GitHub release asset
@@ -125,6 +126,8 @@ if (resolution.Release?.IsRemote == true && !args.Contains("--elf"))
 bool dryRun = args.Contains("--dry-run");
 args = args.Where(a => a != "--dry-run").ToArray();
 
+ProbeInfo? selectedProbe = null;
+
 // Auto-detect --port if omitted and exactly one BMP GDB interface is attached.
 if (!args.Contains("--port"))
 {
@@ -136,6 +139,7 @@ if (!args.Contains("--port"))
             Console.Error.WriteLine("Підключіть програматор або вкажіть --port COMxx вручну.");
             return 3;
         case 1:
+            selectedProbe = probes[0];
             Console.WriteLine($"Виявлено програматор: {probes[0].PortName}"
                 + (probes[0].FriendlyName is not null ? $" ({probes[0].FriendlyName})" : ""));
             args = args.Concat(new[] { "--port", probes[0].PortName }).ToArray();
@@ -154,17 +158,21 @@ if (opts is null)
     PrintUsage();
     return 2;
 }
+selectedProbe ??= ProbeDiscovery.FindGdbPorts()
+    .FirstOrDefault(p => string.Equals(p.PortName, opts.Port, StringComparison.OrdinalIgnoreCase));
+var probeSerial = selectedProbe?.SerialNumber;
 
-switch (ElfPreflight.Check(opts.ElfPath))
+var firmwareKindName = FirmwarePreflight.DisplayName(opts.FirmwareKind);
+switch (FirmwarePreflight.Check(opts.ElfPath, opts.FirmwareKind))
 {
-    case ElfPreflight.CheckResult.NotFound:
-        Console.Error.WriteLine($"Помилка: ELF-файл не знайдено: {opts.ElfPath}");
+    case FirmwarePreflight.CheckResult.NotFound:
+        Console.Error.WriteLine($"Помилка: файл прошивки ({firmwareKindName}) не знайдено: {opts.ElfPath}");
         return 4;
-    case ElfPreflight.CheckResult.NotAnElf:
-        Console.Error.WriteLine($"Помилка: файл не є ELF (немає 0x7F'ELF' magic): {opts.ElfPath}");
+    case FirmwarePreflight.CheckResult.InvalidFormat:
+        Console.Error.WriteLine($"Помилка: файл не є коректним {firmwareKindName}: {opts.ElfPath}");
         return 4;
-    case ElfPreflight.CheckResult.IoError:
-        Console.Error.WriteLine($"Помилка: не вдалося прочитати ELF-файл: {opts.ElfPath}");
+    case FirmwarePreflight.CheckResult.IoError:
+        Console.Error.WriteLine($"Помилка: не вдалося прочитати файл прошивки: {opts.ElfPath}");
         return 4;
 }
 
@@ -190,7 +198,7 @@ if (dryRun)
     Console.WriteLine("=== DRY RUN — gdb не буде запущено ===");
     if (hashWasRequired)
     {
-        Console.WriteLine($"ELF SHA-256:     {computedSha}");
+        Console.WriteLine($"{firmwareKindName} SHA-256: {computedSha}");
         Console.WriteLine($"Каталог SHA-256: {opts.FirmwareSha256.ToLowerInvariant()}");
         Console.WriteLine(hashVerified
             ? "Перевірка цілісності: ✓ співпадає"
@@ -241,7 +249,7 @@ if (hashWasRequired && !hashVerified)
             TargetDetected:  null,
             TargetFlashKb:   opts.TargetFlashKb,
             ComPort:         opts.Port,
-            ProbeSerial:     null,
+            ProbeSerial:     probeSerial,
             Power:           opts.Power,
             ConnectRst:      opts.ConnectUnderReset,
             BmpFrequencyHz:  opts.BmpFrequencyHz,
@@ -269,7 +277,7 @@ var gdb = new GdbProcess(gdbExe);
 var outcome = await FlashStateMachine.RunAsync(
     gdb,
     opts,
-    timeout: TimeSpan.FromSeconds(15),
+    timeout: TimeSpan.FromSeconds(opts.TimeoutSeconds),
     onLine: line =>
     {
         if (line.Stream == GdbStream.Stderr || !string.IsNullOrWhiteSpace(line.Text))
@@ -309,7 +317,7 @@ try
         TargetDetected:  outcome.DetectedTarget,
         TargetFlashKb:   opts.TargetFlashKb,
         ComPort:         opts.Port,
-        ProbeSerial:     null,
+        ProbeSerial:     probeSerial,
         Power:           opts.Power,
         ConnectRst:      opts.ConnectUnderReset,
         BmpFrequencyHz:  opts.BmpFrequencyHz,
@@ -687,7 +695,8 @@ static int ListProbes()
             ProbeInterface.Uart    => "UART",
             _                      => "??? ",
         };
-        Console.WriteLine($"  [{role}]  {p.PortName,-8}  {p.FriendlyName}");
+        var serial = string.IsNullOrWhiteSpace(p.SerialNumber) ? "" : $"  serial={p.SerialNumber}";
+        Console.WriteLine($"  [{role}]  {p.PortName,-8}  {p.FriendlyName}{serial}");
     }
     Console.WriteLine();
     var gdb = ProbeDiscovery.FindGdbPorts();
@@ -906,6 +915,11 @@ static void PrintUsage()
                             [--port <COMxx>]              (авто якщо один BMP)
                             [...]
 
+        Usage (sideload для лабораторних ELF/HEX без підписаного каталогу):
+          Iskra.Cli --sideload-dir <folder> --product <id>
+                            --operator <name> --batch <id>
+                            [--firmware-version <ver>] [--dry-run]
+
         Usage (повний ручний режим — для розробки / без каталогу):
           Iskra.Cli --elf <path>
                             --product <id> --target <bmp-match> --flash-kb <N>
@@ -913,8 +927,9 @@ static void PrintUsage()
                             [--port <COMxx>]
                             [--station-id <id>]
                             [--firmware-version <ver>] [--firmware-sha256 <hex>]
+                            [--firmware-kind {elf|hex}]
                             [--power {probe|external}] [--freq <hz>]
-                            [--connect-reset]
+                            [--connect-reset] [--timeout <sec>]
                             [--gdb-path <path>] [--db-path <path>]
                             [--dry-run]
 
@@ -941,11 +956,12 @@ static void PrintUsage()
                                        з catalog.json; інакше відмова.
 
         Каталог підставляє --target / --flash-kb / --firmware-version /
-        --firmware-sha256 / --elf якщо вони не вказані явно. Шлях до ELF
-        будується відносно директорії catalog-файлу.
+        --firmware-sha256 / --firmware-kind / --elf і, якщо задано в target,
+        --freq / --power / --connect-reset / --timeout. Шлях до локального
+        файлу прошивки будується відносно директорії catalog-файлу.
 
         Required без каталогу:
-          --elf            Шлях до ELF-файлу прошивки
+          --elf            Шлях до файлу прошивки (ELF або HEX)
           --product        ID продукту (наприклад ci-clop)
           --target         Сімейство BMP (наприклад PY32Fxxx)
           --flash-kb       Розмір flash цільового MCU в KB
@@ -954,12 +970,13 @@ static void PrintUsage()
 
         Defaults:
           --power external, --freq 1000000, --connect-reset off,
+          --firmware-kind elf, --timeout 15,
           --station-id <hostname>, --gdb-path <auto-detect>,
           --db-path ./flash_log.db
 
         Exit codes:
           0 = PASS, 1 = FAIL, 2 = bad args / ambiguous probe / catalog error,
-          3 = no probe / gdb not found, 4 = bad ELF,
+          3 = no probe / gdb not found, 4 = bad firmware file,
           5 = GitHub auth / firmware download error.
         """);
 }

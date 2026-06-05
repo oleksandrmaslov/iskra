@@ -11,8 +11,14 @@ public class CatalogGeneratorTests
         string productId = "ci-clop", string version = "1.0.0",
         string partNumber = "PY32F002Ax5", string bmpMatch = "PY32Fxxx",
         int flashKb = 32, string sha = Sha,
-        string? displayName = null, string? notes = null) =>
-        new(productId, version, partNumber, bmpMatch, flashKb, sha, displayName, null, notes);
+        string? displayName = null, string? notes = null,
+        FirmwareKind firmwareKind = FirmwareKind.Elf,
+        int? frequencyHz = null,
+        PowerMode? powerMode = null,
+        bool? connectReset = null,
+        int? timeoutSeconds = null) =>
+        new(productId, version, partNumber, bmpMatch, flashKb, sha, displayName, null, notes,
+            firmwareKind, frequencyHz, powerMode, connectReset, timeoutSeconds);
 
     private static readonly DateTime FixedNow = new(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
 
@@ -46,6 +52,31 @@ public class CatalogGeneratorTests
         var c = CatalogGenerator.Build(
             new[] { Sidecar(displayName: "CI-CLOP") }, "owner", FixedNow);
         Assert.Equal("CI-CLOP", c.Products[0].DisplayName);
+    }
+
+    [Fact]
+    public void Build_carries_target_overrides_and_hex_kind()
+    {
+        var c = CatalogGenerator.Build(new[]
+        {
+            Sidecar(
+                firmwareKind: FirmwareKind.Hex,
+                frequencyHz: 4_000_000,
+                powerMode: PowerMode.Probe,
+                connectReset: true,
+                timeoutSeconds: 28),
+        }, "owner", FixedNow);
+
+        var target = c.Products[0].Target;
+        Assert.Equal(4_000_000, target.FrequencyHz);
+        Assert.Equal(PowerMode.Probe, target.PowerMode);
+        Assert.True(target.ConnectReset);
+        Assert.Equal(28, target.TimeoutSeconds);
+
+        var release = c.Products[0].Releases[0];
+        Assert.Equal(FirmwareKind.Hex, release.FirmwareKind);
+        Assert.Equal("ci-clop_v1.0.0_PY32F002Ax5.hex", release.ElfFilename);
+        Assert.Equal("ci-clop_v1.0.0_PY32F002Ax5.hex", release.ElfSource!.Asset);
     }
 
     [Fact]
@@ -121,6 +152,19 @@ public class CatalogGeneratorTests
         var ex = Assert.Throws<CatalogGeneratorException>(
             () => CatalogGenerator.Build(sidecars, "owner", FixedNow));
         Assert.Contains("disagree on flash_kb", ex.Message);
+    }
+
+    [Fact]
+    public void Same_product_with_inconsistent_target_override_throws()
+    {
+        var sidecars = new[]
+        {
+            Sidecar(version: "1.0.0", frequencyHz: 1_000_000),
+            Sidecar(version: "1.0.1", frequencyHz: 4_000_000, sha: Sha2),
+        };
+        var ex = Assert.Throws<CatalogGeneratorException>(
+            () => CatalogGenerator.Build(sidecars, "owner", FixedNow));
+        Assert.Contains("frequency_hz", ex.Message);
     }
 
     [Fact]
@@ -299,6 +343,32 @@ public class CatalogGeneratorTests
         var bad = ToJson("ci-clop", "1.0.0", "PY32F002Ax5", "PY32Fxxx", 32, "not-hex");
         var ex = Assert.Throws<TargetSidecarException>(() => TargetSidecar.Parse(bad));
         Assert.Contains("elf_sha256", ex.Message);
+    }
+
+    [Fact]
+    public void TargetSidecar_parses_optional_kind_and_overrides()
+    {
+        var json = $$"""
+        {
+          "product_id": "ci-clop",
+          "version": "1.0.0",
+          "part_number": "PY32F002Ax5",
+          "bmp_match": "PY32Fxxx",
+          "flash_kb": 32,
+          "elf_sha256": "{{Sha}}",
+          "firmware_kind": "hex",
+          "frequency_hz": 4000000,
+          "power_mode": "probe",
+          "connect_reset": true,
+          "timeout_s": 28
+        }
+        """;
+        var s = TargetSidecar.Parse(json);
+        Assert.Equal(FirmwareKind.Hex, s.FirmwareKind);
+        Assert.Equal(4_000_000, s.FrequencyHz);
+        Assert.Equal(PowerMode.Probe, s.PowerMode);
+        Assert.True(s.ConnectReset);
+        Assert.Equal(28, s.TimeoutSeconds);
     }
 
     private static string ToJson(string productId, string version, string partNumber, string bmpMatch, int flashKb, string sha) =>

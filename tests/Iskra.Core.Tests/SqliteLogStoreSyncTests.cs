@@ -188,4 +188,31 @@ public class SqliteLogStoreSyncTests
             if (File.Exists(tmp)) File.Delete(tmp);
         }
     }
+
+    [Fact]
+    public void Schema_creates_partial_index_for_unsynced_queue()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"flash-log-index-{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var store = new SqliteLogStore(tmp))
+            {
+                Assert.Equal(0, store.CountUnsynced());
+            }
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = tmp }.ToString());
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT sql FROM sqlite_master
+                WHERE type = 'index' AND name = 'idx_flash_attempts_unsynced';
+                """;
+            var sql = Assert.IsType<string>(cmd.ExecuteScalar());
+            Assert.Contains("WHERE synced_at_utc IS NULL", sql, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(tmp)) File.Delete(tmp);
+        }
+    }
 }

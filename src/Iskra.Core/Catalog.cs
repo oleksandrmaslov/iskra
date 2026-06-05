@@ -12,7 +12,17 @@ namespace Iskra.Core;
 public sealed record TargetDescriptor(
     string BmpMatch,
     string PartNumber,
-    int FlashKb);
+    int FlashKb,
+    int? FrequencyHz = null,
+    PowerMode? PowerMode = null,
+    bool? ConnectReset = null,
+    [property: JsonPropertyName("timeout_s")] int? TimeoutSeconds = null);
+
+public enum FirmwareKind
+{
+    Elf,
+    Hex,
+}
 
 /// <summary>
 /// Points at a firmware artefact published as a GitHub Release asset. When set
@@ -35,7 +45,8 @@ public sealed record FirmwareRelease(
     string? ElfUrl,
     DateTime ReleasedAt,
     string? Notes,
-    GitHubReleaseRef? ElfSource = null)
+    GitHubReleaseRef? ElfSource = null,
+    FirmwareKind FirmwareKind = FirmwareKind.Elf)
 {
     /// <summary>True when this release must be downloaded from a remote source.</summary>
     [JsonIgnore]

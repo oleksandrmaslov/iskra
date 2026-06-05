@@ -11,7 +11,7 @@ public sealed class CatalogGeneratorException : Exception
 /// pass it to <see cref="CatalogJson.WriteUtf8"/> then sign with
 /// <see cref="CatalogSignature.Sign"/>.
 /// <para>Per-release fields are derived from the sidecar + owner convention:
-/// <c>elf_filename</c> = <c>&lt;product_id&gt;_v&lt;version&gt;_&lt;part_number&gt;.elf</c>,
+/// <c>elf_filename</c> = <c>&lt;product_id&gt;_v&lt;version&gt;_&lt;part_number&gt;.&lt;kind&gt;</c>,
 /// <c>elf_source.repo</c> = <c>&lt;owner&gt;/&lt;product_id&gt;-firmware</c>,
 /// <c>elf_source.tag</c> = <c>v&lt;version&gt;</c>,
 /// <c>elf_source.asset</c> = same as <c>elf_filename</c>.</para>
@@ -75,7 +75,14 @@ public static class CatalogGenerator
             products.Add(new Product(
                 ProductId:      productId,
                 DisplayName:    displayName,
-                Target:         new TargetDescriptor(canonical.BmpMatch, canonical.PartNumber, canonical.FlashKb),
+                Target:         new TargetDescriptor(
+                                    canonical.BmpMatch,
+                                    canonical.PartNumber,
+                                    canonical.FlashKb,
+                                    canonical.FrequencyHz,
+                                    canonical.PowerMode,
+                                    canonical.ConnectReset,
+                                    canonical.TimeoutSeconds),
                 Releases:       releases,
                 DefaultRelease: latest.Version));
         }
@@ -159,7 +166,7 @@ public static class CatalogGenerator
 
     private static FirmwareRelease ToRelease(TargetSidecar s, string owner)
     {
-        var asset = $"{s.ProductId}_v{s.Version}_{s.PartNumber}.elf";
+        var asset = $"{s.ProductId}_v{s.Version}_{s.PartNumber}.{ExtensionFor(s.FirmwareKind)}";
         return new FirmwareRelease(
             Version:      s.Version,
             ElfFilename:  asset,
@@ -170,7 +177,8 @@ public static class CatalogGenerator
             ElfSource:    new GitHubReleaseRef(
                               Repo:  $"{owner}/{s.ProductId}-firmware",
                               Tag:   $"v{s.Version}",
-                              Asset: asset));
+                              Asset: asset),
+            FirmwareKind: s.FirmwareKind);
     }
 
     private static void EnsureTargetStackConsistent(string productId, List<TargetSidecar> list)
@@ -187,8 +195,27 @@ public static class CatalogGenerator
             if (s.FlashKb != first.FlashKb)
                 throw new CatalogGeneratorException(
                     $"{productId}: sidecars disagree on flash_kb ({first.FlashKb} vs {s.FlashKb})");
+            if (s.FrequencyHz != first.FrequencyHz)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on frequency_hz ({first.FrequencyHz} vs {s.FrequencyHz})");
+            if (s.PowerMode != first.PowerMode)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on power_mode ({first.PowerMode} vs {s.PowerMode})");
+            if (s.ConnectReset != first.ConnectReset)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on connect_reset ({first.ConnectReset} vs {s.ConnectReset})");
+            if (s.TimeoutSeconds != first.TimeoutSeconds)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on timeout_s ({first.TimeoutSeconds} vs {s.TimeoutSeconds})");
         }
     }
+
+    internal static string ExtensionFor(FirmwareKind kind) => kind switch
+    {
+        FirmwareKind.Elf => "elf",
+        FirmwareKind.Hex => "hex",
+        _                => "elf",
+    };
 
     private static string TitleCase(string productId)
     {

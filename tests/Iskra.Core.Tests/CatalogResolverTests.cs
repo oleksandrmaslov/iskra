@@ -59,6 +59,7 @@ public class CatalogResolverTests
         Assert.Equal(
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             GetFlag(r.ResolvedArgs!, "--firmware-sha256"));
+        Assert.Equal("elf", GetFlag(r.ResolvedArgs!, "--firmware-kind"));
         Assert.Equal(
             Path.Combine(@"C:\fw", "ci-clop_v1.0.0_PY32F002Ax5.elf"),
             GetFlag(r.ResolvedArgs!, "--elf"));
@@ -92,6 +93,78 @@ public class CatalogResolverTests
         var r = CatalogResolver.ResolveWithCatalog(args, SampleCatalog(), @"C:\fw");
         Assert.True(r.Ok);
         Assert.Equal(@"D:\override.elf", GetFlag(r.ResolvedArgs!, "--elf"));
+    }
+
+    [Fact]
+    public void Target_overrides_fill_flash_knobs_when_missing()
+    {
+        var catalog = new Catalog(
+            SchemaVersion: 1,
+            GeneratedAt: new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Products: new[]
+            {
+                new Product(
+                    ProductId: "ci-clop",
+                    DisplayName: "CI-CLOP",
+                    Target: new TargetDescriptor(
+                        "PY32Fxxx", "PY32F002Ax5", 32,
+                        FrequencyHz: 4_000_000,
+                        PowerMode: PowerMode.Probe,
+                        ConnectReset: true,
+                        TimeoutSeconds: 28),
+                    Releases: new[]
+                    {
+                        new FirmwareRelease("1.0.0", "ci-clop_v1.0.0_PY32F002Ax5.hex",
+                            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            null, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), null,
+                            FirmwareKind: FirmwareKind.Hex),
+                    },
+                    DefaultRelease: "1.0.0"),
+            });
+        var args = new[] { "--product", "ci-clop", "--operator", "x", "--batch", "y" };
+        var r = CatalogResolver.ResolveWithCatalog(args, catalog, @"C:\fw");
+
+        Assert.True(r.Ok);
+        Assert.Equal("hex", GetFlag(r.ResolvedArgs!, "--firmware-kind"));
+        Assert.Equal("4000000", GetFlag(r.ResolvedArgs!, "--freq"));
+        Assert.Equal("probe", GetFlag(r.ResolvedArgs!, "--power"));
+        Assert.Contains("--connect-reset", r.ResolvedArgs!);
+        Assert.Equal("28", GetFlag(r.ResolvedArgs!, "--timeout"));
+        Assert.EndsWith(".hex", GetFlag(r.ResolvedArgs!, "--elf"));
+    }
+
+    [Fact]
+    public void Explicit_flash_knobs_override_target_overrides()
+    {
+        var catalog = new Catalog(
+            SchemaVersion: 1,
+            GeneratedAt: new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Products: new[]
+            {
+                new Product(
+                    "ci-clop", "CI-CLOP",
+                    new TargetDescriptor("PY32Fxxx", "PY32F002Ax5", 32,
+                        FrequencyHz: 4_000_000, PowerMode: PowerMode.Probe, TimeoutSeconds: 28),
+                    new[]
+                    {
+                        new FirmwareRelease("1.0.0", "ci-clop_v1.0.0_PY32F002Ax5.elf",
+                            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            null, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), null),
+                    },
+                    "1.0.0"),
+            });
+        var args = new[]
+        {
+            "--product", "ci-clop", "--operator", "x", "--batch", "y",
+            "--freq", "1000000", "--power", "external", "--timeout", "15",
+        };
+
+        var r = CatalogResolver.ResolveWithCatalog(args, catalog, @"C:\fw");
+
+        Assert.True(r.Ok);
+        Assert.Equal("1000000", GetFlag(r.ResolvedArgs!, "--freq"));
+        Assert.Equal("external", GetFlag(r.ResolvedArgs!, "--power"));
+        Assert.Equal("15", GetFlag(r.ResolvedArgs!, "--timeout"));
     }
 
     [Fact]

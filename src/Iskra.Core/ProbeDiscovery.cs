@@ -9,7 +9,8 @@ public sealed record ProbeInfo(
     string PortName,
     string? FriendlyName,
     string DeviceInstanceId,
-    ProbeInterface Interface);
+    ProbeInterface Interface,
+    string? SerialNumber = null);
 
 /// <summary>
 /// Locates Black Magic Probe COM ports on Windows by walking the USB device tree
@@ -79,6 +80,25 @@ public static class ProbeDiscovery
         return int.TryParse(portName.AsSpan(i), out var n) ? n : int.MaxValue;
     }
 
+    public static string? FindSerialForPort(string portName)
+    {
+        if (string.IsNullOrWhiteSpace(portName)) return null;
+        return FindAll()
+            .FirstOrDefault(p => string.Equals(p.PortName, portName, StringComparison.OrdinalIgnoreCase))
+            ?.SerialNumber;
+    }
+
+    public static string? StableSerialFromInstanceName(string? instanceName, string? parentIdPrefix = null)
+    {
+        if (!string.IsNullOrWhiteSpace(instanceName) &&
+            !instanceName.Contains('&', StringComparison.Ordinal) &&
+            !instanceName.Contains('\\', StringComparison.Ordinal))
+            return instanceName;
+        if (!string.IsNullOrWhiteSpace(parentIdPrefix))
+            return parentIdPrefix;
+        return null;
+    }
+
     [SupportedOSPlatform("windows")]
     private static List<ProbeInfo> EnumerateWindows()
     {
@@ -110,14 +130,43 @@ public static class ProbeDiscovery
 
                 var deviceInstanceId = $"{vidPidName}/{instanceName}";
 
+                var parentIdPrefix = instanceKey.GetValue("ParentIdPrefix") as string;
+                var serial = StableSerialFromInstanceName(instanceName, parentIdPrefix)
+                    ?? TryFindParentSerial(enumKey, instanceName);
+
                 results.Add(new ProbeInfo(
                     PortName: port,
                     FriendlyName: friendly,
                     DeviceInstanceId: deviceInstanceId,
-                    Interface: ClassifyInterface(friendly, deviceInstanceId)));
+                    Interface: ClassifyInterface(friendly, deviceInstanceId),
+                    SerialNumber: serial));
             }
         }
         return results;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static string? TryFindParentSerial(RegistryKey enumKey, string interfaceInstanceName)
+    {
+        try
+        {
+            using var parentKey = enumKey.OpenSubKey(BmpVidPidPrefix);
+            if (parentKey is null) return null;
+            foreach (var parentInstanceName in parentKey.GetSubKeyNames())
+            {
+                using var parentInstanceKey = parentKey.OpenSubKey(parentInstanceName);
+                var parentPrefix = parentInstanceKey?.GetValue("ParentIdPrefix") as string;
+                if (!string.IsNullOrWhiteSpace(parentPrefix) &&
+                    interfaceInstanceName.StartsWith(parentPrefix, StringComparison.OrdinalIgnoreCase))
+                    return StableSerialFromInstanceName(parentInstanceName, parentPrefix);
+            }
+        }
+        catch
+        {
+            // Registry shape differs between Windows driver stacks; serial is
+            // useful but non-critical, so fall back to null.
+        }
+        return null;
     }
 
     [SupportedOSPlatform("windows")]

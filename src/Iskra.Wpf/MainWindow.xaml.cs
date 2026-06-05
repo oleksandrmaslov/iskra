@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private string? _catalogDir;
     private string? _gdbExe;
     private string? _port;
+    private string? _probeSerial;
     private string? _lastAppUpdateUrl;
 
     public MainWindow()
@@ -76,16 +77,20 @@ public partial class MainWindow : Window
         if (probes.Count == 1)
         {
             _port = probes[0].PortName;
-            StatusPort.Text = $"Порт: {_port}";
+            _probeSerial = probes[0].SerialNumber;
+            StatusPort.Text = $"Порт: {_port}" +
+                (string.IsNullOrWhiteSpace(_probeSerial) ? "" : $" · SN {_probeSerial}");
         }
         else if (probes.Count == 0)
         {
             _port = null;
+            _probeSerial = null;
             StatusPort.Text = "Порт: BMP не знайдено";
         }
         else
         {
             _port = null;
+            _probeSerial = null;
             StatusPort.Text = $"Порт: знайдено {probes.Count} BMP (потрібно один)";
         }
     }
@@ -115,7 +120,7 @@ public partial class MainWindow : Window
 
         foreach (var c in candidates)
         {
-            if (File.Exists(c)) { _catalogPath = Path.GetFullPath(c); break; }
+            if (File.Exists(c) || Directory.Exists(c)) { _catalogPath = Path.GetFullPath(c); break; }
         }
         if (_catalogPath is null)
         {
@@ -125,30 +130,45 @@ public partial class MainWindow : Window
 
         try
         {
-            _catalog = CatalogJson.ParseFile(_catalogPath);
-            _catalogDir = Path.GetDirectoryName(_catalogPath);
-
-            var trust = CatalogTrust.VerifyCatalogFile(_catalogPath, _settings.RequireSignedCatalog);
-            var trustText = trust switch
+            string trustText;
+            if (Directory.Exists(_catalogPath))
             {
-                CatalogTrustResult.Verified         => "✓ Ed25519",
-                CatalogTrustResult.UnsignedAllowed  => "без підпису",
-                CatalogTrustResult.UnsignedRejected => "✗ потрібен підпис",
-                CatalogTrustResult.BadSignature     => "✗ невірний підпис",
-                CatalogTrustResult.NoPublicKeyConfigured => "✗ немає ключа",
-                _                                   => trust.ToString(),
-            };
+                if (_settings.RequireSignedCatalog)
+                {
+                    StatusCatalog.Text = "Каталог: sideload не дозволено, бо потрібен підпис";
+                    return;
+                }
+                _catalog = SideloadCatalogBuilder.BuildFromDirectory(_catalogPath);
+                _catalogDir = _catalogPath;
+                trustText = "sideload";
+            }
+            else
+            {
+                _catalog = CatalogJson.ParseFile(_catalogPath);
+                _catalogDir = Path.GetDirectoryName(_catalogPath);
+
+                var trust = CatalogTrust.VerifyCatalogFile(_catalogPath, _settings.RequireSignedCatalog);
+                trustText = trust switch
+                {
+                    CatalogTrustResult.Verified         => "✓ Ed25519",
+                    CatalogTrustResult.UnsignedAllowed  => "без підпису",
+                    CatalogTrustResult.UnsignedRejected => "✗ потрібен підпис",
+                    CatalogTrustResult.BadSignature     => "✗ невірний підпис",
+                    CatalogTrustResult.NoPublicKeyConfigured => "✗ немає ключа",
+                    _                                   => trust.ToString(),
+                };
+
+                if (trust is CatalogTrustResult.UnsignedRejected
+                           or CatalogTrustResult.BadSignature
+                           or CatalogTrustResult.NoPublicKeyConfigured)
+                {
+                    // Catalog parsed but trust failed; disable flashing until user acks via Settings.
+                    _catalog = null;
+                    return;
+                }
+            }
             StatusCatalog.Text =
                 $"Каталог: {_catalog.Products.Count} продукт(ів) · {trustText} · {Path.GetFileName(_catalogPath)}";
-
-            if (trust is CatalogTrustResult.UnsignedRejected
-                       or CatalogTrustResult.BadSignature
-                       or CatalogTrustResult.NoPublicKeyConfigured)
-            {
-                // Catalog parsed but trust failed; disable flashing until user acks via Settings.
-                _catalog = null;
-                return;
-            }
 
             foreach (var p in _catalog.Products)
                 ProductCombo.Items.Add(p.ProductId);
@@ -167,6 +187,13 @@ public partial class MainWindow : Window
             _catalog = null;
             StatusCatalog.Text = $"Каталог: помилка — {ex.Message}";
             CatalogHeader.Text = $"Помилка читання каталогу: {ex.Message}";
+            CatalogProductsList.ItemsSource = null;
+        }
+        catch (SideloadCatalogException ex)
+        {
+            _catalog = null;
+            StatusCatalog.Text = $"Sideload: помилка — {ex.Message}";
+            CatalogHeader.Text = $"Помилка sideload: {ex.Message}";
             CatalogProductsList.ItemsSource = null;
         }
     }
@@ -334,9 +361,9 @@ public partial class MainWindow : Window
 
             if (!File.Exists(elfPath))
             {
-                ShowFail("E_ELF_NOT_FOUND", $"ELF не знайдено: {elfPath}");
+                ShowFail("E_FW_NOT_FOUND", $"Файл прошивки не знайдено: {elfPath}");
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    "E_ELF_NOT_FOUND", elfPath, 0, null, null);
+                    "E_FW_NOT_FOUND", elfPath, 0, null, null);
                 RefreshHistory();
                 FlashButton.IsEnabled = true;
                 return;
@@ -352,6 +379,29 @@ public partial class MainWindow : Window
 
         try
         {
+            var preflight = FirmwarePreflight.Check(elfPath, release.FirmwareKind);
+            if (preflight != FirmwarePreflight.CheckResult.Ok)
+            {
+                var kind = FirmwarePreflight.DisplayName(release.FirmwareKind);
+                var msg = preflight switch
+                {
+                    FirmwarePreflight.CheckResult.NotFound => $"Файл прошивки не знайдено: {elfPath}",
+                    FirmwarePreflight.CheckResult.IoError  => $"Не вдалося прочитати файл прошивки: {elfPath}",
+                    _                                      => $"Файл не є коректним {kind}: {elfPath}",
+                };
+                var code = preflight switch
+                {
+                    FirmwarePreflight.CheckResult.NotFound => "E_FW_NOT_FOUND",
+                    FirmwarePreflight.CheckResult.IoError  => "E_FW_READ_FAILED",
+                    _                                      => "E_FW_BAD_FORMAT",
+                };
+                ShowFail(code, msg);
+                LogAttempt(op, batch, product, release, FlashResult.Fail,
+                    code, msg, 0, null, null);
+                RefreshHistory();
+                return;
+            }
+
             var sha = FirmwareIntegrity.ComputeSha256Hex(elfPath);
             if (!FirmwareIntegrity.HashesMatch(sha, release.ElfSha256))
             {
@@ -363,12 +413,13 @@ public partial class MainWindow : Window
                 return;
             }
 
+            var flash = EffectiveFlashSettings(product);
             var opts = new FlashOptions(
                 ElfPath:            elfPath,
                 Port:               _port,
-                Power:              _settings.Power,
-                BmpFrequencyHz:     _settings.BmpFrequencyHz,
-                ConnectUnderReset:  _settings.ConnectUnderReset,
+                Power:              flash.Power,
+                BmpFrequencyHz:     flash.FrequencyHz,
+                ConnectUnderReset:  flash.ConnectReset,
                 Product:            product.ProductId,
                 Operator:           op,
                 Batch:              batch,
@@ -378,13 +429,15 @@ public partial class MainWindow : Window
                 FirmwareVersion:    release.Version,
                 FirmwareSha256:     release.ElfSha256,
                 GdbPath:            _gdbExe,
-                DbPath:             _settings.DbPath);
+                DbPath:             _settings.DbPath,
+                FirmwareKind:       release.FirmwareKind,
+                TimeoutSeconds:     flash.TimeoutSeconds);
 
             var gdb = new GdbProcess(_gdbExe);
             var outcome = await FlashStateMachine.RunAsync(
                 gdb,
                 opts,
-                timeout: TimeSpan.FromSeconds(Math.Max(1, _settings.TimeoutSeconds)),
+                timeout: TimeSpan.FromSeconds(Math.Max(1, opts.TimeoutSeconds)),
                 onLine: line => Dispatcher.Invoke(() => GdbOutput.AppendText(line.Text + "\n")));
 
             if (outcome.IsPass)
@@ -445,6 +498,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            var flash = EffectiveFlashSettings(product);
             using var log = new SqliteLogStore(ResolveDbPath());
             log.Append(new FlashAttemptRecord(
                 TsUtc:            DateTime.UtcNow,
@@ -458,10 +512,10 @@ public partial class MainWindow : Window
                 TargetDetected:   detected,
                 TargetFlashKb:    product.Target.FlashKb,
                 ComPort:          _port ?? "",
-                ProbeSerial:      null,
-                Power:            _settings.Power,
-                ConnectRst:       _settings.ConnectUnderReset,
-                BmpFrequencyHz:   _settings.BmpFrequencyHz,
+                ProbeSerial:      _probeSerial,
+                Power:            flash.Power,
+                ConnectRst:       flash.ConnectReset,
+                BmpFrequencyHz:   flash.FrequencyHz,
                 Result:           result,
                 ErrorCode:        errCode,
                 ErrorMessage:     errMsg,
@@ -469,6 +523,15 @@ public partial class MainWindow : Window
                 GdbTail:          gdbTail));
         }
         catch { /* never let log failures crash the UI */ }
+    }
+
+    private (PowerMode Power, int FrequencyHz, bool ConnectReset, int TimeoutSeconds) EffectiveFlashSettings(Product product)
+    {
+        return (
+            Power: product.Target.PowerMode ?? _settings.Power,
+            FrequencyHz: product.Target.FrequencyHz ?? _settings.BmpFrequencyHz,
+            ConnectReset: product.Target.ConnectReset ?? _settings.ConnectUnderReset,
+            TimeoutSeconds: product.Target.TimeoutSeconds ?? _settings.TimeoutSeconds);
     }
 
     private string ResolveDbPath()
@@ -792,7 +855,7 @@ public partial class MainWindow : Window
         var dlg = new OpenFileDialog
         {
             Filter = "Catalog files (*.json)|*.json|All files (*.*)|*.*",
-            Title  = "Виберіть catalog.json",
+            Title  = "Виберіть catalog.json (або введіть sideload-папку вручну)",
         };
         if (dlg.ShowDialog() == true) SettingsCatalogPath.Text = dlg.FileName;
     }

@@ -30,6 +30,8 @@ public class FlashOptionsTests
         Assert.Equal(32, o.TargetFlashKb);
         Assert.Equal("unknown", o.FirmwareVersion);
         Assert.Equal("unknown", o.FirmwareSha256);
+        Assert.Equal(FirmwareKind.Elf, o.FirmwareKind);
+        Assert.Equal(15, o.TimeoutSeconds);
         Assert.Equal(Environment.MachineName, o.StationId);
         Assert.Null(o.GdbPath);
         Assert.Null(o.DbPath);
@@ -97,12 +99,24 @@ public class FlashOptionsTests
             "--station-id", "BENCH-3",
             "--firmware-version", "1.2.3",
             "--firmware-sha256", "abcdef",
+            "--firmware-kind", "hex",
+            "--timeout", "27",
             "--db-path", @"D:\logs\flash.db"));
         Assert.NotNull(o);
         Assert.Equal("BENCH-3", o!.StationId);
         Assert.Equal("1.2.3", o.FirmwareVersion);
         Assert.Equal("abcdef", o.FirmwareSha256);
+        Assert.Equal(FirmwareKind.Hex, o.FirmwareKind);
+        Assert.Equal(27, o.TimeoutSeconds);
         Assert.Equal(@"D:\logs\flash.db", o.DbPath);
+    }
+
+    [Theory]
+    [InlineData("--firmware-kind", "bin")]
+    [InlineData("--timeout", "0")]
+    public void Parse_rejects_bad_firmware_kind_or_timeout(string flag, string value)
+    {
+        Assert.Null(FlashOptions.Parse(Required(flag, value)));
     }
 
     [Fact]
