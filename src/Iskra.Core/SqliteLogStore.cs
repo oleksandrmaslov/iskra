@@ -27,6 +27,53 @@ public sealed record FlashAttemptRow(
 /// </summary>
 public sealed record UnsyncedFlashAttempt(long Id, FlashAttemptRecord Record);
 
+/// <summary>
+/// The complete firmware/target identity permanently assigned to a production
+/// batch. Product and version alone are not sufficient: a catalog can publish
+/// rebuilt bytes or corrected target metadata under the same version string.
+/// </summary>
+public sealed record BatchLockDescriptor(
+    string ProductId,
+    string FirmwareVersion,
+    string FirmwareSha256,
+    string TargetBmpMatch,
+    int TargetFlashKb)
+{
+    /// <summary>
+    /// Compares semantic catalog identity. Catalog identifiers, versions, BMP
+    /// match strings, and hexadecimal hashes are case-insensitive; flash size
+    /// must match exactly.
+    /// </summary>
+    public bool Matches(BatchLockDescriptor other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        return string.Equals(ProductId, other.ProductId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(FirmwareVersion, other.FirmwareVersion, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(FirmwareSha256, other.FirmwareSha256, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(TargetBmpMatch, other.TargetBmpMatch, StringComparison.OrdinalIgnoreCase)
+            && TargetFlashKb == other.TargetFlashKb;
+    }
+}
+
+public enum BatchLockReservationStatus
+{
+    Created,
+    AlreadyReserved,
+    Conflict,
+}
+
+/// <summary>
+/// Result of an atomic batch reservation. <see cref="IsAccepted"/> is true for
+/// both the process that created the lock and later callers requesting the
+/// exact same descriptor. On conflict, <see cref="Lock"/> is the durable winner.
+/// </summary>
+public sealed record BatchLockReservation(
+    BatchLockReservationStatus Status,
+    BatchLockDescriptor Lock)
+{
+    public bool IsAccepted => Status != BatchLockReservationStatus.Conflict;
+}
+
 public sealed record FlashAttemptRecord(
     DateTime TsUtc,
     string Operator,
@@ -60,7 +107,11 @@ public sealed class SqliteLogStore : IDisposable
 
     public SqliteLogStore(string dbPath)
     {
-        var cs = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+        var cs = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            DefaultTimeout = 30,
+        }.ToString();
         _conn = new SqliteConnection(cs);
         _conn.Open();
         EnsureSchema();
@@ -91,6 +142,33 @@ public sealed class SqliteLogStore : IDisposable
                 "ON flash_attempts(id) WHERE synced_at_utc IS NULL;";
             idx.ExecuteNonQuery();
         }
+
+        // Local batch-lock hardening migration. The earliest historical row
+        // that was not itself refused by a batch-lock check becomes the durable
+        // winner. INSERT OR IGNORE preserves any reservation already made by a
+        // newer process and makes repeated/re-entrant migrations harmless.
+        using (var backfill = _conn.CreateCommand())
+        {
+            backfill.CommandText = """
+                INSERT OR IGNORE INTO batch_locks (
+                  batch_id, product_id, firmware_version, firmware_sha256,
+                  target_bmp_match, target_flash_kb, reserved_at_utc
+                )
+                SELECT fa.batch_id, fa.product_id, fa.firmware_version,
+                       fa.firmware_sha256, fa.target_bmp_match,
+                       fa.target_flash_kb, fa.ts_utc
+                FROM flash_attempts AS fa
+                WHERE (fa.error_code IS NULL OR fa.error_code != 'E_BATCH_LOCKED')
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM flash_attempts AS earlier
+                    WHERE earlier.batch_id = fa.batch_id
+                      AND (earlier.error_code IS NULL OR earlier.error_code != 'E_BATCH_LOCKED')
+                      AND earlier.id < fa.id
+                  );
+                """;
+            backfill.ExecuteNonQuery();
+        }
     }
 
     private bool ColumnExists(string table, string column)
@@ -108,7 +186,28 @@ public sealed class SqliteLogStore : IDisposable
 
     public long Append(FlashAttemptRecord r)
     {
+        using var tx = _conn.BeginTransaction();
+
+        // Preserve the original "first real attempt locks the batch" behavior
+        // for callers that have not yet adopted ReserveBatchLock. New flashing
+        // paths must reserve before touching hardware; this compatibility path
+        // is deliberately in the same transaction as the attempt row.
+        if (!string.Equals(r.ErrorCode, "E_BATCH_LOCKED", StringComparison.Ordinal))
+        {
+            InsertBatchLock(
+                tx,
+                r.BatchId,
+                new BatchLockDescriptor(
+                    r.ProductId,
+                    r.FirmwareVersion,
+                    r.FirmwareSha256,
+                    r.TargetBmpMatch,
+                    r.TargetFlashKb),
+                r.TsUtc);
+        }
+
         using var cmd = _conn.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = InsertSql;
         cmd.Parameters.AddWithValue("$ts_utc",           r.TsUtc.ToString("o"));
         cmd.Parameters.AddWithValue("$operator",         r.Operator);
@@ -133,8 +232,11 @@ public sealed class SqliteLogStore : IDisposable
         cmd.ExecuteNonQuery();
 
         using var idCmd = _conn.CreateCommand();
+        idCmd.Transaction = tx;
         idCmd.CommandText = "SELECT last_insert_rowid();";
-        return (long)(idCmd.ExecuteScalar() ?? 0L);
+        var id = (long)(idCmd.ExecuteScalar() ?? 0L);
+        tx.Commit();
+        return id;
     }
 
     public int Count()
@@ -175,27 +277,90 @@ public sealed class SqliteLogStore : IDisposable
     }
 
     /// <summary>
-    /// First (product_id, firmware_version) ever logged for this batch — the row
-    /// that "locks" the batch. Returns null if no rows exist for the batch yet.
-    /// Lock-defining rows include both PASS and FAIL attempts (any successful
-    /// scan that produced a state-machine outcome). Rows where the lock check
-    /// itself refused the attempt (E_BATCH_LOCKED) should NOT be lock-defining,
-    /// so this query excludes them.
+    /// Returns the durable firmware/target identity reserved for this batch, or
+    /// null if no reservation or qualifying legacy attempt exists.
     /// </summary>
-    public (string ProductId, string FirmwareVersion)? GetBatchLock(string batchId)
+    public BatchLockDescriptor? GetBatchLock(string batchId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(batchId);
+        return GetBatchLock(batchId, transaction: null);
+    }
+
+    /// <summary>
+    /// Atomically creates a durable local reservation or returns the reservation
+    /// that won a concurrent race. A repeated request for the same full identity
+    /// is accepted; a difference in product, version, firmware hash, BMP match,
+    /// or flash size is a conflict.
+    /// </summary>
+    public BatchLockReservation ReserveBatchLock(
+        string batchId,
+        BatchLockDescriptor requested)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(batchId);
+        ArgumentNullException.ThrowIfNull(requested);
+
+        using var tx = _conn.BeginTransaction();
+        var created = InsertBatchLock(tx, batchId, requested, DateTime.UtcNow) == 1;
+        var locked = GetBatchLock(batchId, tx)
+            ?? throw new InvalidOperationException("Batch reservation was not persisted.");
+        tx.Commit();
+
+        var status = created
+            ? BatchLockReservationStatus.Created
+            : locked.Matches(requested)
+                ? BatchLockReservationStatus.AlreadyReserved
+                : BatchLockReservationStatus.Conflict;
+        return new BatchLockReservation(status, locked);
+    }
+
+    private BatchLockDescriptor? GetBatchLock(
+        string batchId,
+        SqliteTransaction? transaction)
     {
         using var cmd = _conn.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText = """
-            SELECT product_id, firmware_version FROM flash_attempts
-            WHERE batch_id = $batch
-              AND (error_code IS NULL OR error_code != 'E_BATCH_LOCKED')
-            ORDER BY id ASC
-            LIMIT 1;
+            SELECT product_id, firmware_version, firmware_sha256,
+                   target_bmp_match, target_flash_kb
+            FROM batch_locks
+            WHERE batch_id = $batch;
             """;
         cmd.Parameters.AddWithValue("$batch", batchId);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return null;
-        return (reader.GetString(0), reader.GetString(1));
+        return new BatchLockDescriptor(
+            ProductId:       reader.GetString(0),
+            FirmwareVersion: reader.GetString(1),
+            FirmwareSha256:  reader.GetString(2),
+            TargetBmpMatch:  reader.GetString(3),
+            TargetFlashKb:   reader.GetInt32(4));
+    }
+
+    private int InsertBatchLock(
+        SqliteTransaction transaction,
+        string batchId,
+        BatchLockDescriptor descriptor,
+        DateTime reservedAtUtc)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            INSERT OR IGNORE INTO batch_locks (
+              batch_id, product_id, firmware_version, firmware_sha256,
+              target_bmp_match, target_flash_kb, reserved_at_utc
+            ) VALUES (
+              $batch_id, $product_id, $firmware_version, $firmware_sha256,
+              $target_bmp_match, $target_flash_kb, $reserved_at_utc
+            );
+            """;
+        cmd.Parameters.AddWithValue("$batch_id", batchId);
+        cmd.Parameters.AddWithValue("$product_id", descriptor.ProductId);
+        cmd.Parameters.AddWithValue("$firmware_version", descriptor.FirmwareVersion);
+        cmd.Parameters.AddWithValue("$firmware_sha256", descriptor.FirmwareSha256);
+        cmd.Parameters.AddWithValue("$target_bmp_match", descriptor.TargetBmpMatch);
+        cmd.Parameters.AddWithValue("$target_flash_kb", descriptor.TargetFlashKb);
+        cmd.Parameters.AddWithValue("$reserved_at_utc", reservedAtUtc.ToUniversalTime().ToString("o"));
+        return cmd.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -378,6 +543,16 @@ public sealed class SqliteLogStore : IDisposable
         );
         CREATE INDEX IF NOT EXISTS idx_flash_attempts_batch ON flash_attempts(batch_id);
         CREATE INDEX IF NOT EXISTS idx_flash_attempts_ts    ON flash_attempts(ts_utc);
+
+        CREATE TABLE IF NOT EXISTS batch_locks (
+          batch_id          TEXT    PRIMARY KEY,
+          product_id        TEXT    NOT NULL,
+          firmware_version  TEXT    NOT NULL,
+          firmware_sha256   TEXT    NOT NULL,
+          target_bmp_match  TEXT    NOT NULL,
+          target_flash_kb   INTEGER NOT NULL,
+          reserved_at_utc   TEXT    NOT NULL
+        );
         """;
 
     private const string InsertSql = """

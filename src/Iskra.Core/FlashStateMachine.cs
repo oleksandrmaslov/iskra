@@ -106,9 +106,17 @@ public static class FlashStateMachine
         if (targets.Count == 0)
             return Fail("E_SCAN_NO_TARGET", "swdp_scan returned no targets", null, run.Duration, tail);
 
+        // The flash command attaches target #1. If BMP exposes more than one
+        // target we cannot safely infer which physical device the catalog
+        // describes, even when one of the rows happens to match.
+        if (targets.Count != 1)
+            return Fail("E_MULTIPLE_TARGETS",
+                $"swdp_scan returned {targets.Count} targets; refusing ambiguous attach #1",
+                string.Join(" | ", targets), run.Duration, tail);
+
         var detected = targets[0];
         if (!string.IsNullOrEmpty(expectedBmpMatch) &&
-            !targets.Any(t => t.Contains(expectedBmpMatch, StringComparison.OrdinalIgnoreCase)))
+            !detected.Contains(expectedBmpMatch, StringComparison.OrdinalIgnoreCase))
         {
             return Fail("E_TARGET_MISMATCH",
                 $"expected '{expectedBmpMatch}', detected '{detected}'",
@@ -144,8 +152,13 @@ public static class FlashStateMachine
         if (targets.Count == 0)
             return Fail("E_SCAN_NO_TARGET", "swdp_scan returned no targets", null, run.Duration, tail);
 
+        if (targets.Count != 1)
+            return Fail("E_MULTIPLE_TARGETS",
+                $"swdp_scan returned {targets.Count} targets; attach #1 is ambiguous",
+                string.Join(" | ", targets), run.Duration, tail);
+
         if (!string.IsNullOrEmpty(expectedBmpMatch) &&
-            !targets.Any(t => t.Contains(expectedBmpMatch, StringComparison.OrdinalIgnoreCase)))
+            !detected!.Contains(expectedBmpMatch, StringComparison.OrdinalIgnoreCase))
         {
             return Fail("E_TARGET_MISMATCH",
                 $"expected '{expectedBmpMatch}', detected '{detected}'",
@@ -162,14 +175,31 @@ public static class FlashStateMachine
                 $"section {mismatch.Detail} verify failed",
                 detected, run.Duration, tail);
 
-        bool loaded  = events.Any(e => e.Kind == GdbEventKind.LoadingSection);
-        bool matched = events.Any(e => e.Kind == GdbEventKind.SectionMatched);
-        if (!loaded || !matched)
+        var loadedSections = events
+            .Where(e => e.Kind == GdbEventKind.LoadingSection)
+            .Select(e => e.Detail)
+            .ToList();
+        if (loadedSections.Count == 0)
         {
             var why = run.ExitCode != 0
-                ? $"gdb exit {run.ExitCode}; load/verify signal absent"
-                : "load/verify signal absent in gdb output";
+                ? $"gdb exit {run.ExitCode}; load signal absent"
+                : "load signal absent in gdb output";
             return Fail("E_LOAD_FAILED", why, detected, run.Duration, tail);
+        }
+
+        var matchedCounts = events
+            .Where(e => e.Kind == GdbEventKind.SectionMatched)
+            .GroupBy(e => e.Detail, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        foreach (var loaded in loadedSections.GroupBy(s => s, StringComparer.Ordinal))
+        {
+            matchedCounts.TryGetValue(loaded.Key, out var verifiedCount);
+            if (verifiedCount < loaded.Count())
+            {
+                return Fail("E_VERIFY_MISMATCH",
+                    $"section {loaded.Key} was loaded but not verified as matched",
+                    detected, run.Duration, tail);
+            }
         }
 
         if (run.ExitCode != 0)

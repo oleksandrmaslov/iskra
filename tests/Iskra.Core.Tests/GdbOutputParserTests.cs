@@ -107,6 +107,6 @@ public class GdbOutputParserTests
             "",
             " 99   some unrelated numbered line"));
 
-        Assert.Single(ev.Where(e => e.Kind == GdbEventKind.TargetDetected));
+        Assert.Single(ev, e => e.Kind == GdbEventKind.TargetDetected);
     }
 }

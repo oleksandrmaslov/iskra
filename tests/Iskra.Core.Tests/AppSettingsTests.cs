@@ -22,13 +22,30 @@ public class AppSettingsTests : IDisposable
         var s = AppSettingsStore.Load(_path);
         Assert.Equal(1_000_000, s.BmpFrequencyHz);
         Assert.Equal(PowerMode.External, s.Power);
-        Assert.False(s.RequireSignedCatalog);
+        Assert.True(s.RequireSignedCatalog);
         Assert.False(s.ConnectUnderReset);
         Assert.Equal(15, s.TimeoutSeconds);
         Assert.Equal(Environment.MachineName, s.StationId);
         Assert.Null(s.CatalogPath);
         Assert.Null(s.GdbPath);
         Assert.Equal(FlashHotkey.Enter, s.FlashHotkey);
+    }
+
+    [Fact]
+    public void Load_clamps_unsigned_setting_without_explicit_lab_environment()
+    {
+        var old = Environment.GetEnvironmentVariable(CatalogTrust.UnsignedLabModeEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(CatalogTrust.UnsignedLabModeEnvironmentVariable, null);
+            AppSettingsStore.Save(new AppSettings { RequireSignedCatalog = false }, _path);
+
+            Assert.True(AppSettingsStore.Load(_path).RequireSignedCatalog);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CatalogTrust.UnsignedLabModeEnvironmentVariable, old);
+        }
     }
 
     [Fact]

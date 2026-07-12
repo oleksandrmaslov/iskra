@@ -14,8 +14,8 @@ namespace Iskra.Core;
 public static class GitHubAppConfig
 {
     /// <summary>
-    /// Client ID from the registered GitHub App. Empty until provisioned —
-    /// CLI / WPF surfaces guard on <see cref="IsConfigured"/>.
+    /// Client ID from the registered GitHub Device Flow App. This identifier
+    /// is public; CLI / WPF surfaces still guard on <see cref="IsConfigured"/>.
     /// </summary>
     public const string ClientId = "Iv23liyvPYbleFCY7D96";
 
@@ -29,8 +29,9 @@ public static class GitHubAppConfig
     /// station MSI in %PROGRAMDATA%\Iskra\station-app.pem.
     ///
     /// <para>
-    /// Both ids are empty until the App is registered + installed. Until
-    /// then, the log shipper stays dormant.
+    /// These ids currently identify the provisioned lab App. This shared-key
+    /// repository-write design is not the final production audit architecture;
+    /// see ROADMAP.md Sprint 9.
     /// </para>
     ///
     /// <para>To wire a fresh log-shipper app:</para>

@@ -1,29 +1,13 @@
 using System.Net;
 using System.Net.Http;
-using System.Runtime.Versioning;
-using System.Security.Cryptography;
 using System.Text;
 using Iskra.Core;
 
 namespace Iskra.Core.Tests;
 
-[SupportedOSPlatform("windows")]
-public class AccessTokenProviderTests : IDisposable
+public class AccessTokenProviderTests
 {
-    private readonly string _storePath;
-
-    public AccessTokenProviderTests()
-    {
-        _storePath = Path.Combine(Path.GetTempPath(),
-            $"iskra-atp-{Guid.NewGuid():N}.bin");
-    }
-
-    public void Dispose()
-    {
-        if (File.Exists(_storePath)) File.Delete(_storePath);
-    }
-
-    private TokenStore Store() => new(_storePath, DataProtectionScope.CurrentUser);
+    private readonly MemoryTokenStore _store = new();
 
     private (AccessTokenProvider Provider, StubHandler Handler) BuildProvider(
         DateTime fixedNow, params HttpResponseMessage[] httpResponses)
@@ -31,7 +15,7 @@ public class AccessTokenProviderTests : IDisposable
         var h = new StubHandler(httpResponses);
         var flow = new GitHubDeviceFlow(new HttpClient(h), "Iv23liTEST",
             delay: (_, _) => Task.CompletedTask);
-        var p = new AccessTokenProvider(Store(), flow, now: () => fixedNow);
+        var p = new AccessTokenProvider(_store, flow, now: () => fixedNow);
         return (p, h);
     }
 
@@ -45,7 +29,7 @@ public class AccessTokenProviderTests : IDisposable
     public async Task Returns_cached_access_token_when_still_fresh()
     {
         var now = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
-        Store().Save(FreshStored(now));
+        _store.Save(FreshStored(now));
         var (p, h) = BuildProvider(now);
 
         var token = await p.GetFreshAccessTokenAsync();
@@ -65,7 +49,7 @@ public class AccessTokenProviderTests : IDisposable
     public async Task Refreshes_when_access_token_stale_then_saves_rotated_pair()
     {
         var issuedAt = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
-        Store().Save(FreshStored(issuedAt));
+        _store.Save(FreshStored(issuedAt));
 
         var refreshTime = issuedAt.AddHours(9); // access token now expired (was 8h)
         var (p, h) = BuildProvider(refreshTime, JsonResp("""
@@ -83,7 +67,7 @@ public class AccessTokenProviderTests : IDisposable
         Assert.Equal("gho_NEW", token);
         Assert.Single(h.Requests);
 
-        var saved = Store().Load()!;
+        var saved = _store.Load()!;
         Assert.Equal("gho_NEW",     saved.AccessToken);
         Assert.Equal("ghr_ROTATED", saved.RefreshToken); // rotation persisted
         Assert.Equal(refreshTime.AddSeconds(28800),   saved.AccessTokenExpiresAtUtc);
@@ -94,32 +78,32 @@ public class AccessTokenProviderTests : IDisposable
     public async Task Deletes_blob_and_throws_when_refresh_token_locally_expired()
     {
         var issuedAt = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
-        Store().Save(FreshStored(issuedAt));
+        _store.Save(FreshStored(issuedAt));
         var afterRefreshExpired = issuedAt.AddMonths(7);
         var (p, h) = BuildProvider(afterRefreshExpired);
 
         await Assert.ThrowsAsync<RefreshTokenExpiredException>(() => p.GetFreshAccessTokenAsync());
         Assert.Empty(h.Requests);
-        Assert.False(Store().Exists());
+        Assert.False(_store.Exists());
     }
 
     [Fact]
     public async Task Deletes_blob_and_throws_when_GitHub_rejects_refresh_token()
     {
         var issuedAt = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
-        Store().Save(FreshStored(issuedAt));
+        _store.Save(FreshStored(issuedAt));
         var (p, h) = BuildProvider(issuedAt.AddHours(9),
             JsonResp("{\"error\":\"bad_refresh_token\"}"));
 
         await Assert.ThrowsAsync<RefreshTokenExpiredException>(() => p.GetFreshAccessTokenAsync());
-        Assert.False(Store().Exists());
+        Assert.False(_store.Exists());
     }
 
     [Fact]
     public async Task Refresh_skew_triggers_proactive_refresh()
     {
         var issuedAt = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
-        Store().Save(FreshStored(issuedAt));
+        _store.Save(FreshStored(issuedAt));
 
         // 30 s before expiry, with a 5-minute skew → considered stale.
         var nearExpiry = issuedAt.AddHours(8).AddSeconds(-30);
@@ -141,6 +125,17 @@ public class AccessTokenProviderTests : IDisposable
 
     private static HttpResponseMessage JsonResp(string body, HttpStatusCode status = HttpStatusCode.OK)
         => new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    private sealed class MemoryTokenStore : ITokenStore
+    {
+        private StoredTokens? _tokens;
+
+        public string Path => "memory-token-store";
+        public bool Exists() => _tokens is not null;
+        public StoredTokens? Load() => _tokens;
+        public void Save(StoredTokens tokens) => _tokens = tokens;
+        public void Delete() => _tokens = null;
+    }
 
     private sealed class StubHandler : HttpMessageHandler
     {

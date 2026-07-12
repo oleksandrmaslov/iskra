@@ -4,7 +4,9 @@ namespace Iskra.Core;
 
 /// <summary>
 /// Locates <c>arm-none-eabi-gdb</c> on the current machine. Search order:
-/// (1) explicit path, (2) PATH, (3) standard Arm GNU Toolchain install dirs on Windows.
+/// (1) explicit developer override, (2) standard Arm GNU Toolchain install
+/// directories on Windows, (3) PATH. Program Files precedes user-controlled
+/// PATH on production Windows stations.
 /// The production installer chains the Arm GNU Toolchain MSI, so one of the
 /// standard paths should exist immediately after setup.
 /// </summary>
@@ -21,9 +23,6 @@ public static class GdbDiscovery
             ? ExeName + ".exe"
             : ExeName;
 
-        var fromPath = ProbePath(exe);
-        if (fromPath is not null) return fromPath;
-
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             foreach (var dir in WindowsToolchainRoots())
@@ -32,6 +31,9 @@ public static class GdbDiscovery
                 if (candidate is not null) return candidate;
             }
         }
+
+        var fromPath = ProbePath(exe);
+        if (fromPath is not null) return fromPath;
 
         return null;
     }

@@ -29,7 +29,9 @@ public sealed class AppSettings
 {
     // Catalog
     public string? CatalogPath { get; set; }
-    public bool RequireSignedCatalog { get; set; }
+    // Fail closed on fresh installs. Turning this off is an explicit lab-only
+    // override for local sideload testing, never a production default.
+    public bool RequireSignedCatalog { get; set; } = true;
 
     // Remote catalog auto-update (Sprint 3.5). Sprint 6: the catalog source
     // is no longer settings-controlled in production. The defaults come from
@@ -140,6 +142,11 @@ public static class AppSettingsStore
             settings.CatalogOwner = CatalogTrust.OfficialCatalogSource.Owner;
             settings.CatalogRepo  = CatalogTrust.OfficialCatalogSource.Repo;
         }
+        // Persisted settings from an older/lab build cannot silently weaken a
+        // normal operator process. Unsigned mode needs a second, explicit lab
+        // switch in the process environment.
+        if (!CatalogTrust.IsUnsignedLabModeEnabled())
+            settings.RequireSignedCatalog = true;
         return settings;
     }
 
@@ -149,7 +156,14 @@ public static class AppSettingsStore
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var tmp = path + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(settings, JsonOptions));
-        if (File.Exists(path)) File.Delete(path);
-        File.Move(tmp, path);
+        try
+        {
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
+            throw;
+        }
     }
 }

@@ -9,9 +9,23 @@ public class GdbCommandBuilderTests
     [InlineData("com3",         @"\\.\COM3")]
     [InlineData(@"\\.\COM12",   @"\\.\COM12")]
     [InlineData("localhost:2000", "localhost:2000")]
+    [InlineData("/dev/ttyACM0", "/dev/ttyACM0")]
+    [InlineData("/dev/cu.usbmodem-BMP", "/dev/cu.usbmodem-BMP")]
+    [InlineData("ttyACM0", "ttyACM0")]
     public void NormalizeComPort_canonicalises_input(string input, string expected)
     {
         Assert.Equal(expected, GdbCommandBuilder.NormalizeComPort(input));
+    }
+
+    [Theory]
+    [InlineData("/dev/ttyACM0")]
+    [InlineData("/dev/cu.usbmodem-BMP")]
+    public void BuildExCommands_preserves_unix_serial_device_path(string endpoint)
+    {
+        var commands = GdbCommandBuilder.BuildExCommands(
+            endpoint, PowerMode.External, 1_000_000, connectUnderReset: false);
+
+        Assert.Contains($"target extended-remote {endpoint}", commands);
     }
 
     [Fact]
@@ -106,15 +120,21 @@ public class GdbCommandBuilderTests
 
         Assert.Equal("-nx", args[0]);
         Assert.Equal("--batch", args[1]);
+        Assert.Equal("-iex", args[2]);
+        Assert.Equal("set auto-load off", args[3]);
+        Assert.Equal("-iex", args[4]);
+        Assert.Equal("set debuginfod enabled off", args[5]);
 
         // Every -ex should be followed by exactly one command argument.
-        for (int i = 2; i < args.Count - 1; i += 2)
+        for (int i = 6; i < args.Count - 1; i += 2)
         {
             Assert.Equal("-ex", args[i]);
             Assert.False(args[i + 1].StartsWith('-'), $"expected command at index {i + 1}, got {args[i + 1]}");
         }
 
         Assert.EndsWith("ci-clop_v1.0.0_PY32F002Ax5.elf", args[^1]);
+        Assert.True(args.IndexOf("set auto-load off") < args.Count - 1,
+            "auto-load must be disabled before the firmware operand is opened");
     }
 
     [Fact]
@@ -174,6 +194,8 @@ public class GdbCommandBuilderTests
             "COM30", PowerMode.External, 1_000_000, false).ToList();
         Assert.Equal("-nx", args[0]);
         Assert.Equal("--batch", args[1]);
+        Assert.Equal("set auto-load off", args[3]);
+        Assert.Equal("set debuginfod enabled off", args[5]);
         Assert.Equal("quit", args[^1]); // final ex-command, not a positional ELF
         Assert.Equal("-ex", args[^2]);
         Assert.DoesNotContain(args, a => a.EndsWith(".elf", StringComparison.OrdinalIgnoreCase));

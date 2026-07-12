@@ -1,158 +1,293 @@
 # Place this file at .github/workflows/regenerate-catalog.yml in the
-# iskra-catalog repo. Triggered by repository_dispatch events from any
-# *-firmware repo (see notify-iskra-catalog.yml). Walks every *-firmware repo
-# under the account, pulls each repo's latest release + target.json sidecar,
-# runs `Iskra.Cli --generate-catalog`, signs with the Ed25519 dev key,
-# publishes catalog.json + catalog.json.sig as a release asset.
+# iskra-catalog repo. A release notification builds an unsigned catalog first;
+# signing and publishing happen in a separate, reviewer-gated environment.
 #
-# Required secret in iskra-catalog:
-#   CATALOG_PRIV_KEY   base64 of the Ed25519 private key bytes (the contents
-#                      of catalog-key.priv). The matching public key must
-#                      already be embedded in CatalogTrust.EmbeddedPublicKeyBase64
-#                      in oleksandrmaslov/iskra.
+# Required iskra-catalog repository files:
+#   firmware-repos.txt   one explicitly approved *-firmware repo name per line
+#   revoked.json         optional signed revocation list
 #
-# To populate:
-#   cat ~/.claude/projects/.../catalog-key.priv | gh secret set CATALOG_PRIV_KEY \
-#       --repo oleksandrmaslov/iskra-catalog
+# Required GitHub environment:
+#   signing              configure Required reviewers and disallow self-review
 #
-# Also recommended:
-#   ISKRA_BOT_TOKEN    A GitHub PAT (or use the default GITHUB_TOKEN if all
-#                      firmware repos are public). Used to list & download
-#                      target.json from each firmware repo. Defaults to
-#                      GITHUB_TOKEN which has cross-repo read on public repos.
+# Required environment secret (on `signing`, not at repository scope):
+#   CATALOG_PRIV_KEY     base64 Ed25519 private-key file contents
+#
+# Optional repository secret:
+#   ISKRA_BOT_TOKEN      read-only token that can see every allowlisted private
+#                        firmware repo. Public repos work with GITHUB_TOKEN.
 
 name: regenerate catalog
 
 on:
   repository_dispatch:
     types: [firmware-released]
-  workflow_dispatch: {}      # manual "Run workflow" button as a backup
+  workflow_dispatch: {}
 
+# Default to read-only. Only the reviewer-gated publish job receives write.
 permissions:
-  contents: write            # we publish a new release here
+  contents: read
+
+concurrency:
+  group: iskra-catalog-publish
+  cancel-in-progress: false
 
 env:
   OWNER: oleksandrmaslov
-  ISKRA_APP_REF: main        # branch/tag of iskra-app to use the generator from
+  # Immutable reviewed iskra-app revision. Update intentionally after reviewing
+  # generator/signing changes; never point the signing path at a mutable branch.
+  ISKRA_APP_REF: 5da22c88f2ebddc48694e667fb2796f3dffa785a
 
 jobs:
-  rebuild:
+  build-unsigned-catalog:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout iskra-catalog
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Checkout iskra-app (for Iskra.Cli source)
-        uses: actions/checkout@v4
+      - name: Checkout reviewed iskra-app generator
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: oleksandrmaslov/iskra
           ref: ${{ env.ISKRA_APP_REF }}
           path: iskra-app
+          persist-credentials: false
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '8.0.x'
 
       - name: Restore Iskra.Cli
         run: dotnet restore iskra-app/src/Iskra.Cli/Iskra.Cli.csproj
 
-      - name: List *-firmware repos under ${{ env.OWNER }}
-        id: list_repos
-        env:
-          GH_TOKEN: ${{ secrets.ISKRA_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Validate firmware repository allowlist
         run: |
           set -euo pipefail
-          gh repo list "$OWNER" --limit 200 \
-              --json name,isArchived,visibility \
-              --jq '.[] | select(.isArchived == false) | select(.name | endswith("-firmware")) | .name' \
-              > repos.txt
-          echo "Found $(wc -l < repos.txt) firmware repo(s):"
+          if [ ! -f firmware-repos.txt ]; then
+            echo "::error::firmware-repos.txt is required (one approved repo name per line)" >&2
+            exit 1
+          fi
+          sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' firmware-repos.txt \
+            | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+            | sort -u > repos.txt
+          if [ ! -s repos.txt ]; then
+            echo "::error::firmware-repos.txt contains no repositories" >&2
+            exit 1
+          fi
+          if grep -Ev '^[A-Za-z0-9._-]+-firmware$' repos.txt; then
+            echo "::error::invalid repository name in firmware-repos.txt" >&2
+            exit 1
+          fi
+          echo "Approved firmware repositories:"
           cat repos.txt
 
-      - name: Pull target.json from each firmware repo's latest release
+      - name: Pull target.json from approved firmware releases
         env:
           GH_TOKEN: ${{ secrets.ISKRA_BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p targets
+          : > verified-assets.tsv
           while IFS= read -r repo; do
-            [ -z "$repo" ] && continue
             product="${repo%-firmware}"
-            # Walk all non-draft, non-prerelease releases
-            gh release list -R "$OWNER/$repo" --limit 50 --json tagName,isDraft,isPrerelease \
-              --jq '.[] | select(.isDraft == false) | .tagName' > tags.txt || true
+            gh release list -R "$OWNER/$repo" --limit 50 \
+              --json tagName,isDraft,isPrerelease \
+              --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName' > tags.txt
             while IFS= read -r tag; do
               [ -z "$tag" ] && continue
               dir="targets/${product}/${tag}"
               mkdir -p "$dir"
-              if gh release download "$tag" -R "$OWNER/$repo" -p 'target.json' -D "$dir" 2>/dev/null; then
-                echo "  ✓ ${product}/${tag}"
+              if gh release download "$tag" -R "$OWNER/$repo" \
+                   -p 'target.json' -D "$dir" 2>/dev/null; then
+                sidecar="$dir/target.json"
+                sidecar_product=$(jq -er '.product_id' "$sidecar")
+                version=$(jq -er '.version' "$sidecar")
+                part=$(jq -er '.part_number' "$sidecar")
+                kind=$(jq -er '.firmware_kind // "elf"' "$sidecar")
+                declared_sha=$(jq -er '.elf_sha256 | ascii_downcase' "$sidecar")
+                if [ "$sidecar_product" != "$product" ]; then
+                  echo "::error::${repo}@${tag}: product_id '$sidecar_product' does not match '$product'" >&2
+                  exit 1
+                fi
+                if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] \
+                   || [[ ! "$part" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]] \
+                   || [[ ! "$kind" =~ ^(elf|hex)$ ]] \
+                   || [[ ! "$declared_sha" =~ ^[0-9a-f]{64}$ ]]; then
+                  echo "::error::${repo}@${tag}: unsafe or invalid target.json release fields" >&2
+                  exit 1
+                fi
+                asset="${product}_v${version}_${part}.${kind}"
+                gh release download "$tag" -R "$OWNER/$repo" \
+                  -p "$asset" -D "$dir"
+                actual_sha=$(sha256sum "$dir/$asset" | awk '{print $1}')
+                if [ "$actual_sha" != "$declared_sha" ]; then
+                  echo "::error::${repo}@${tag}: $asset SHA-256 does not match target.json" >&2
+                  exit 1
+                fi
+                printf '%s\t%s\t%s\t%s\n' "$repo" "$tag" "$asset" "$actual_sha" \
+                  >> verified-assets.tsv
+                rm -f "$dir/$asset"
+                echo "  verified ${product}/${tag}: ${asset}"
               else
-                echo "  · ${product}/${tag} — no target.json asset, skipping"
+                echo "  skipped ${product}/${tag}: no target.json"
                 rm -rf "$dir"
               fi
             done < tags.txt
           done < repos.txt
-          echo "Staged target.json files:"
-          find targets -name target.json -print
 
-      - name: Generate catalog.json
-        run: |
-          set -euo pipefail
-          # --strict-tag-match: refuse to build if any target.json's version
-          # field disagrees with its release tag directory (catches stale
-          # assets re-uploaded onto a bumped tag — see iskra CLAUDE.md).
-          # --revoked: optional sidecar (revoked.json at the iskra-catalog
-          # repo root) listing { product_id, version, reason } entries. The
-          # signed catalog carries this list; the app refuses to flash any
-          # listed release. Maintained by hand by the catalog owner.
-          REVOKED_ARGS=""
-          if [ -f revoked.json ]; then
-            REVOKED_ARGS="--revoked revoked.json"
-            echo "Including revocation list from revoked.json"
-          fi
-          dotnet run --project iskra-app/src/Iskra.Cli --no-restore \
-            -- --generate-catalog \
-               --from-targets targets \
-               --out catalog.json \
-               --owner "$OWNER" \
-               --strict-tag-match \
-               $REVOKED_ARGS
-          ls -la catalog.json
-          cat catalog.json | head -50
-
-      - name: Sign catalog.json
-        env:
-          PRIV_B64: ${{ secrets.CATALOG_PRIV_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${PRIV_B64:-}" ]; then
-            echo "::error::CATALOG_PRIV_KEY secret is not set" >&2
-            exit 1
-          fi
-          echo "$PRIV_B64" > catalog-key.priv
-          dotnet run --project iskra-app/src/Iskra.Cli --no-restore \
-            -- --sign-catalog catalog.json --private-key catalog-key.priv
-          rm -f catalog-key.priv
-          ls -la catalog.json.sig
-
-      - name: Compute next release tag (UTC date+seq)
-        id: tag
-        run: |
-          set -euo pipefail
-          DATE=$(date -u +%Y%m%d-%H%M%S)
-          TAG="catalog-${DATE}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Publish as a new GitHub release
+      - name: Download previous published catalog for immutability check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          NOTES="Auto-generated catalog ($(date -u +%FT%TZ)).\n\nSource event: ${{ github.event_name }}"
-          gh release create "${{ steps.tag.outputs.tag }}" \
-              --title "Iskra catalog ${{ steps.tag.outputs.tag }}" \
-              --notes "$NOTES" \
-              --latest \
-              catalog.json catalog.json.sig
+          mkdir -p previous
+          gh release download --repo "$GITHUB_REPOSITORY" \
+            --pattern 'catalog.json' --dir previous 2>/dev/null || true
+
+      - name: Generate unsigned catalog
+        run: |
+          set -euo pipefail
+          extra_args=()
+          if [ -f revoked.json ]; then
+            extra_args+=(--revoked revoked.json)
+          fi
+          dotnet run --project iskra-app/src/Iskra.Cli --no-restore -- \
+            --generate-catalog \
+            --from-targets targets \
+            --out catalog.json \
+            --owner "$OWNER" \
+            --strict-tag-match \
+            "${extra_args[@]}"
+
+      - name: Produce reviewer summary
+        run: |
+          set -euo pipefail
+          sha256sum catalog.json > catalog.sha256
+          python3 - <<'PY' | tee catalog-review.txt
+          import json
+          from pathlib import Path
+
+          catalog = json.loads(Path('catalog.json').read_text(encoding='utf-8'))
+          previous_path = Path('previous/catalog.json')
+          previous = (
+              json.loads(previous_path.read_text(encoding='utf-8'))
+              if previous_path.exists() else None
+          )
+
+          def releases_by_key(value):
+              return {
+                  (product['product_id'].lower(), release['version'].lower()): release
+                  for product in value.get('products', [])
+                  for release in product.get('releases', [])
+              }
+
+          if previous is not None:
+              old = releases_by_key(previous)
+              new = releases_by_key(catalog)
+              changed = []
+              for key in sorted(old.keys() & new.keys()):
+                  old_sha = old[key].get('elf_sha256', '').lower()
+                  new_sha = new[key].get('elf_sha256', '').lower()
+                  if old_sha != new_sha:
+                      changed.append((key, old_sha, new_sha))
+              if changed:
+                  for (product, version), old_sha, new_sha in changed:
+                      print(
+                          f'ERROR immutable release changed: {product} v{version} '
+                          f'{old_sha} -> {new_sha}'
+                      )
+                  raise SystemExit(
+                      'Refusing to replace firmware bytes under an existing version; '
+                      'publish a new version and revoke the old one.'
+                  )
+
+          print('generated_at:', catalog.get('generated_at'))
+          print('products:', len(catalog.get('products', [])))
+          print('revoked:', len(catalog.get('revoked', [])))
+          for product in catalog.get('products', []):
+              releases = product.get('releases', [])
+              versions = ', '.join(r.get('version', '?') for r in releases)
+              print(f"- {product.get('product_id', '?')}: {versions}")
+          PY
+          cat catalog.sha256
+
+      - name: Upload unsigned catalog for signing review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-catalog
+          path: |
+            catalog.json
+            catalog.sha256
+            catalog-review.txt
+            verified-assets.tsv
+          if-no-files-found: error
+          retention-days: 3
+
+  sign-and-publish:
+    needs: build-unsigned-catalog
+    runs-on: ubuntu-latest
+    # The private key exists only in this environment. Configure Required
+    # reviewers so a maintainer can inspect the unsigned-catalog artifact first.
+    environment: signing
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout reviewed iskra-app signer
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: oleksandrmaslov/iskra
+          ref: ${{ env.ISKRA_APP_REF }}
+          path: iskra-app
+          persist-credentials: false
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore Iskra.Cli
+        run: dotnet restore iskra-app/src/Iskra.Cli/Iskra.Cli.csproj
+
+      - name: Download approved unsigned catalog
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: unsigned-catalog
+
+      - name: Verify artifact digest
+        run: sha256sum --check catalog.sha256
+
+      - name: Sign catalog
+        env:
+          PRIV_B64: ${{ secrets.CATALOG_PRIV_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ -z "${PRIV_B64:-}" ]; then
+            echo "::error::CATALOG_PRIV_KEY environment secret is not set" >&2
+            exit 1
+          fi
+          trap 'rm -f catalog-key.priv' EXIT
+          printf '%s' "$PRIV_B64" > catalog-key.priv
+          dotnet run --project iskra-app/src/Iskra.Cli --no-restore -- \
+            --sign-catalog catalog.json --private-key catalog-key.priv
+
+      - name: Compute release tag
+        id: tag
+        run: echo "tag=catalog-$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish signed catalog release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          notes="Reviewer-approved signed catalog. Source event: ${SOURCE_EVENT}"
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Iskra catalog $RELEASE_TAG" \
+            --notes "$notes" \
+            --latest \
+            catalog.json catalog.json.sig

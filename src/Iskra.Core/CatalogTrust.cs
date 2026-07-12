@@ -24,6 +24,20 @@ public enum CatalogTrustResult
 public static class CatalogTrust
 {
     /// <summary>
+    /// Explicit opt-in used only on development/lab stations to unlock
+    /// unsigned catalog and sideload controls. Production/operator processes
+    /// must leave this unset.
+    /// </summary>
+    public const string UnsignedLabModeEnvironmentVariable = "ISKRA_LAB_ALLOW_UNSIGNED_CATALOG";
+
+    public static bool IsUnsignedLabModeEnabled()
+    {
+        var value = Environment.GetEnvironmentVariable(UnsignedLabModeEnvironmentVariable);
+        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Base64-encoded Ed25519 public key embedded in the app.
     /// <para>This is the DEV key. The matching private key lives at
     /// <c>~/.claude/projects/c--Users-Alexandr-iskra/keys/catalog-key.priv</c>

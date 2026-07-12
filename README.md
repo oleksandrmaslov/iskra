@@ -1,10 +1,13 @@
 # Iskra
 
-Production Windows flashing tool for ARM Cortex-M targets supported by Black
-Magic Probe. It drives the probe through `arm-none-eabi-gdb`, validates signed
-firmware catalog metadata, and logs every flash attempt to SQLite.
+Factory flashing tool for ARM Cortex-M targets supported by Black Magic Probe.
+It drives the probe through `arm-none-eabi-gdb`, validates signed firmware
+catalog metadata, and logs every flash attempt to SQLite.
 
-> **Status:** WPF app, CLI, catalog/signature flow, logging, and installer are in place.
+> **Status (2026-07-12):** the Windows WPF app, CLI, catalog/signature flow,
+> logging, and installer are in place. Cross-platform work has started, but the
+> audited build remains lab-ready rather than factory-production-ready until
+> the gates in [`ROADMAP.md`](ROADMAP.md) are closed.
 
 ## Repository layout
 
@@ -13,7 +16,7 @@ Iskra.sln
 src/
   Iskra.Core/       Class library: services, state machine, models
   Iskra.Cli/        Console flasher
-  Iskra.Wpf/        Operator UI
+  Iskra.Wpf/        Current Windows operator UI
 tests/
   Iskra.Core.Tests/ xUnit tests for the Core library
 installer/
@@ -21,12 +24,17 @@ installer/
   Bundle.wxs        Factory setup bundle
 ```
 
-## Prerequisites
+## Current Windows app prerequisites
 
 - Windows 10 / 11
 - .NET 8 SDK for development builds
 - ARM GNU Toolchain for development runs, unless using the setup bundle
 - A Black Magic Probe attached to the target board
+
+The planned native Windows/Linux/macOS Avalonia UI, platform adapters, release
+order, and final security gates are tracked in [`ROADMAP.md`](ROADMAP.md).
+Requirements for the new owner-provided logos and brand system are in
+[`docs/BRANDING_ASSET_REQUIREMENTS.md`](docs/BRANDING_ASSET_REQUIREMENTS.md).
 
 ## Installer
 
@@ -105,6 +113,11 @@ dotnet run --project src/Iskra.Cli -- `
   --batch Lot-2026-05-25-A
 ```
 
+Signed catalogs are required by default. Unsigned sideloading requires both
+`--allow-unsigned-catalog` and the explicit lab-only environment variable
+`ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1`; raw `--elf` mode additionally requires
+`--allow-manual-flash`. Never set the variable on an operator station.
+
 ## Test
 
 ```powershell
@@ -112,7 +125,8 @@ $env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
 dotnet test
 ```
 
-Detailed design and sprint status live in `CLAUDE.md`.
+Historical sprint handoff details live in `CLAUDE.md`; new work and acceptance
+criteria live in `ROADMAP.md`.
 
 ## License
 

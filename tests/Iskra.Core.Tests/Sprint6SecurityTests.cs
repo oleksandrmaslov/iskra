@@ -134,6 +134,27 @@ public class Sprint6SecurityTests
     }
 
     [Fact]
+    public void CachedGeneratedAt_fails_closed_when_floor_file_is_corrupt()
+    {
+        var cacheDir = Path.Combine(Path.GetTempPath(), $"iskra-floor-bad-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(cacheDir);
+            File.WriteAllText(Path.Combine(cacheDir, RemoteCatalogClient.GeneratedAtFileName),
+                "not-a-timestamp");
+            using var http = new HttpClient(new NoopHandler());
+            var client = new RemoteCatalogClient(
+                http, "test", "catalog", cacheDir, enforceAllowlist: false);
+
+            Assert.Equal(DateTime.MaxValue, client.CachedGeneratedAt());
+        }
+        finally
+        {
+            if (Directory.Exists(cacheDir)) Directory.Delete(cacheDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task FetchAsync_rejects_signed_catalog_older_than_cached_floor()
     {
         var cacheDir = Path.Combine(Path.GetTempPath(), $"iskra-cache-{Guid.NewGuid():N}");

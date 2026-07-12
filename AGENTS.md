@@ -1,6 +1,6 @@
-# CLAUDE.md — Iskra
+# AGENTS.md — Iskra
 
-Session handoff. Read this fully at the start of any new Claude session in this repo.
+Session handoff. Read this fully at the start of any new Codex session in this repo.
 
 ---
 
@@ -60,7 +60,7 @@ Open Sprint 1 item is bench-time only, not code:
 
 1. ✅ **Lock-in + catalog data model** — `Catalog` / `Product` /
    `FirmwareRelease` / `TargetDescriptor` records; `CatalogJson` parser with
-   validation; real-BMP fixture test; CLAUDE.md `bmp_match` corrected to
+   validation; real-BMP fixture test; AGENTS.md `bmp_match` corrected to
    `"PY32Fxxx"`.
 2. ✅ **CLI catalog resolution** — `--catalog <path> --product <id>` resolves
    `--target` / `--flash-kb` / `--firmware-version` / `--firmware-sha256`
@@ -700,7 +700,7 @@ repo name alone.
 - **Ask before visible/destructive actions:** pushing to GitHub, installing
   toolchains, force operations. Local edits and builds can proceed freely.
 - **Batch decisions** via `AskUserQuestion` (2–4 questions in one tool call).
-- **Save quirks to `~/.claude/memory`** when discovered (this machine's PATH,
+- **Save quirks to `~/.Codex/memory`** when discovered (this machine's PATH,
   user email mismatch, lab-vs-personal profile split — all caught here, all
   worth remembering).
 
@@ -730,7 +730,7 @@ repo name alone.
 
 ## Memory file (firmware repo)
 
-The firmware-side Claude has a project memory at
-`~/.claude/projects/c--Users-Alexandr-py32f0-template-project/memory/iskra_project.md`
+The firmware-side Codex has a project memory at
+`~/.Codex/projects/c--Users-Alexandr-py32f0-template-project/memory/iskra_project.md`
 pointing at this repo. Keep both in sync: if you change a decision here,
 update that file too.

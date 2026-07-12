@@ -37,8 +37,37 @@ if (args.Contains("--whoami"))
 if (args.Contains("--ship-logs-now"))
     return await ShipLogsNowAsync(args);
 
-bool requireSigned = args.Contains("--require-signed-catalog");
-args = args.Where(a => a != "--require-signed-catalog").ToArray();
+// Production-safe default: catalog files must be signed. Unsigned catalogs
+// and sideload directories require an explicit lab-only override.
+bool allowUnsigned = args.Contains("--allow-unsigned-catalog");
+bool allowManualFlash = args.Contains("--allow-manual-flash");
+bool labMode = CatalogTrust.IsUnsignedLabModeEnabled();
+if ((allowUnsigned || allowManualFlash) && !labMode)
+{
+    Console.Error.WriteLine(
+        $"Помилка: лабораторний режим заблоковано. Лише на лабораторній станції задайте {CatalogTrust.UnsignedLabModeEnvironmentVariable}=1.");
+    return 2;
+}
+bool requireSigned = !allowUnsigned;
+var hasCatalog = args.Contains("--catalog");
+var hasSideload = args.Contains("--sideload-dir");
+if (!hasCatalog && !hasSideload && !allowManualFlash)
+{
+    Console.Error.WriteLine(
+        "Помилка: операторський режим вимагає підписаний --catalog. " +
+        "Для ручної лабораторної прошивки потрібні --allow-manual-flash і " +
+        $"{CatalogTrust.UnsignedLabModeEnvironmentVariable}=1.");
+    return 2;
+}
+args = args.Where(a => a is not "--require-signed-catalog"
+    and not "--allow-unsigned-catalog"
+    and not "--allow-manual-flash").ToArray();
+
+if (hasSideload && requireSigned)
+{
+    Console.Error.WriteLine("Помилка: sideload-каталог не підписано. Для лабораторної перевірки явно додайте --allow-unsigned-catalog.");
+    return 2;
+}
 
 int catIdx = Array.IndexOf(args, "--catalog");
 if (catIdx >= 0 && catIdx + 1 < args.Length)
@@ -51,10 +80,10 @@ if (catIdx >= 0 && catIdx + 1 < args.Length)
             Console.WriteLine("Підпис каталогу: ✓ (Ed25519)");
             break;
         case CatalogTrustResult.UnsignedAllowed:
-            Console.WriteLine("Підпис каталогу: відсутній (для production додайте --require-signed-catalog)");
+            Console.WriteLine("Підпис каталогу: відсутній (лабораторний режим --allow-unsigned-catalog)");
             break;
         case CatalogTrustResult.UnsignedRejected:
-            Console.Error.WriteLine("Помилка: каталог не підписано, --require-signed-catalog активний.");
+            Console.Error.WriteLine("Помилка: каталог не підписано; безпечний режим вимагає Ed25519-підпис.");
             return 2;
         case CatalogTrustResult.BadSignature:
             Console.Error.WriteLine("Помилка: підпис каталогу не співпадає з ключем у застосунку.");
@@ -121,6 +150,11 @@ if (resolution.Release?.IsRemote == true && !args.Contains("--elf"))
         Console.Error.WriteLine($"Помилка завантаження прошивки: {ex.Message}");
         return 5;
     }
+    catch (PlatformNotSupportedException ex)
+    {
+        Console.Error.WriteLine($"Помилка: {ex.Message}");
+        return 5;
+    }
 }
 
 bool dryRun = args.Contains("--dry-run");
@@ -176,12 +210,11 @@ switch (FirmwarePreflight.Check(opts.ElfPath, opts.FirmwareKind))
         return 4;
 }
 
-string? computedSha = null;
+var computedSha = FirmwareIntegrity.ComputeSha256Hex(opts.ElfPath);
 bool hashVerified = false;
 bool hashWasRequired = FirmwareIntegrity.IsValidSha256Hex(opts.FirmwareSha256);
 if (hashWasRequired)
 {
-    computedSha = FirmwareIntegrity.ComputeSha256Hex(opts.ElfPath);
     hashVerified = FirmwareIntegrity.HashesMatch(computedSha, opts.FirmwareSha256);
 }
 
@@ -244,7 +277,7 @@ if (hashWasRequired && !hashVerified)
             BatchId:         opts.Batch,
             ProductId:       opts.Product,
             FirmwareVersion: opts.FirmwareVersion,
-            FirmwareSha256:  opts.FirmwareSha256,
+            FirmwareSha256:  computedSha,
             TargetBmpMatch:  opts.TargetBmpMatch,
             TargetDetected:  null,
             TargetFlashKb:   opts.TargetFlashKb,
@@ -267,6 +300,57 @@ if (hashWasRequired && !hashVerified)
 }
 
 var dbPath = opts.DbPath ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db");
+
+// Atomically reserve the complete firmware identity before GDB touches the
+// target. A database/reservation failure is a hard stop, not a warning.
+try
+{
+    using var lockStore = new SqliteLogStore(dbPath);
+    var requested = new BatchLockDescriptor(
+        opts.Product,
+        opts.FirmwareVersion,
+        computedSha,
+        opts.TargetBmpMatch,
+        opts.TargetFlashKb);
+    var reservation = lockStore.ReserveBatchLock(opts.Batch, requested);
+    if (!reservation.IsAccepted)
+    {
+        var locked = reservation.Lock;
+        var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion} "
+            + $"sha256={ShortSha(locked.FirmwareSha256)}, attempted "
+            + $"{opts.Product} v{opts.FirmwareVersion} sha256={ShortSha(computedSha)}";
+        Console.Error.WriteLine($"Помилка: E_BATCH_LOCKED — {msg}");
+        Console.Error.WriteLine(ErrorHints.For("E_BATCH_LOCKED"));
+        lockStore.Append(new FlashAttemptRecord(
+            TsUtc:           DateTime.UtcNow,
+            Operator:        opts.Operator,
+            StationId:       opts.StationId,
+            BatchId:         opts.Batch,
+            ProductId:       opts.Product,
+            FirmwareVersion: opts.FirmwareVersion,
+            FirmwareSha256:  computedSha,
+            TargetBmpMatch:  opts.TargetBmpMatch,
+            TargetDetected:  null,
+            TargetFlashKb:   opts.TargetFlashKb,
+            ComPort:         opts.Port,
+            ProbeSerial:     probeSerial,
+            Power:           opts.Power,
+            ConnectRst:      opts.ConnectUnderReset,
+            BmpFrequencyHz:  opts.BmpFrequencyHz,
+            Result:          FlashResult.Fail,
+            ErrorCode:       "E_BATCH_LOCKED",
+            ErrorMessage:    msg,
+            DurationMs:      0,
+            GdbTail:         null));
+        return 1;
+    }
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"Помилка: E_BATCH_LOCK_CHECK_FAILED — {ex.Message}");
+    Console.Error.WriteLine(ErrorHints.For("E_BATCH_LOCK_CHECK_FAILED"));
+    return 1;
+}
 
 Console.WriteLine($"Прошивка: {opts.Product} v{opts.FirmwareVersion} → {opts.TargetBmpMatch} ({opts.Port})");
 Console.WriteLine($"Оператор: {opts.Operator} | Партія: {opts.Batch} | Станція: {opts.StationId}");
@@ -312,7 +396,7 @@ try
         BatchId:         opts.Batch,
         ProductId:       opts.Product,
         FirmwareVersion: opts.FirmwareVersion,
-        FirmwareSha256:  opts.FirmwareSha256,
+        FirmwareSha256:  computedSha,
         TargetBmpMatch:  opts.TargetBmpMatch,
         TargetDetected:  outcome.DetectedTarget,
         TargetFlashKb:   opts.TargetFlashKb,
@@ -335,6 +419,11 @@ catch (Exception ex)
 
 return outcome.IsPass ? 0 : 1;
 
+static string ShortSha(string value) =>
+    string.IsNullOrWhiteSpace(value)
+        ? "unknown"
+        : value[..Math.Min(12, value.Length)].ToLowerInvariant();
+
 static int GenKeypair(string[] args)
 {
     int i = Array.IndexOf(args, "--gen-keypair");
@@ -350,14 +439,77 @@ static int GenKeypair(string[] args)
     var privB64 = Convert.ToBase64String(kp.PrivateKey);
     var pubPath  = Path.Combine(dir, "catalog-key.pub");
     var privPath = Path.Combine(dir, "catalog-key.priv");
-    File.WriteAllText(pubPath,  pubB64);
-    File.WriteAllText(privPath, privB64);
+    if (File.Exists(pubPath) || File.Exists(privPath))
+    {
+        Console.Error.WriteLine("keypair already exists; refusing to overwrite catalog-key.pub/.priv");
+        return 2;
+    }
+    try
+    {
+        WriteNewKeyFile(privPath, privB64, privateKey: true);
+        WriteNewKeyFile(pubPath, pubB64, privateKey: false);
+    }
+    catch (Exception ex)
+    {
+        try { File.Delete(privPath); } catch { /* best effort */ }
+        try { File.Delete(pubPath); } catch { /* best effort */ }
+        Console.Error.WriteLine($"keypair write failed: {ex.Message}");
+        return 2;
+    }
     Console.WriteLine($"public key  → {pubPath}");
     Console.WriteLine($"private key → {privPath}");
     Console.WriteLine();
     Console.WriteLine("Public key (base64) — paste into CatalogTrust.EmbeddedPublicKeyBase64:");
     Console.WriteLine(pubB64);
     return 0;
+}
+
+static void WriteNewKeyFile(string path, string base64, bool privateKey)
+{
+    var options = new FileStreamOptions
+    {
+        Mode = FileMode.CreateNew,
+        Access = FileAccess.Write,
+        Share = FileShare.None,
+        Options = FileOptions.WriteThrough,
+    };
+    if (!OperatingSystem.IsWindows() && privateKey)
+        options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    using (var stream = new FileStream(path, options))
+    {
+        var bytes = Encoding.ASCII.GetBytes(base64);
+        stream.Write(bytes);
+        stream.Flush(flushToDisk: true);
+    }
+
+    if (!privateKey) return;
+    if (!OperatingSystem.IsWindows())
+    {
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        return;
+    }
+
+    // DPAPI is not relevant for an offline signing key. Restrict the newly
+    // created file to the current Windows identity and remove inherited ACLs.
+    var identity = $"{Environment.UserDomainName}\\{Environment.UserName}:(F)";
+    var psi = new System.Diagnostics.ProcessStartInfo
+    {
+        FileName = "icacls.exe",
+        UseShellExecute = false,
+        RedirectStandardError = true,
+        RedirectStandardOutput = true,
+        CreateNoWindow = true,
+    };
+    psi.ArgumentList.Add(path);
+    psi.ArgumentList.Add("/inheritance:r");
+    psi.ArgumentList.Add("/grant:r");
+    psi.ArgumentList.Add(identity);
+    using var process = System.Diagnostics.Process.Start(psi)
+        ?? throw new IOException("could not start icacls.exe");
+    process.WaitForExit();
+    if (process.ExitCode != 0)
+        throw new IOException($"icacls failed: {process.StandardError.ReadToEnd().Trim()}");
 }
 
 static int GenerateCatalog(string[] args)
@@ -449,6 +601,14 @@ static int SignCatalog(string[] args)
 
 static async Task<int> LoginAsync()
 {
+    if (!OperatingSystem.IsWindows())
+    {
+        Console.Error.WriteLine(
+            "Помилка: захищене сховище GitHub-токенів для цієї ОС ще не реалізовано. " +
+            "Не використовуйте незашифрований файл токенів.");
+        return 5;
+    }
+
     if (!GitHubAppConfig.IsConfigured)
     {
         Console.Error.WriteLine("Помилка: GitHub App Client ID не налаштовано (зверніться до розробника).");
@@ -508,6 +668,12 @@ static async Task<int> LoginAsync()
 
 static int Logout()
 {
+    if (!OperatingSystem.IsWindows())
+    {
+        Console.Error.WriteLine("GitHub-токени на цій ОС не зберігаються; захищене сховище ще не реалізовано.");
+        return 5;
+    }
+
     var store = new TokenStore();
     if (!store.Exists())
     {
@@ -526,6 +692,12 @@ static int Logout()
 
 static async Task<int> WhoamiAsync()
 {
+    if (!OperatingSystem.IsWindows())
+    {
+        Console.Error.WriteLine("Захищене сховище GitHub-токенів для цієї ОС ще не реалізовано.");
+        return 5;
+    }
+
     var store = new TokenStore();
     StoredTokens? stored;
     try { stored = store.Load(); }
@@ -659,6 +831,11 @@ static async Task<int> ShipLogsNowAsync(string[] args)
 
 static async Task<string> FetchRemoteFirmwareAsync(GitHubReleaseRef src, string expectedSha)
 {
+    if (!OperatingSystem.IsWindows())
+        throw new PlatformNotSupportedException(
+            "завантаження приватної прошивки потребує Keychain/libsecret; " +
+            "поки що використайте підписаний локальний каталог або sideload у лабораторії");
+
     using var http = new HttpClient();
     var flow = new GitHubDeviceFlow(http, GitHubAppConfig.ClientId);
     var store = new TokenStore();
@@ -728,28 +905,27 @@ static int Doctor(string[] args)
     Console.WriteLine("Перевірка станції Iskra");
     Console.WriteLine("====================");
 
-    if (OperatingSystem.IsWindows())
-        Pass("Windows", Environment.OSVersion.VersionString);
-    else
-        Fail("Windows", "потрібна Windows 10/11");
+    Pass("Операційна система", System.Runtime.InteropServices.RuntimeInformation.OSDescription);
 
     var appDir = AppContext.BaseDirectory;
-    var appExe = Path.Combine(appDir, "Iskra.exe");
-    var cliExe = Environment.ProcessPath ?? Path.Combine(appDir, "Iskra.Cli.exe");
+    var appFileName = OperatingSystem.IsWindows() ? "Iskra.exe" : "Iskra";
+    var cliFileName = OperatingSystem.IsWindows() ? "Iskra.Cli.exe" : "Iskra.Cli";
+    var appExe = Path.Combine(appDir, appFileName);
+    var cliExe = Environment.ProcessPath ?? Path.Combine(appDir, cliFileName);
 
     if (File.Exists(cliExe))
-        Pass("Iskra.Cli.exe", cliExe);
+        Pass(cliFileName, cliExe);
     else
-        Warn("Iskra.Cli.exe", "не вдалося підтвердити шлях поточного exe");
+        Warn(cliFileName, "не вдалося підтвердити шлях поточного executable");
 
     if (File.Exists(appExe))
-        Pass("Iskra.exe", appExe);
+        Pass(appFileName, appExe);
     else
-        Warn("Iskra.exe", "не поруч із CLI; після MSI має бути поруч");
+        Warn(appFileName, "графічний застосунок не знайдено поруч із CLI");
 
     var gdbPath = GdbDiscovery.Find(ArgValue(args, "--gdb-path"));
     if (gdbPath is null)
-        Fail("Arm GNU Toolchain", "arm-none-eabi-gdb.exe не знайдено; повторно запустіть інсталятор Iskra");
+        Fail("Arm GNU Toolchain", "arm-none-eabi-gdb не знайдено у PATH або за --gdb-path");
     else
         Pass("Arm GNU Toolchain", gdbPath);
 
@@ -757,13 +933,13 @@ static int Doctor(string[] args)
     switch (probes.Count)
     {
         case 0:
-            Fail("Black Magic Probe", "GDB COM-порт не знайдено");
+            Fail("Black Magic Probe", "GDB endpoint не знайдено; перевірте USB/udev або вкажіть --port");
             break;
         case 1:
             Pass("Black Magic Probe", $"{probes[0].PortName} {probes[0].FriendlyName}");
             break;
         default:
-            Warn("Black Magic Probe", $"знайдено {probes.Count} GDB COM-порти; виберіть порт явно");
+            Warn("Black Magic Probe", $"знайдено {probes.Count} GDB endpoints; виберіть --port явно");
             foreach (var p in probes)
                 Console.WriteLine($"       {p.PortName} {p.FriendlyName}");
             break;
@@ -833,20 +1009,27 @@ static int Doctor(string[] args)
     else
         Fail("%PROGRAMDATA%\\Iskra", programDataError ?? "немає доступу на запис");
 
-    var tokenStore = new TokenStore();
-    try
+    if (OperatingSystem.IsWindows())
     {
-        var tokens = tokenStore.Load();
-        if (tokens is null)
-            Warn("GitHub auth", "немає входу; виконайте Iskra.Cli --login перед завантаженням приватних прошивок");
-        else if (tokens.RefreshTokenIsExpired(DateTime.UtcNow))
-            Fail("GitHub auth", "refresh token застарів; виконайте Iskra.Cli --login");
-        else
-            Pass("GitHub auth", tokenStore.Path);
+        var tokenStore = new TokenStore();
+        try
+        {
+            var tokens = tokenStore.Load();
+            if (tokens is null)
+                Warn("GitHub auth", "немає входу; виконайте Iskra.Cli --login перед завантаженням приватних прошивок");
+            else if (tokens.RefreshTokenIsExpired(DateTime.UtcNow))
+                Fail("GitHub auth", "refresh token застарів; виконайте Iskra.Cli --login");
+            else
+                Pass("GitHub auth", tokenStore.Path);
+        }
+        catch (Exception ex) when (ex is TokenStoreException or IOException or UnauthorizedAccessException)
+        {
+            Fail("GitHub auth", ex.Message);
+        }
     }
-    catch (Exception ex) when (ex is TokenStoreException or IOException or UnauthorizedAccessException)
+    else
     {
-        Fail("GitHub auth", ex.Message);
+        Warn("GitHub auth", "Keychain/libsecret adapter ще не реалізовано; приватні релізи недоступні");
     }
 
     Console.WriteLine();
@@ -912,19 +1095,20 @@ static void PrintUsage()
           Iskra.Cli --catalog <path> --product <id>
                             --operator <name> --batch <id>
                             [--firmware-version <ver>]   (інакше default release)
-                            [--port <COMxx>]              (авто якщо один BMP)
+                            [--port <endpoint>]           (авто якщо один BMP)
                             [...]
 
         Usage (sideload для лабораторних ELF/HEX без підписаного каталогу):
-          Iskra.Cli --sideload-dir <folder> --product <id>
+          Iskra.Cli --allow-unsigned-catalog
+                    --sideload-dir <folder> --product <id>
                             --operator <name> --batch <id>
                             [--firmware-version <ver>] [--dry-run]
 
         Usage (повний ручний режим — для розробки / без каталогу):
-          Iskra.Cli --elf <path>
+          Iskra.Cli --allow-manual-flash --elf <path>
                             --product <id> --target <bmp-match> --flash-kb <N>
                             --operator <name> --batch <id>
-                            [--port <COMxx>]
+                            [--port <endpoint>]
                             [--station-id <id>]
                             [--firmware-version <ver>] [--firmware-sha256 <hex>]
                             [--firmware-kind {elf|hex}]
@@ -940,8 +1124,9 @@ static void PrintUsage()
         Авторизація GitHub (Sprint 3):
           Iskra.Cli --login          OAuth Device Flow: відкрити URL,
                                      ввести код, дочекатися підтвердження.
-                                     Токени зберігаються зашифровано (DPAPI)
-                                     в %PROGRAMDATA%\Iskra\auth.bin.
+                                     На Windows токени зберігаються через DPAPI
+                                     в %PROGRAMDATA%\Iskra\auth.bin; для інших
+                                     ОС secure-store adapter ще не реалізовано.
           Iskra.Cli --logout         видалити збережені токени.
           Iskra.Cli --whoami         показати GitHub-користувача та строки дії.
 
@@ -952,8 +1137,12 @@ static void PrintUsage()
                                      Журнал та ключ беруться з налаштувань.
 
         Підпис каталогу (Sprint 2):
-          [--require-signed-catalog]   обовʼязковий Ed25519-підпис .sig поруч
-                                       з catalog.json; інакше відмова.
+          Ed25519-підпис .sig поруч із catalog.json обовʼязковий за замовчуванням.
+          [--allow-unsigned-catalog]   НЕБЕЗПЕЧНИЙ лабораторний override для
+                                       локального sideload; також вимагає
+                                       ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1.
+          [--allow-manual-flash]       Дозволяє ручний --elf без каталогу;
+                                       також лише з цією змінною лабораторії.
 
         Каталог підставляє --target / --flash-kb / --firmware-version /
         --firmware-sha256 / --firmware-kind / --elf і, якщо задано в target,

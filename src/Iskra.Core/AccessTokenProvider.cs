@@ -1,5 +1,3 @@
-using System.Runtime.Versioning;
-
 namespace Iskra.Core;
 
 public sealed class NotSignedInException : Exception
@@ -15,23 +13,22 @@ public sealed class RefreshTokenExpiredException : Exception
 
 /// <summary>
 /// One-stop "give me a valid access token, refreshing-and-saving if needed."
-/// Composition of <see cref="TokenStore"/> and <see cref="GitHubDeviceFlow"/>:
+/// Composition of <see cref="ITokenStore"/> and <see cref="GitHubDeviceFlow"/>:
 /// loads stored tokens, returns the cached access token if still fresh,
 /// otherwise calls <c>refresh_token</c>, persists the *rotated* refresh
 /// token + new access token, and returns the access token.
 /// </summary>
-[SupportedOSPlatform("windows")]
 public sealed class AccessTokenProvider
 {
     private static readonly TimeSpan DefaultRefreshSkew = TimeSpan.FromMinutes(5);
 
-    private readonly TokenStore _store;
+    private readonly ITokenStore _store;
     private readonly GitHubDeviceFlow _flow;
     private readonly Func<DateTime> _now;
     private readonly TimeSpan _refreshSkew;
 
     public AccessTokenProvider(
-        TokenStore store,
+        ITokenStore store,
         GitHubDeviceFlow flow,
         Func<DateTime>? now = null,
         TimeSpan? refreshSkew = null)

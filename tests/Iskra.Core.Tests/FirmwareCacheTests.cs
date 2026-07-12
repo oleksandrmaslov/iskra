@@ -60,6 +60,72 @@ public class FirmwareCacheTests : IDisposable
     }
 
     [Fact]
+    public void PathFor_canonicalizes_noncanonical_root_override()
+    {
+        var api = new GitHubReleaseAssetClient(new HttpClient(new StubHandler()));
+        var cache = new FirmwareCache(
+            api,
+            _ => Task.FromResult("tok"),
+            Path.Combine(_root, "unused", ".."));
+
+        Assert.Equal(
+            Path.Combine(Path.GetFullPath(_root), "o_r", Src.Tag, Src.Asset),
+            cache.PathFor(Src));
+    }
+
+    [Theory]
+    [InlineData("../r", "v1.0.0", "firmware.elf")]
+    [InlineData("o\\r", "v1.0.0", "firmware.elf")]
+    [InlineData("o/r/extra", "v1.0.0", "firmware.elf")]
+    [InlineData("o/r", "..", "firmware.elf")]
+    [InlineData("o/r", "release/v1.0.0", "firmware.elf")]
+    [InlineData("o/r", "release\\v1.0.0", "firmware.elf")]
+    [InlineData("o/r", ".. ", "firmware.elf")]
+    [InlineData("o/r", "v1.0.0", "..")]
+    [InlineData("o/r", "v1.0.0", "nested/firmware.elf")]
+    [InlineData("o/r", "v1.0.0", "nested\\firmware.elf")]
+    [InlineData("o/r", "v1.0.0", "firmware.elf.")]
+    [InlineData("o/r", "v1.0.0", "C:\\outside.elf")]
+    public void PathFor_rejects_unsafe_repo_tag_or_asset(
+        string repo, string tag, string asset)
+    {
+        var (cache, _, _) = NewCache();
+
+        Assert.Throws<ArgumentException>(() =>
+            cache.PathFor(new GitHubReleaseRef(repo, tag, asset)));
+    }
+
+    [Fact]
+    public async Task Traversal_asset_is_rejected_without_deleting_file_outside_root()
+    {
+        var (cache, h, calls) = NewCache();
+        var outside = Path.Combine(
+            Path.GetDirectoryName(_root)!, $"iskra-fwcache-marker-{Guid.NewGuid():N}.elf");
+
+        // Make the intermediate directories exist so the old
+        // root/o_r/tag/../../../marker path would resolve to this file.
+        Directory.CreateDirectory(Path.Combine(_root, "o_r", Src.Tag));
+        File.WriteAllText(outside, "must-survive");
+        try
+        {
+            var traversal = Path.Combine("..", "..", "..", Path.GetFileName(outside));
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                cache.GetOrDownloadAsync(
+                    new GitHubReleaseRef(Src.Repo, Src.Tag, traversal),
+                    new string('a', 64)));
+
+            Assert.Equal("must-survive", File.ReadAllText(outside));
+            Assert.Empty(h.Requests);
+            Assert.Empty(calls);
+        }
+        finally
+        {
+            if (File.Exists(outside)) File.Delete(outside);
+        }
+    }
+
+    [Fact]
     public async Task Cache_miss_downloads_then_verifies_then_returns_path()
     {
         var (bytes, sha) = SyntheticElf("hello-world-elf-payload");
@@ -124,6 +190,45 @@ public class FirmwareCacheTests : IDisposable
 
         Assert.False(File.Exists(cache.PathFor(Src) + ".tmp"));
         Assert.False(File.Exists(cache.PathFor(Src)));
+        AssertNoDownloadTemps();
+    }
+
+    [Fact]
+    public async Task Failed_replacement_preserves_existing_mismatched_destination()
+    {
+        var staleBytes = Encoding.UTF8.GetBytes("stale-but-must-survive");
+        var (downloadedBytes, _) = SyntheticElf("downloaded-with-wrong-hash");
+        var (_, expectedSha) = SyntheticElf("the-expected-replacement");
+        var (cache, _, _) = NewCache(
+            JsonResp(ReleaseJson(Src.Asset, "https://api/asset/1")),
+            BinaryResp(downloadedBytes));
+        var dest = cache.PathFor(Src);
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+        File.WriteAllBytes(dest, staleBytes);
+
+        await Assert.ThrowsAsync<FirmwareCacheException>(() =>
+            cache.GetOrDownloadAsync(Src, expectedSha));
+
+        Assert.Equal(staleBytes, File.ReadAllBytes(dest));
+        AssertNoDownloadTemps();
+    }
+
+    [Fact]
+    public async Task Download_does_not_use_or_remove_predictable_destination_temp_file()
+    {
+        var (bytes, sha) = SyntheticElf("verified-replacement");
+        var (cache, _, _) = NewCache(
+            JsonResp(ReleaseJson(Src.Asset, "https://api/asset/1")),
+            BinaryResp(bytes));
+        var dest = cache.PathFor(Src);
+        var legacyTemp = dest + ".tmp";
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+        File.WriteAllText(legacyTemp, "unrelated-sentinel");
+
+        await cache.GetOrDownloadAsync(Src, sha);
+
+        Assert.Equal("unrelated-sentinel", File.ReadAllText(legacyTemp));
+        AssertNoDownloadTemps();
     }
 
     [Fact]
@@ -197,6 +302,13 @@ public class FirmwareCacheTests : IDisposable
         resp.Content.Headers.ContentType =
             new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
         return resp;
+    }
+
+    private void AssertNoDownloadTemps()
+    {
+        var tempRoot = Path.Combine(_root, ".tmp");
+        if (Directory.Exists(tempRoot))
+            Assert.Empty(Directory.EnumerateFiles(tempRoot, "*", SearchOption.AllDirectories));
     }
 
     private sealed class StubHandler : HttpMessageHandler

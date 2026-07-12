@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- Security/reproducibility: commit resolved transitive dependencies and
+         make CI/release restores fail when project files drift from the lock. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>

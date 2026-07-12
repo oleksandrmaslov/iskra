@@ -79,15 +79,18 @@ public class SqliteLogStoreQueryTests
     }
 
     [Fact]
-    public void GetBatchLock_returns_first_product_version_for_known_batch()
+    public void GetBatchLock_returns_complete_identity_for_known_batch()
     {
         using var store = new SqliteLogStore(":memory:");
         store.Append(Sample(batchId: "A") with { ProductId = "ci-clop", FirmwareVersion = "1.0.0" });
         store.Append(Sample(batchId: "A") with { ProductId = "ci-clop", FirmwareVersion = "1.0.0" });
         var locked = store.GetBatchLock("A");
         Assert.NotNull(locked);
-        Assert.Equal("ci-clop", locked!.Value.ProductId);
-        Assert.Equal("1.0.0", locked.Value.FirmwareVersion);
+        Assert.Equal("ci-clop", locked!.ProductId);
+        Assert.Equal("1.0.0", locked.FirmwareVersion);
+        Assert.Equal(Sample().FirmwareSha256, locked.FirmwareSha256);
+        Assert.Equal("PY32Fxxx", locked.TargetBmpMatch);
+        Assert.Equal(32, locked.TargetFlashKb);
     }
 
     [Fact]
@@ -103,8 +106,8 @@ public class SqliteLogStoreQueryTests
 
         var locked = store.GetBatchLock("B");
         Assert.NotNull(locked);
-        Assert.Equal("ci-clop", locked!.Value.ProductId);
-        Assert.Equal("1.0.0", locked.Value.FirmwareVersion);
+        Assert.Equal("ci-clop", locked!.ProductId);
+        Assert.Equal("1.0.0", locked.FirmwareVersion);
     }
 
     [Fact]

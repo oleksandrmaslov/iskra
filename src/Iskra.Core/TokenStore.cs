@@ -12,6 +12,20 @@ public sealed class TokenStoreException : Exception
 }
 
 /// <summary>
+/// Persistence boundary for GitHub Device Flow credentials. Platform-neutral
+/// orchestration depends on this contract; each desktop platform must provide
+/// an encrypted implementation (never a plaintext fallback).
+/// </summary>
+public interface ITokenStore
+{
+    string Path { get; }
+    bool Exists();
+    StoredTokens? Load();
+    void Save(StoredTokens tokens);
+    void Delete();
+}
+
+/// <summary>
 /// Encrypted-on-disk snapshot of the GitHub OAuth tokens for this station.
 /// Stored as JSON inside a DPAPI-encrypted blob. Refresh tokens rotate on
 /// every refresh; <see cref="TokenStore.Save"/> always overwrites.
@@ -55,7 +69,7 @@ public sealed record StoredTokens(
 /// <para>Atomic write: serialize → encrypt → write to <c>.tmp</c> → rename.</para>
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class TokenStore
+public sealed class TokenStore : ITokenStore
 {
     public const string DefaultDirectoryName = "Iskra";
     public const string DefaultFileName      = "auth.bin";

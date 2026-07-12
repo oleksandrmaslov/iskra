@@ -29,6 +29,9 @@ public sealed record GdbRunResult(
 /// </summary>
 public class GdbProcess
 {
+    public const int MaxCapturedLines = 10_000;
+    public const int MaxCapturedLineChars = 16_384;
+
     private readonly string _gdbExe;
 
     public GdbProcess(string gdbExe)
@@ -57,14 +60,20 @@ public class GdbProcess
         };
         foreach (var a in processArgs) psi.ArgumentList.Add(a);
 
-        var lines = new List<GdbLine>();
+        var lines = new Queue<GdbLine>();
         var sync = new object();
 
         void Capture(string? text, GdbStream stream)
         {
             if (text is null) return;
+            if (text.Length > MaxCapturedLineChars)
+                text = text[..MaxCapturedLineChars] + "…[truncated]";
             var line = new GdbLine(DateTime.UtcNow, stream, text);
-            lock (sync) lines.Add(line);
+            lock (sync)
+            {
+                if (lines.Count == MaxCapturedLines) lines.Dequeue();
+                lines.Enqueue(line);
+            }
             onLine?.Invoke(line);
         }
 
@@ -87,12 +96,20 @@ public class GdbProcess
         {
             await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            timedOut = true;
-            try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
-            try { await proc.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false); }
-            catch { /* swallow */ }
+            var callerCancelled = ct.IsCancellationRequested;
+            timedOut = !callerCancelled;
+            await TerminateProcessTreeAsync(proc).ConfigureAwait(false);
+            if (callerCancelled) throw;
+        }
+        catch
+        {
+            // Any exceptional exit must release the probe. In particular, app
+            // shutdown/caller cancellation must not leave GDB running against
+            // a target in the background.
+            await TerminateProcessTreeAsync(proc).ConfigureAwait(false);
+            throw;
         }
 
         sw.Stop();
@@ -108,6 +125,22 @@ public class GdbProcess
             TimedOut: timedOut,
             Duration: sw.Elapsed,
             Output: snapshot);
+    }
+
+    private static async Task TerminateProcessTreeAsync(Process proc)
+    {
+        try
+        {
+            if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+        }
+        catch { /* best-effort termination */ }
+
+        try
+        {
+            if (!proc.HasExited)
+                await proc.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch { /* process may already be gone */ }
     }
 
     /// <summary>

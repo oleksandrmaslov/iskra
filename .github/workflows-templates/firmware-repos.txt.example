@@ -1,0 +1,5 @@
+# Copy to the iskra-catalog repository root as firmware-repos.txt.
+# One explicitly approved repository name per line. Adding a repository widens
+# what the catalog signing workflow may trust, so review this file via PR.
+ci-clop-firmware
+venovisor-firmware

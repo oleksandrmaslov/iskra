@@ -89,6 +89,22 @@ public class FlashStateMachineTests
     }
 
     [Fact]
+    public void Multiple_targets_are_rejected_even_when_one_matches()
+    {
+        var outcome = FlashStateMachine.ClassifyScan(Run(new[]
+        {
+            "Available Targets:",
+            "No. Att Driver",
+            " 1      STM32F103",
+            " 2      PY32Fxxx M0+",
+            "",
+        }), "PY32Fxxx");
+
+        Assert.NotNull(outcome);
+        Assert.Equal("E_MULTIPLE_TARGETS", outcome!.ErrorCode);
+    }
+
+    [Fact]
     public void Usb_error_yields_probe_not_found()
     {
         var outcome = FlashStateMachine.Classify(Run(new[]
@@ -148,6 +164,18 @@ public class FlashStateMachineTests
             // no Loading section / no compare-sections
         }, exitCode: 1), "PY32F002A");
         Assert.Equal("E_LOAD_FAILED", outcome.ErrorCode);
+    }
+
+    [Fact]
+    public void Every_loaded_section_must_have_a_matching_verify_result()
+    {
+        var lines = HappyPath.Where(l =>
+            !l.StartsWith("Section .data,", StringComparison.Ordinal));
+
+        var outcome = FlashStateMachine.Classify(Run(lines), "PY32F002A");
+
+        Assert.Equal("E_VERIFY_MISMATCH", outcome.ErrorCode);
+        Assert.Contains(".data", outcome.ErrorMessage);
     }
 
     [Fact]
@@ -397,6 +425,26 @@ public class FlashStateMachineTests
 
         Assert.Equal("E_TARGET_MISMATCH", outcome.ErrorCode);
         Assert.Equal(1, fake.ScanCalls);
+        Assert.Equal(0, fake.FlashCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_never_flashes_when_scan_has_multiple_targets()
+    {
+        var fake = new FakeGdbProcess();
+        fake.ScanResults.Enqueue(Run(new[]
+        {
+            "Available Targets:",
+            "No. Att Driver",
+            " 1      PY32Fxxx M0+",
+            " 2      STM32F103",
+            "",
+        }));
+
+        var outcome = await FlashStateMachine.RunAsync(
+            fake, MakeOptions(), TimeSpan.FromSeconds(15));
+
+        Assert.Equal("E_MULTIPLE_TARGETS", outcome.ErrorCode);
         Assert.Equal(0, fake.FlashCalls);
     }
 

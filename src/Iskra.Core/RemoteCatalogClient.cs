@@ -33,7 +33,7 @@ public enum RemoteCatalogStatus
     AssetsMissing,        // release doesn't have catalog.json + catalog.json.sig
     ParseError,           // catalog.json downloaded but failed to parse
     SourceNotAllowed,     // owner/repo isn't in CatalogTrust.AllowedCatalogSources
-    RollbackRejected,     // signed catalog's generated_at < last accepted (anti-rollback)
+    RollbackRejected,     // signed catalog's generated_at <= last accepted (anti-rollback)
 }
 
 /// <summary>
@@ -60,19 +60,23 @@ public sealed class RemoteCatalogClient
     public const string ApiBaseUrl  = "https://api.github.com";
     public const string ApiAccept   = "application/vnd.github+json";
     public const string ApiVersion  = "2022-11-28";
+    public const int MaxReleaseMetadataBytes = 1 * 1024 * 1024;
+    public const int MaxCatalogBytes = 2 * 1024 * 1024;
+    public const int MaxSignatureBytes = 1024;
 
     private readonly HttpClient _http;
     private readonly string _owner;
     private readonly string _repo;
     private readonly string _cacheDir;
-    private readonly bool _enforceAllowlist;
+    private readonly byte[] _verificationPublicKey;
 
     public RemoteCatalogClient(
         HttpClient http,
         string? owner = null,
         string? repo  = null,
         string? cacheDirOverride = null,
-        bool enforceAllowlist = true)
+        bool enforceAllowlist = true,
+        byte[]? verificationPublicKey = null)
     {
         if (http is null) throw new ArgumentNullException(nameof(http));
         // Default to the canonical official source. Callers can pass the
@@ -91,7 +95,9 @@ public sealed class RemoteCatalogClient
         _owner = owner;
         _repo  = repo;
         _cacheDir = cacheDirOverride ?? DefaultCacheDir();
-        _enforceAllowlist = enforceAllowlist;
+        _verificationPublicKey = verificationPublicKey
+            ?? CatalogTrust.EmbeddedPublicKey
+            ?? throw new ArgumentException("catalog verification public key is not configured");
     }
 
     public static string DefaultCacheDir()
@@ -108,22 +114,24 @@ public sealed class RemoteCatalogClient
     /// <summary>
     /// Reads the cached anti-rollback floor (catalog <c>generated_at</c> of the
     /// last successful commit). Returns <see cref="DateTime.MinValue"/> when
-    /// nothing is cached or the file is unparseable — i.e. any catalog is
-    /// acceptable on first run.
+    /// nothing is cached. If the floor file exists but is unreadable or
+    /// malformed, returns <see cref="DateTime.MaxValue"/> so rollback defense
+    /// fails closed until a supervisor performs explicit cache recovery.
     /// </summary>
     public DateTime CachedGeneratedAt()
     {
         if (!File.Exists(GeneratedAtPath)) return DateTime.MinValue;
         try
         {
-            var s = File.ReadAllText(GeneratedAtPath).Trim();
+            var s = System.Text.Encoding.UTF8.GetString(
+                ReadFileLimited(GeneratedAtPath, 128)).Trim();
             if (DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.AssumeUniversal
                     | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt))
                 return dt;
         }
-        catch { /* fall through */ }
-        return DateTime.MinValue;
+        catch { /* fail closed below */ }
+        return DateTime.MaxValue;
     }
 
     /// <summary>
@@ -134,18 +142,34 @@ public sealed class RemoteCatalogClient
     public Catalog? LoadCached()
     {
         if (!File.Exists(CatalogPath) || !File.Exists(SignaturePath)) return null;
-        var bytes = File.ReadAllBytes(CatalogPath);
-        var sig   = Convert.FromBase64String(File.ReadAllText(SignaturePath).Trim());
-        var pub   = CatalogTrust.EmbeddedPublicKey;
-        if (pub is null || !CatalogSignature.Verify(bytes, sig, pub)) return null;
-        try { return CatalogJson.Parse(System.Text.Encoding.UTF8.GetString(bytes)); }
-        catch (CatalogParseException) { return null; }
+        try
+        {
+            var bytes = ReadFileLimited(CatalogPath, MaxCatalogBytes);
+            var sigText = System.Text.Encoding.UTF8.GetString(
+                ReadFileLimited(SignaturePath, MaxSignatureBytes)).Trim();
+            var sig = Convert.FromBase64String(sigText);
+            if (!CatalogSignature.Verify(bytes, sig, _verificationPublicKey)) return null;
+            return CatalogJson.Parse(System.Text.Encoding.UTF8.GetString(bytes));
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or FormatException
+            or ArgumentException
+            or System.Security.Cryptography.CryptographicException
+            or CatalogParseException)
+        {
+            return null;
+        }
     }
 
     public string? CachedTag()
     {
         if (!File.Exists(TagPath)) return null;
-        try { return File.ReadAllText(TagPath).Trim(); }
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString(
+                ReadFileLimited(TagPath, 1024)).Trim();
+        }
         catch { return null; }
     }
 
@@ -172,8 +196,27 @@ public sealed class RemoteCatalogClient
                 return Failure(RemoteCatalogStatus.NetworkError,
                     $"GET releases/latest → {(int)resp.StatusCode} {resp.ReasonPhrase}");
 
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            using var doc = JsonDocument.Parse(body);
+            string body;
+            try
+            {
+                var bodyBytes = await ReadLimitedAsync(
+                    resp.Content, MaxReleaseMetadataBytes, ct).ConfigureAwait(false);
+                body = System.Text.Encoding.UTF8.GetString(bodyBytes);
+            }
+            catch (HttpRequestException ex)
+            {
+                return Failure(RemoteCatalogStatus.NetworkError, ex.Message);
+            }
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(body); }
+            catch (JsonException ex)
+            {
+                return Failure(RemoteCatalogStatus.ParseError,
+                    $"release metadata is invalid JSON: {ex.Message}");
+            }
+            using (doc)
+            {
             var root = doc.RootElement;
 
             var tagName = root.TryGetProperty("tag_name", out var tEl) ? tEl.GetString() : null;
@@ -213,8 +256,10 @@ public sealed class RemoteCatalogClient
             byte[] catalogBytes, sigBytes;
             try
             {
-                catalogBytes = await GetBytesAsync(catalogUrl, ct).ConfigureAwait(false);
-                sigBytes     = await GetBytesAsync(sigUrl, ct).ConfigureAwait(false);
+                catalogBytes = await GetBytesAsync(
+                    catalogUrl, MaxCatalogBytes, ct).ConfigureAwait(false);
+                sigBytes = await GetBytesAsync(
+                    sigUrl, MaxSignatureBytes, ct).ConfigureAwait(false);
             }
             catch (HttpRequestException ex)
             {
@@ -222,12 +267,10 @@ public sealed class RemoteCatalogClient
             }
 
             // 3) Verify signature with the embedded public key.
-            var pub = CatalogTrust.EmbeddedPublicKey
-                ?? throw new RemoteCatalogException("CatalogTrust.EmbeddedPublicKey is unset");
             byte[] sig;
             try { sig = Convert.FromBase64String(System.Text.Encoding.UTF8.GetString(sigBytes).Trim()); }
             catch (FormatException) { return Failure(RemoteCatalogStatus.BadSignature, "signature is not base64"); }
-            if (!CatalogSignature.Verify(catalogBytes, sig, pub))
+            if (!CatalogSignature.Verify(catalogBytes, sig, _verificationPublicKey))
                 return Failure(RemoteCatalogStatus.BadSignature,
                     "downloaded catalog signature did not match the embedded public key");
 
@@ -243,9 +286,12 @@ public sealed class RemoteCatalogClient
             // revocation list hasn't yet blocked a since-revoked release).
             var floor = CachedGeneratedAt();
             var incoming = catalog.GeneratedAt.ToUniversalTime();
-            if (floor != DateTime.MinValue && incoming < floor)
+            if (incoming > DateTime.UtcNow.AddHours(24))
                 return Failure(RemoteCatalogStatus.RollbackRejected,
-                    $"catalog generated_at {incoming:O} < cached floor {floor:O} (rollback refused)");
+                    $"catalog generated_at {incoming:O} is implausibly far in the future");
+            if (floor != DateTime.MinValue && incoming <= floor)
+                return Failure(RemoteCatalogStatus.RollbackRejected,
+                    $"catalog generated_at {incoming:O} <= cached floor {floor:O} (rollback refused)");
 
             // 5) Atomic commit: write .tmp files then rename.
             Directory.CreateDirectory(_cacheDir);
@@ -259,10 +305,14 @@ public sealed class RemoteCatalogClient
                 Catalog: catalog, LocalCatalogPath: CatalogPath, LocalSignaturePath: SignaturePath,
                 TagName: tagName, ChangedFromCached: cachedTag != tagName,
                 Status: RemoteCatalogStatus.Updated, Message: null);
+            }
         }
     }
 
-    private async Task<byte[]> GetBytesAsync(string url, CancellationToken ct)
+    private async Task<byte[]> GetBytesAsync(
+        string url,
+        int maxBytes,
+        CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.UserAgent.ParseAdd("Iskra");
@@ -270,7 +320,52 @@ public sealed class RemoteCatalogClient
             .ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
             throw new HttpRequestException($"GET {url} → {(int)resp.StatusCode} {resp.ReasonPhrase}");
-        return await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        return await ReadLimitedAsync(resp.Content, maxBytes, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<byte[]> ReadLimitedAsync(
+        HttpContent content,
+        int maxBytes,
+        CancellationToken ct)
+    {
+        if (content.Headers.ContentLength is { } declared && declared > maxBytes)
+            throw new HttpRequestException(
+                $"response is {declared} bytes; limit is {maxBytes}");
+
+        await using var source = await content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var destination = new MemoryStream(Math.Min(maxBytes, 64 * 1024));
+        var buffer = new byte[16 * 1024];
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)
+                .ConfigureAwait(false);
+            if (read == 0) break;
+            if (destination.Length + read > maxBytes)
+                throw new HttpRequestException($"response exceeded {maxBytes} byte limit");
+            destination.Write(buffer, 0, read);
+        }
+        return destination.ToArray();
+    }
+
+    private static byte[] ReadFileLimited(string path, int maxBytes)
+    {
+        using var source = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 16 * 1024, FileOptions.SequentialScan);
+        if (source.Length > maxBytes)
+            throw new IOException($"cached file exceeded {maxBytes} byte limit");
+
+        using var destination = new MemoryStream((int)Math.Min(source.Length, maxBytes));
+        var buffer = new byte[16 * 1024];
+        while (true)
+        {
+            var read = source.Read(buffer, 0, buffer.Length);
+            if (read == 0) break;
+            if (destination.Length + read > maxBytes)
+                throw new IOException($"cached file exceeded {maxBytes} byte limit");
+            destination.Write(buffer, 0, read);
+        }
+        return destination.ToArray();
     }
 
     private HttpRequestMessage NewApiRequest(HttpMethod method, string url)

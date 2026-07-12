@@ -31,12 +31,19 @@ TestResults/
 appsettings.Local.json
 secrets.json
 *.pfx
+*.p12
+*.pem
+*.key
 *.snk
+auth.bin
+.env
+.env.*
+!.env.example
 
 # Packages
 *.nupkg
 **/packages/
-*.lock.json
+# packages.lock.json is intentionally committed for reproducible restores.
 
 # OS
 Thumbs.db

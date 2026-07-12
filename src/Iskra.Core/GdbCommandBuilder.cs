@@ -6,6 +6,19 @@ namespace Iskra.Core;
 /// </summary>
 public static class GdbCommandBuilder
 {
+    private static readonly string[] SafeProcessPrefix =
+    {
+        "-nx",
+        "--batch",
+        // Early-init commands execute before GDB opens the positional firmware
+        // file. Firmware must never be able to run embedded auto-load scripts
+        // or trigger a debuginfod network lookup on a factory station.
+        "-iex",
+        "set auto-load off",
+        "-iex",
+        "set debuginfod enabled off",
+    };
+
     public static IReadOnlyList<string> BuildExCommands(
         string comPort,
         PowerMode power,
@@ -49,7 +62,7 @@ public static class GdbCommandBuilder
         if (frequencyHz <= 0)
             throw new ArgumentOutOfRangeException(nameof(frequencyHz));
 
-        var port = NormalizeComPort(comPort);
+        var port = NormalizeProbeEndpoint(comPort);
         var list = new List<string>
         {
             "set confirm off",
@@ -82,7 +95,7 @@ public static class GdbCommandBuilder
         if (string.IsNullOrWhiteSpace(elfPath))
             throw new ArgumentException("elfPath required", nameof(elfPath));
 
-        var args = new List<string> { "-nx", "--batch" };
+        var args = new List<string>(SafeProcessPrefix);
         foreach (var ex in BuildExCommands(comPort, power, frequencyHz, connectUnderReset))
         {
             args.Add("-ex");
@@ -101,7 +114,7 @@ public static class GdbCommandBuilder
         int frequencyHz,
         bool connectUnderReset)
     {
-        var args = new List<string> { "-nx", "--batch" };
+        var args = new List<string>(SafeProcessPrefix);
         foreach (var ex in BuildScanExCommands(comPort, power, frequencyHz, connectUnderReset))
         {
             args.Add("-ex");
@@ -111,17 +124,33 @@ public static class GdbCommandBuilder
     }
 
     /// <summary>
-    /// Black Magic Probe on Windows is reached via the raw device path <c>\\.\COMxx</c>
-    /// (required for ports above COM9). Accept any of: <c>COM30</c>, <c>\\.\COM30</c>,
-    /// or a TCP host:port (e.g. <c>localhost:2000</c>) for the rare TCP case — pass through.
+    /// Normalizes a Black Magic Probe transport endpoint. Windows COM names are
+    /// converted to the raw device form required above COM9. Unix device paths
+    /// and TCP endpoints are already valid GDB endpoints and pass through.
     /// </summary>
-    public static string NormalizeComPort(string comPort)
+    public static string NormalizeProbeEndpoint(string endpoint)
     {
-        var trimmed = comPort.Trim();
+        var trimmed = endpoint.Trim();
         if (trimmed.StartsWith(@"\\.\", StringComparison.Ordinal))
             return trimmed;
         if (trimmed.Contains(':'))
             return trimmed; // host:port, leave alone
-        return @"\\.\" + trimmed.ToUpperInvariant();
+        if (IsWindowsComName(trimmed))
+            return @"\\.\" + trimmed.ToUpperInvariant();
+        return trimmed;
+    }
+
+    /// <summary>Backward-compatible name for existing callers.</summary>
+    public static string NormalizeComPort(string comPort) => NormalizeProbeEndpoint(comPort);
+
+    private static bool IsWindowsComName(string value)
+    {
+        if (value.Length <= 3 || !value.StartsWith("COM", StringComparison.OrdinalIgnoreCase))
+            return false;
+        for (var i = 3; i < value.Length; i++)
+        {
+            if (!char.IsAsciiDigit(value[i])) return false;
+        }
+        return true;
     }
 }

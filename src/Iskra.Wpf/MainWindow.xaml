@@ -279,7 +279,7 @@
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Обовʼязковий підпис:" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <CheckBox  Grid.Row="1" Grid.Column="1" x:Name="SettingsRequireSigned" Margin="0,8,0,4"
-                                       Content="Відмовляти у роботі, якщо catalog.json не підписано Ed25519" />
+                                       Content="Відмовляти у роботі, якщо catalog.json не підписано Ed25519 (вимикати лише в лабораторії)" />
                         </Grid>
 
                         <!-- Auto-update catalog from iskra-catalog repo (Sprint 3.5) -->

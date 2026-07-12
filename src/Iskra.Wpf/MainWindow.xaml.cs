@@ -155,14 +155,17 @@ public partial class MainWindow : Window
                     CatalogTrustResult.UnsignedRejected => "✗ потрібен підпис",
                     CatalogTrustResult.BadSignature     => "✗ невірний підпис",
                     CatalogTrustResult.NoPublicKeyConfigured => "✗ немає ключа",
+                    CatalogTrustResult.IoError          => "✗ підпис неможливо прочитати",
                     _                                   => trust.ToString(),
                 };
 
-                if (trust is CatalogTrustResult.UnsignedRejected
-                           or CatalogTrustResult.BadSignature
-                           or CatalogTrustResult.NoPublicKeyConfigured)
+                var trustAccepted = trust == CatalogTrustResult.Verified
+                    || (!_settings.RequireSignedCatalog
+                        && trust == CatalogTrustResult.UnsignedAllowed);
+                if (!trustAccepted)
                 {
-                    // Catalog parsed but trust failed; disable flashing until user acks via Settings.
+                    // Fail closed for every signature IO/format/key error. The
+                    // only unsigned path is the explicit lab override above.
                     _catalog = null;
                     return;
                 }
@@ -278,17 +281,25 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Batch lock check — refuse if this batch was started with a different
-        // product/version. Operator must finish the batch or pick a new ID.
+        // Atomically reserve the complete firmware identity before touching
+        // hardware. Product/version alone is insufficient when release bytes
+        // or target metadata change under a reused version.
         try
         {
             using var lockStore = new SqliteLogStore(ResolveDbPath());
-            var batchLock = lockStore.GetBatchLock(batch);
-            if (batchLock is { } locked
-                && (!string.Equals(locked.ProductId, product.ProductId, StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(locked.FirmwareVersion, release.Version, StringComparison.OrdinalIgnoreCase)))
+            var requested = new BatchLockDescriptor(
+                product.ProductId,
+                release.Version,
+                release.ElfSha256,
+                product.Target.BmpMatch,
+                product.Target.FlashKb);
+            var reservation = lockStore.ReserveBatchLock(batch, requested);
+            if (!reservation.IsAccepted)
             {
-                var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion}, attempted {product.ProductId} v{release.Version}";
+                var locked = reservation.Lock;
+                var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion} "
+                    + $"sha256={ShortSha(locked.FirmwareSha256)}, attempted "
+                    + $"{product.ProductId} v{release.Version} sha256={ShortSha(release.ElfSha256)}";
                 ShowFail("E_BATCH_LOCKED", msg);
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_BATCH_LOCKED", msg, 0, null, null);
@@ -297,10 +308,13 @@ public partial class MainWindow : Window
                 return;
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // If lock check itself fails (eg. db unreadable), fall through and let
-            // the normal flash flow surface the underlying error.
+            // Production safety: an unavailable ledger means the station cannot
+            // prove the batch identity, so flashing must fail closed.
+            ShowFail("E_BATCH_LOCK_CHECK_FAILED", ex.Message);
+            RefreshHistory();
+            return;
         }
 
         FlashButton.IsEnabled = false;
@@ -575,15 +589,21 @@ public partial class MainWindow : Window
             var locked = store.GetBatchLock(batch);
             BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
             if (locked is { } l)
-                BatchLockLabel.Text = $"🔒 Партію заблоковано на {l.ProductId} v{l.FirmwareVersion}";
+                BatchLockLabel.Text = $"🔒 Партію заблоковано на {l.ProductId} v{l.FirmwareVersion} · SHA {ShortSha(l.FirmwareSha256)}";
             else
                 BatchLockLabel.Text = "Партія нова — перша прошивка визначить продукт + версію.";
         }
-        catch
+        catch (Exception ex)
         {
-            BatchLockLabel.Text = "";
+            BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+            BatchLockLabel.Text = $"Неможливо перевірити блокування партії: {ex.Message}";
         }
     }
+
+    private static string ShortSha(string value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? "невідомо"
+            : value[..Math.Min(12, value.Length)].ToLowerInvariant();
 
     private void ExportCsvBatch_Click(object sender, RoutedEventArgs e)
         => ExportCsv(batchOnly: true);
@@ -682,6 +702,10 @@ public partial class MainWindow : Window
     {
         SettingsCatalogPath.Text   = _settings.CatalogPath ?? "";
         SettingsRequireSigned.IsChecked = _settings.RequireSignedCatalog;
+        SettingsRequireSigned.IsEnabled = CatalogTrust.IsUnsignedLabModeEnabled();
+        SettingsRequireSigned.ToolTip = SettingsRequireSigned.IsEnabled
+            ? "Лабораторний режим дозволено змінною ISKRA_LAB_ALLOW_UNSIGNED_CATALOG."
+            : "На операторській станції підпис каталогу обовʼязковий.";
         SettingsCatalogAutoUpdate.IsChecked = _settings.CatalogAutoUpdate;
         // Sprint 6: catalog source is hard-locked. Display the official source
         // read-only — AppSettings.Load already clamped any settings.json values
@@ -789,7 +813,8 @@ public partial class MainWindow : Window
         try
         {
             _settings.CatalogPath          = NullIfEmpty(SettingsCatalogPath.Text);
-            _settings.RequireSignedCatalog = SettingsRequireSigned.IsChecked == true;
+            _settings.RequireSignedCatalog = !CatalogTrust.IsUnsignedLabModeEnabled()
+                || SettingsRequireSigned.IsChecked == true;
             _settings.CatalogAutoUpdate    = SettingsCatalogAutoUpdate.IsChecked == true;
             // Sprint 6: owner/repo are hard-locked to the embedded allowlist —
             // not user-editable. Always persist the canonical values so a stale

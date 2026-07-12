@@ -25,8 +25,11 @@ public static class ProbeDiscovery
 
     public static IReadOnlyList<ProbeInfo> FindAll()
     {
-        if (!OperatingSystem.IsWindows()) return Array.Empty<ProbeInfo>();
-        return EnumerateWindows();
+        if (OperatingSystem.IsWindows()) return EnumerateWindows();
+        if (OperatingSystem.IsLinux()) return FindLinux();
+        // macOS flashing already accepts an explicit /dev/cu.usbmodem* path;
+        // metadata-backed auto-discovery is a separate platform adapter.
+        return Array.Empty<ProbeInfo>();
     }
 
     public static IReadOnlyList<ProbeInfo> FindGdbPorts()
@@ -97,6 +100,102 @@ public static class ProbeDiscovery
         if (!string.IsNullOrWhiteSpace(parentIdPrefix))
             return parentIdPrefix;
         return null;
+    }
+
+    /// <summary>
+    /// Enumerates official Black Magic Probe CDC interfaces through Linux
+    /// sysfs. The optional roots make the platform adapter deterministic in
+    /// tests; production uses <c>/sys/class/tty</c> and <c>/dev</c>.
+    /// </summary>
+    public static IReadOnlyList<ProbeInfo> FindLinux(
+        string sysClassTtyRoot = "/sys/class/tty",
+        string devRoot = "/dev")
+    {
+        var results = new List<ProbeInfo>();
+        if (!Directory.Exists(sysClassTtyRoot)) return results;
+
+        IEnumerable<string> entries;
+        try { entries = Directory.EnumerateDirectories(sysClassTtyRoot).ToArray(); }
+        catch { return results; }
+
+        foreach (var entryPath in entries)
+        {
+            var ttyName = Path.GetFileName(entryPath);
+            if (!ttyName.StartsWith("ttyACM", StringComparison.Ordinal)
+                && !ttyName.StartsWith("ttyUSB", StringComparison.Ordinal))
+                continue;
+
+            var devicePath = Path.Combine(entryPath, "device");
+            if (!Directory.Exists(devicePath)) continue;
+
+            DirectoryInfo? current;
+            try
+            {
+                var device = new DirectoryInfo(devicePath);
+                current = device.ResolveLinkTarget(returnFinalTarget: true) as DirectoryInfo ?? device;
+            }
+            catch
+            {
+                current = new DirectoryInfo(devicePath);
+            }
+
+            string? vendor = null;
+            string? productId = null;
+            string? interfaceNumber = null;
+            string? serial = null;
+            string? productName = null;
+            var instancePath = current.FullName;
+
+            // USB interface metadata and device metadata commonly live on
+            // adjacent ancestor levels, so walk a small bounded chain.
+            for (var depth = 0; current is not null && depth < 10; depth++, current = current.Parent)
+            {
+                interfaceNumber ??= ReadSysfsValue(current.FullName, "bInterfaceNumber");
+                vendor ??= ReadSysfsValue(current.FullName, "idVendor");
+                productId ??= ReadSysfsValue(current.FullName, "idProduct");
+                serial ??= ReadSysfsValue(current.FullName, "serial");
+                productName ??= ReadSysfsValue(current.FullName, "product");
+            }
+
+            if (!string.Equals(vendor, "1d50", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(productId, "6018", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var role = ClassifyUsbInterfaceNumber(interfaceNumber);
+            results.Add(new ProbeInfo(
+                PortName: Path.Combine(devRoot, ttyName),
+                FriendlyName: productName ?? "Black Magic Probe",
+                DeviceInstanceId: instancePath,
+                Interface: role,
+                SerialNumber: string.IsNullOrWhiteSpace(serial) ? null : serial));
+        }
+
+        return results
+            .OrderBy(p => p.PortName, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>Official BMP exposes GDB on USB interface 00 and UART on 02.</summary>
+    public static ProbeInterface ClassifyUsbInterfaceNumber(string? interfaceNumber)
+    {
+        if (string.Equals(interfaceNumber?.Trim(), "00", StringComparison.OrdinalIgnoreCase))
+            return ProbeInterface.Gdb;
+        if (string.Equals(interfaceNumber?.Trim(), "02", StringComparison.OrdinalIgnoreCase))
+            return ProbeInterface.Uart;
+        return ProbeInterface.Unknown;
+    }
+
+    private static string? ReadSysfsValue(string directory, string name)
+    {
+        try
+        {
+            var path = Path.Combine(directory, name);
+            return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     [SupportedOSPlatform("windows")]
