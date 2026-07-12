@@ -52,6 +52,12 @@ public sealed class AppSettings
     public string? DbPath { get; set; }
     public string StationId { get; set; } = Environment.MachineName;
 
+    // Optional production-batch workflow. Most current Iskra stations flash
+    // independent devices, so fresh installs keep the batch field and its
+    // local firmware-identity lock disabled. When enabled, the WPF operator
+    // flow requires a batch ID and preserves the existing full-digest lock.
+    public bool BatchesEnabled { get; set; }
+
     // Operator quality-of-life: remember last picks
     public string? LastOperator { get; set; }
     public string? LastBatch { get; set; }
@@ -92,6 +98,7 @@ public sealed class AppSettings
         TimeoutSeconds           = TimeoutSeconds,
         DbPath                   = DbPath,
         StationId                = StationId,
+        BatchesEnabled           = BatchesEnabled,
         LastOperator             = LastOperator,
         LastBatch                = LastBatch,
         FlashHotkey              = FlashHotkey,

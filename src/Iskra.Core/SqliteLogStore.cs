@@ -158,7 +158,8 @@ public sealed class SqliteLogStore : IDisposable
                        fa.firmware_sha256, fa.target_bmp_match,
                        fa.target_flash_kb, fa.ts_utc
                 FROM flash_attempts AS fa
-                WHERE (fa.error_code IS NULL OR fa.error_code != 'E_BATCH_LOCKED')
+                WHERE trim(fa.batch_id) != ''
+                  AND (fa.error_code IS NULL OR fa.error_code != 'E_BATCH_LOCKED')
                   AND NOT EXISTS (
                     SELECT 1
                     FROM flash_attempts AS earlier
@@ -184,7 +185,7 @@ public sealed class SqliteLogStore : IDisposable
         return false;
     }
 
-    public long Append(FlashAttemptRecord r)
+    public long Append(FlashAttemptRecord r, bool reserveBatchLock = true)
     {
         using var tx = _conn.BeginTransaction();
 
@@ -192,7 +193,9 @@ public sealed class SqliteLogStore : IDisposable
         // for callers that have not yet adopted ReserveBatchLock. New flashing
         // paths must reserve before touching hardware; this compatibility path
         // is deliberately in the same transaction as the attempt row.
-        if (!string.Equals(r.ErrorCode, "E_BATCH_LOCKED", StringComparison.Ordinal))
+        if (reserveBatchLock
+            && !string.IsNullOrWhiteSpace(r.BatchId)
+            && !string.Equals(r.ErrorCode, "E_BATCH_LOCKED", StringComparison.Ordinal))
         {
             InsertBatchLock(
                 tx,

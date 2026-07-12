@@ -8,8 +8,12 @@ historical sprint handoff; new goals and acceptance gates live here.
 - Windows WPF remains the shipping operator UI until its replacement reaches
   feature parity and passes hardware-in-the-loop acceptance.
 - `Iskra.Core` remains the target-agnostic flashing and trust engine.
+- `Iskra.Application` is the new UI-neutral seam for catalog-session,
+  station-readiness, and optional batch-policy behavior. More workflow
+  orchestration still needs to move there before WPF can be retired.
 - The cross-platform target is Windows, Linux, and macOS with a native Avalonia
-  desktop UI. Migration happens beside WPF, not as a flag-day rewrite.
+  desktop UI. `Iskra.Desktop` is now a read-only safety preview beside WPF, not
+  a replacement or a claim of platform/HIL parity.
 - Security audit status (2026-07-12): **lab-ready, not factory-production-ready**
   until the owner/architecture gates in Sprint 9 are closed.
 
@@ -25,16 +29,34 @@ historical sprint handoff; new goals and acceptance gates live here.
 - Reworked the catalog workflow templates around explicit repository approval,
   independent firmware hashing, immutable versions, pinned revisions/actions,
   and reviewer-gated signing. These templates still require owner deployment.
+- Added `Iskra.Application` with fail-closed catalog selection, exactly-one-BMP
+  station readiness, and shared optional-batch policy, plus focused tests.
+- Added the Ukrainian four-tab `Iskra.Desktop` Avalonia preview. It reads the
+  current settings and performs read-only BMP/GDB/catalog/SQLite checks; flash
+  execution and settings mutation stay disabled until workflow-test and HIL
+  parity with WPF.
+- Improved the shipping WPF UX: Settings auto-save when leaving the tab or
+  closing the window, save/dirty/error state is visible, BMP discovery has an
+  explicit refresh action, and zero or multiple probes block flashing.
+- Made batches opt-in and disabled by default. The toggle is beside the cloud
+  log `.pem` setting; disabled mode records a blank batch ID and creates no
+  reservation, while enabled mode retains the existing digest lock.
 - Preserved the intentionally deleted `design_assets/` tree. Branding integration
   waits for the replacement pack defined below; no placeholder logo was added.
+- Installed and pinned .NET SDK 10.0.301 in `global.json`, retargeted the
+  solution to .NET 10, and migrated `Iskra.Desktop` to Avalonia 12.1.0. This
+  completes the runtime/toolkit upgrade, not visual, packaging, workflow, or
+  HIL parity.
 
-## Production blockers carried forward
+## Production blockers and conditional gates carried forward
 
 1. Repeat the 50-consecutive-PASS bench run after the two-phase GDB changes.
-2. Sprint 6.5: cross-station batch locking. The shared lock must include product,
-   version, firmware SHA-256, target descriptor, station identity, and an explicit
-   offline policy. Recommended production policy: fail closed; supervisor recovery
-   is a separately audited action.
+2. Sprint 6.5 is conditional while batch mode remains disabled: cross-station
+   locking is not a blocker for the current unbatched use case. If production
+   enables batches, the shared lock becomes a release blocker and must include
+   product, version, firmware SHA-256, target descriptor, station identity, and
+   an explicit offline policy. Recommended policy: fail closed; supervisor
+   recovery is a separately audited action.
 3. Sprint 7: trustworthy board identity is now a production gate, not optional
    polish. `bmp_match` identifies only an MCU family and cannot distinguish two
    products built on the same chip. Add a signed catalog board-ID/UID policy and
@@ -46,13 +68,22 @@ historical sprint handoff; new goals and acceptance gates live here.
 
 ### 8.0 — platform-neutral application layer
 
+**Started:** `Iskra.Application` now owns fail-closed catalog-session selection,
+station readiness, and optional batch policy. WPF consumes the shared batch
+policy; Avalonia consumes all three services. Flash, history, settings,
+authentication, update, and cloud-sync orchestration still need extraction.
+
 - Extract startup, catalog, flash, history, settings, authentication, update,
   and cloud-sync orchestration from `MainWindow.xaml.cs` into testable services
   and view models.
 - Keep Ukrainian operator text in the application/UI layer; Core error codes and
   diagnostics remain English/ASCII.
-- Move from .NET 8 to .NET 10 LTS before production rollout (the current .NET 8
-  support window ends in November 2026). Pin the SDK and package locks.
+- ✅ Moved to .NET 10 LTS, pinned SDK 10.0.301 in `global.json`, and refreshed
+  package locks.
+
+The approved coordinated runtime upgrade is complete: the repository targets
+.NET 10 and `Iskra.Desktop` uses Avalonia 12.1.0. WPF remains the shipping UI;
+the upgrade does not waive the remaining feature-parity and HIL gates.
 
 ### 8.1 — OS adapters and CLI parity
 
@@ -66,12 +97,17 @@ historical sprint handoff; new goals and acceptance gates live here.
   provenance, filesystem permissions, and the current runtime identifier.
 
 Started in the 2026-07-12 slice: `ITokenStore`, Unix GDB endpoints, Linux BMP
-sysfs discovery, and a generic `net8.0` CLI with private-token features gated
+sysfs discovery, and a generic `net10.0` CLI with private-token features gated
 until secure-store adapters exist.
 
 ### 8.2 — Avalonia operator UI redesign
 
-- Add `src/Iskra.Desktop` beside `src/Iskra.Wpf` and use MVVM/commands.
+**Preview started:** `src/Iskra.Desktop` provides the Ukrainian four-tab shell
+and shared read-only readiness checks. Flashing and settings mutation are
+intentionally disabled. No Windows/Linux/macOS visual, packaging, or HIL parity
+is claimed by this slice.
+
+- Continue `src/Iskra.Desktop` beside `src/Iskra.Wpf` using MVVM/commands.
 - Port the four operator tabs and Device Flow dialog without weakening the
   single-action factory flow, giant PASS/FAIL state, hotkey safety, or Ukrainian UI.
 - Centralize color, spacing, typography, focus, high-contrast, and semantic
@@ -116,14 +152,14 @@ It is complete only when all of the following are evidenced, not merely planned:
   scripts; cancellation kills the full process tree.
 - Per-station authenticated, append-only/tamper-evident central logging replaces
   the shared repository-wide write key. Operator identity is authenticated.
-- Digest-based local and cross-station batch reservations are fail-closed and
-  concurrency-tested.
+- If production batch mode is enabled, digest-based local and cross-station
+  reservations are fail-closed and concurrency-tested.
 - Board identity and firmware address-range checks pass on every supported OS.
 - Parser/catalog fuzzing, rollback/crash recovery, clean-machine installation,
   offline behavior, wrong-board refusal, and full HIL matrix pass.
 - Renewed 50-PASS production run completes with signed release artifacts.
 
-## Owner decisions before Sprint 8.2
+## Owner decisions before cross-platform production parity
 
 Recommended defaults are in parentheses:
 
@@ -134,3 +170,5 @@ Recommended defaults are in parentheses:
 4. GDB distribution: pinned OS prerequisite initially; bundle only after signing
    and license/provenance review.
 5. Brand lockup: `ISKRA`, `ІСКРА`, or both; light+dark themes are recommended.
+6. ✅ Runtime baseline approved and completed: per-user SDK 10.0.301,
+   repository pin via `global.json`, .NET 10 targets, and Avalonia 12.1.0.

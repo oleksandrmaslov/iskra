@@ -15,18 +15,36 @@
 
         <!-- Status strip (always visible across tabs) -->
         <Border Grid.Row="0" Background="#2D2D30" Padding="14,8">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="StatusPort"    Foreground="#DCDCDC" FontSize="13" Text="Порт: …"     Margin="0,0,24,0" />
-                <TextBlock x:Name="StatusGdb"     Foreground="#DCDCDC" FontSize="13" Text="gdb: …"      Margin="0,0,24,0" />
-                <TextBlock x:Name="StatusCatalog" Foreground="#DCDCDC" FontSize="13" Text="Каталог: …"  Margin="0,0,24,0" />
-                <TextBlock x:Name="StatusCloud"   Foreground="#DCDCDC" FontSize="13" Text="Хмара: …" />
-            </StackPanel>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" x:Name="StatusPort" Foreground="#DCDCDC" FontSize="13"
+                           Text="Порт: …" Margin="0,0,24,0" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" x:Name="StatusGdb" Foreground="#DCDCDC" FontSize="13"
+                           Text="gdb: …" Margin="0,0,24,0" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" x:Name="StatusCatalog" Foreground="#DCDCDC" FontSize="13"
+                           Text="Каталог: …" Margin="0,0,24,0" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3" x:Name="StatusCloud" Foreground="#DCDCDC" FontSize="13"
+                           Text="Хмара: …" Margin="0,0,18,0" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="4" x:Name="StatusSave" Foreground="#9CDC9C" FontSize="13"
+                           Text="" Margin="0,0,12,0" VerticalAlignment="Center" />
+                <Button Grid.Column="5" x:Name="ProbeRefreshButton" Content="Оновити BMP"
+                        Padding="8,2" Click="ProbeRefresh_Click"
+                        ToolTip="Повторно знайти підключений Black Magic Probe" />
+            </Grid>
         </Border>
 
         <TabControl Grid.Row="1" x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0">
 
             <!-- ============================ FLASH TAB ============================ -->
-            <TabItem Header="Прошивка" FontSize="14">
+            <TabItem x:Name="FlashTab" Header="Прошивка" FontSize="14">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -52,8 +70,9 @@
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Оператор:" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="OperatorBox" FontSize="16" Padding="6,4" Margin="0,0,0,8" />
-                        <TextBlock Grid.Row="0" Grid.Column="3" Text="Партія:" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="OperatorBox" FontSize="16" Padding="6,4" Margin="0,0,0,8"
+                                   TextChanged="OperatorBox_TextChanged" />
+                        <TextBlock Grid.Row="0" Grid.Column="3" x:Name="BatchLabel" Text="Партія:" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
                         <TextBox   Grid.Row="0" Grid.Column="4" x:Name="BatchBox" FontSize="16" Padding="6,4" Margin="0,0,0,8" TextChanged="BatchBox_TextChanged" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Продукт:" VerticalAlignment="Center" FontSize="15" />
@@ -93,7 +112,8 @@
 
                     <Button Grid.Row="3" x:Name="FlashButton" Height="76"
                             Margin="20,0,20,12" Click="FlashButton_Click"
-                            Background="#0078D7" Foreground="White" BorderThickness="0">
+                            Background="#0078D7" Foreground="White" BorderThickness="0"
+                            IsEnabled="False">
                         <Button.ToolTip>
                             <TextBlock x:Name="FlashButtonTooltipText"
                                        Text="Запустити прошивку поточної плати"
@@ -138,7 +158,7 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" x:Name="BatchSummary" FontSize="15" Text="Завантаження..." VerticalAlignment="Center" TextWrapping="Wrap" />
                         <StackPanel Grid.Column="1" Orientation="Horizontal">
-                            <Button Content="Експорт CSV (партія)" Padding="12,6" Margin="0,0,6,0" Click="ExportCsvBatch_Click" />
+                            <Button x:Name="ExportCsvBatchButton" Content="Експорт CSV (партія)" Padding="12,6" Margin="0,0,6,0" Click="ExportCsvBatch_Click" />
                             <Button Content="Експорт CSV (все)"    Padding="12,6" Margin="0,0,6,0" Click="ExportCsvAll_Click" />
                             <Button x:Name="HistoryRefresh" Content="Оновити" Padding="14,6" Click="HistoryRefresh_Click" />
                         </StackPanel>
@@ -256,7 +276,7 @@
             </TabItem>
 
             <!-- ============================ SETTINGS TAB ============================ -->
-            <TabItem Header="Налаштування" FontSize="14">
+            <TabItem x:Name="SettingsTab" Header="Налаштування" FontSize="14">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="20" MaxWidth="780" HorizontalAlignment="Left">
 
@@ -478,6 +498,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <CheckBox  Grid.Row="0" Grid.Column="1" x:Name="SettingsLogShippingEnabled" Margin="0,4,0,4"
@@ -492,11 +513,16 @@
                                        ToolTip="Файл приватного ключа GitHub App (за замовчанням %PROGRAMDATA%\Iskra\station-app.pem)" />
                             <Button    Grid.Row="2" Grid.Column="2" Content="..." Width="40" Margin="0,4,0,4" Click="PickLogKeyPath_Click" />
 
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Репозиторій:" VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <TextBlock Grid.Row="3" Grid.Column="1" x:Name="SettingsLogsSourceLocked"
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Партії:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <CheckBox Grid.Row="3" Grid.Column="1" x:Name="SettingsBatchesEnabled" Margin="0,6,0,4"
+                                      Content="Увімкнути поле партії та локальне блокування прошивки"
+                                      ToolTip="За замовчуванням вимкнено. Увімкніть лише коли потрібно групувати та блокувати прошивку за ID партії." />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Репозиторій:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="4" Grid.Column="1" x:Name="SettingsLogsSourceLocked"
                                        FontStyle="Italic" Foreground="#555" Margin="0,4,8,4" VerticalAlignment="Center" />
 
-                            <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,8,0,0">
+                            <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,8,0,0">
                                 <Button x:Name="LogShipNowButton" Content="Вивантажити зараз"
                                         Padding="14,6" Margin="0,0,8,0" Click="LogShipNow_Click" />
                                 <TextBlock x:Name="LogShipStatus" VerticalAlignment="Center" Margin="4,0,0,0" />
@@ -508,6 +534,8 @@
                             <Button Content="Скинути до замовчень" Padding="14,8" Margin="0,0,8,0" Click="SettingsReset_Click" />
                             <TextBlock x:Name="SettingsStatus" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#1B8A1B" />
                         </StackPanel>
+                        <TextBlock Margin="0,8,0,0" Foreground="#666" FontSize="12" TextWrapping="Wrap"
+                                   Text="Зміни також зберігаються автоматично при переході з цієї вкладки та перед закриттям Iskra." />
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

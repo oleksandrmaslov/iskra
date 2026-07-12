@@ -1,0 +1,211 @@
+<Window
+    x:Class="Iskra.Desktop.MainWindow"
+    x:DataType="vm:MainWindowViewModel"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:Iskra.Desktop"
+    Title="Iskra — станція прошивання"
+    Width="1120"
+    Height="760"
+    MinWidth="900"
+    MinHeight="620"
+    WindowStartupLocation="CenterScreen"
+    mc:Ignorable="d">
+
+  <Window.Styles>
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="#FFFFFFFF" />
+      <Setter Property="BorderBrush" Value="#FFD7DEE8" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="12" />
+      <Setter Property="Padding" Value="18" />
+    </Style>
+    <Style Selector="TextBlock.section-title">
+      <Setter Property="FontSize" Value="20" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="#FF162033" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="Foreground" Value="#FF5F6B7A" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.label">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="#FF5F6B7A" />
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="#FF1B5FCC" />
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Padding" Value="18,10" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,*" Background="#FFF4F6F9">
+    <Border Grid.Row="0" Background="#FF162033" Padding="24,16">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
+        <StackPanel Grid.Column="0" Spacing="3">
+          <TextBlock FontSize="25" FontWeight="Bold" Foreground="White" Text="ISKRA" />
+          <TextBlock Foreground="#FFCAD5E6" Text="Безпечне прошивання та перевірка пристроїв" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+          <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="White" Text="{Binding PlatformLabel}" />
+          <TextBlock HorizontalAlignment="Right" Foreground="#FFCAD5E6" Text="{Binding LastCheckedText}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <TabControl Grid.Row="1" Margin="20">
+      <TabItem Header="Прошивка">
+        <ScrollViewer>
+          <StackPanel Margin="4,18" Spacing="16">
+            <Border Classes="card" BorderBrush="{Binding ReadinessBrush}" BorderThickness="2">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="20">
+                <StackPanel Grid.Column="0" Spacing="5">
+                  <TextBlock Classes="section-title" Text="{Binding ReadinessSummary}" />
+                  <TextBlock Classes="muted" Text="{Binding ReadinessDetail}" />
+                </StackPanel>
+                <Button Grid.Column="1"
+                        Command="{Binding RefreshReadinessCommand}"
+                        Content="Перевірити ще раз"
+                        VerticalAlignment="Center" />
+              </Grid>
+            </Border>
+
+            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="14">
+              <Border Grid.Column="0" Classes="card">
+                <StackPanel Spacing="7">
+                  <TextBlock Classes="label" Text="BLACK MAGIC PROBE" />
+                  <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding ProbeStatusText}" />
+                  <TextBlock Classes="muted" Text="{Binding ProbeDetailText}" />
+                </StackPanel>
+              </Border>
+              <Border Grid.Column="1" Classes="card">
+                <StackPanel Spacing="7">
+                  <TextBlock Classes="label" Text="ARM GDB" />
+                  <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding GdbStatusText}" />
+                  <TextBlock Classes="muted" Text="{Binding GdbDetailText}" />
+                </StackPanel>
+              </Border>
+              <Border Grid.Column="2" Classes="card">
+                <StackPanel Spacing="7">
+                  <TextBlock Classes="label" Text="ПІДПИСАНИЙ КАТАЛОГ" />
+                  <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding CatalogStatusText}" />
+                  <TextBlock Classes="muted" Text="{Binding CatalogDetailText}" />
+                </StackPanel>
+              </Border>
+            </Grid>
+
+            <Border Classes="card">
+              <Grid ColumnDefinitions="2*,3*" ColumnSpacing="24">
+                <StackPanel Grid.Column="0" Spacing="10">
+                  <TextBlock Classes="section-title" Text="Зміна оператора" />
+                  <TextBlock Classes="muted" Text="Оператор і виріб будуть підключені до спільного процесу в наступному етапі міграції." />
+                  <TextBlock Classes="label" Margin="0,8,0,0" Text="ОПЕРАТОР" />
+                  <TextBox IsEnabled="False" Text="{Binding OperatorName}" PlaceholderText="Ім’я оператора" />
+                  <TextBlock Classes="label" Margin="0,6,0,0" Text="ВИРІБ" />
+                  <ComboBox IsEnabled="False" ItemsSource="{Binding ProductNames}" SelectedIndex="0" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="10" VerticalAlignment="Center">
+                  <Border Background="#FFFFF4CE" BorderBrush="#FFE6B800" BorderThickness="1" CornerRadius="8" Padding="14">
+                    <TextBlock Foreground="#FF5A4300" TextWrapping="Wrap" Text="{Binding MigrationSafetyNotice}" />
+                  </Border>
+                  <Button Classes="primary"
+                          IsEnabled="False"
+                          HorizontalContentAlignment="Center"
+                          FontSize="20"
+                          Content="ПРОШИТИ" />
+                  <TextBlock Classes="muted" HorizontalAlignment="Center" Text="Кнопка активується після перенесення повного процесу прошивання та HIL-перевірки." />
+                </StackPanel>
+              </Grid>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Історія">
+        <ScrollViewer>
+          <StackPanel Margin="4,18" Spacing="16">
+            <TextBlock Classes="section-title" Text="Локальний журнал" />
+            <TextBlock Classes="muted" Text="SQLite залишається локальним джерелом істини. У цьому першому зрізі Avalonia журнал відкривається лише для перевірки готовності; таблиця та експорт мігрують далі." />
+            <Border Classes="card">
+              <StackPanel Spacing="8">
+                <TextBlock Classes="label" Text="СТАН ФАЙЛУ" />
+                <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding HistoryStatusText}" />
+                <TextBlock Classes="muted" Text="{Binding DatabasePath}" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Каталог">
+        <Grid RowDefinitions="Auto,*" Margin="4,18">
+          <StackPanel Grid.Row="0" Spacing="5" Margin="0,0,0,14">
+            <TextBlock Classes="section-title" Text="Доступні вироби" />
+            <TextBlock Classes="muted" Text="{Binding CatalogOverviewText}" />
+          </StackPanel>
+          <ScrollViewer Grid.Row="1">
+            <ItemsControl ItemsSource="{Binding Products}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ProductSummaryViewModel">
+                  <Border Classes="card" Margin="0,0,0,10">
+                    <Grid ColumnDefinitions="2*,*,*" ColumnSpacing="18">
+                      <StackPanel Grid.Column="0" Spacing="3">
+                        <TextBlock FontSize="17" FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                        <TextBlock Classes="muted" Text="{Binding ProductId}" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" Spacing="3">
+                        <TextBlock Classes="label" Text="ЦІЛЬ" />
+                        <TextBlock Text="{Binding TargetText}" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="2" Spacing="3">
+                        <TextBlock Classes="label" Text="ТИПОВИЙ РЕЛІЗ" />
+                        <TextBlock Text="{Binding ReleaseText}" />
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Налаштування">
+        <ScrollViewer>
+          <StackPanel Margin="4,18" Spacing="16">
+            <TextBlock Classes="section-title" Text="Поточна конфігурація станції" />
+            <TextBlock Classes="muted" Text="На першому етапі кросплатформний інтерфейс читає чинні безпечні налаштування без їх дублювання. Редагування з автоматичним збереженням буде підключено до спільного процесу налаштувань наступним кроком." />
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="14">
+              <Border Grid.Column="0" Classes="card">
+                <StackPanel Spacing="9">
+                  <TextBlock Classes="label" Text="СТАНЦІЯ" />
+                  <TextBlock FontSize="17" FontWeight="SemiBold" Text="{Binding StationId}" />
+                  <TextBlock Classes="label" Margin="0,8,0,0" Text="ФАЙЛ НАЛАШТУВАНЬ" />
+                  <TextBlock Classes="muted" Text="{Binding SettingsPath}" />
+                  <TextBlock Classes="label" Margin="0,8,0,0" Text="ОФІЦІЙНИЙ КАТАЛОГ" />
+                  <TextBlock Text="{Binding CatalogSource}" />
+                </StackPanel>
+              </Border>
+              <Border Grid.Column="1" Classes="card">
+                <StackPanel Spacing="9">
+                  <TextBlock Classes="label" Text="ХМАРНИЙ ЖУРНАЛ" />
+                  <TextBlock FontSize="17" FontWeight="SemiBold" Text="{Binding LogShippingStatusText}" />
+                  <TextBlock Classes="label" Margin="0,8,0,0" Text="ПРИВАТНИЙ КЛЮЧ СТАНЦІЇ (.PEM)" />
+                  <TextBlock Classes="muted" Text="{Binding LogKeyPath}" />
+                  <TextBlock Classes="label" Margin="0,8,0,0" Text="РЕЖИМ ПАРТІЙ" />
+                  <TextBlock Classes="muted" Text="{Binding BatchModeStatusText}" />
+                  <TextBlock Classes="muted" Margin="0,8,0,0" Text="Керування партіями та шлях до ключа журналу будуть згруповані тут у наступному UI-зрізі." />
+                </StackPanel>
+              </Border>
+            </Grid>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+  </Grid>
+</Window>

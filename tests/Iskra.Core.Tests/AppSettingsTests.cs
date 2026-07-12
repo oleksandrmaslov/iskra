@@ -26,6 +26,7 @@ public class AppSettingsTests : IDisposable
         Assert.False(s.ConnectUnderReset);
         Assert.Equal(15, s.TimeoutSeconds);
         Assert.Equal(Environment.MachineName, s.StationId);
+        Assert.False(s.BatchesEnabled);
         Assert.Null(s.CatalogPath);
         Assert.Null(s.GdbPath);
         Assert.Equal(FlashHotkey.Enter, s.FlashHotkey);
@@ -62,6 +63,7 @@ public class AppSettingsTests : IDisposable
             TimeoutSeconds        = 25,
             DbPath                = @"D:\logs\flash.db",
             StationId             = "BENCH-7",
+            BatchesEnabled        = true,
             LastOperator          = "Iryna",
             LastBatch             = "B-2026-099",
             FlashHotkey           = FlashHotkey.Space,
@@ -78,6 +80,7 @@ public class AppSettingsTests : IDisposable
         Assert.Equal(original.TimeoutSeconds,       loaded.TimeoutSeconds);
         Assert.Equal(original.DbPath,               loaded.DbPath);
         Assert.Equal(original.StationId,            loaded.StationId);
+        Assert.Equal(original.BatchesEnabled,       loaded.BatchesEnabled);
         Assert.Equal(original.LastOperator,         loaded.LastOperator);
         Assert.Equal(original.LastBatch,            loaded.LastBatch);
         Assert.Equal(original.FlashHotkey,          loaded.FlashHotkey);
@@ -131,12 +134,19 @@ public class AppSettingsTests : IDisposable
     [Fact]
     public void Clone_returns_independent_copy()
     {
-        var original = new AppSettings { CatalogPath = "a", BmpFrequencyHz = 500_000 };
+        var original = new AppSettings
+        {
+            CatalogPath = "a",
+            BmpFrequencyHz = 500_000,
+            BatchesEnabled = true,
+        };
         var copy = original.Clone();
         copy.CatalogPath = "b";
         copy.BmpFrequencyHz = 9_000_000;
+        copy.BatchesEnabled = false;
         Assert.Equal("a", original.CatalogPath);
         Assert.Equal(500_000, original.BmpFrequencyHz);
+        Assert.True(original.BatchesEnabled);
     }
 
     // Sprint 5 fields ------------------------------------------------------

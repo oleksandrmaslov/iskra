@@ -34,13 +34,37 @@ production blockers, and the final Sprint 9 security acceptance gate.
 - Architecture proposal complete (catalog, GitHub auth, state machine, error
   codes, security, MVP plan, UI screens).
 - Sibling repo cloned at `C:\Users\Alexandr\iskra\`.
-- .NET 8 SDK installed **per-user** at
-  `C:\Users\IMT - Teilnehmer\AppData\Local\Microsoft\dotnet\` (not on system PATH).
-- Solution implemented — `Iskra.sln` with Core, CLI, and WPF projects.
+- .NET SDK 10.0.301 installed **per-user** at
+  `C:\Users\IMT - Teilnehmer\AppData\Local\Microsoft\dotnet\` (not on system
+  PATH) and pinned repository-wide by `global.json`.
+- Solution implemented — `Iskra.sln` with Core, the UI-neutral Application
+  layer, CLI, shipping WPF UI, and side-by-side Avalonia Desktop preview.
 - CLI invokes the full catalog/integrity/batch-lock/GDB flash path and includes
   diagnostics, authentication, catalog tooling, and log shipping commands.
 - Initial commit `5e26828` pushed to `origin/main`.
-- `tests/Iskra.Core.Tests/` contains the automated Core/security suite.
+- `tests/Iskra.Core.Tests/` contains the automated Core/security suite;
+  `tests/Iskra.Application.Tests/` covers the shared application policies.
+
+### 2026-07-12 — cross-platform/UI slice started
+
+- `src/Iskra.Application/` now owns fail-closed catalog-session selection,
+  exactly-one-BMP station readiness, and optional batch policy without taking a
+  dependency on WPF or Avalonia.
+- `src/Iskra.Desktop/` is a Ukrainian four-tab Avalonia 12.1.0 preview on
+  `net10.0`. It reads existing settings and performs safe, read-only readiness
+  checks; flashing and settings mutation are deliberately disabled until
+  workflow-test and hardware-in-the-loop parity are demonstrated.
+- WPF now auto-saves settings when leaving the Settings tab or closing the
+  window and shows dirty, saved, and save-error state. BMP discovery has an
+  explicit refresh action; zero or multiple probes block flashing.
+- Batches are disabled by default and can be enabled beside the cloud-log `.pem`
+  setting. Disabled mode ignores hidden/stale batch input, records a blank batch
+  ID, and creates no batch reservation. Enabled mode preserves the existing
+  digest-based lock.
+- The approved runtime migration is complete: SDK 10.0.301 is installed and
+  pinned, the solution targets .NET 10, and Avalonia is pinned to 12.1.0.
+- WPF remains the shipping Windows UI. This slice does not claim Linux/macOS UI,
+  packaging, or HIL validation.
 
 ### Sprint 1 — done in code; bench acceptance is the only remaining gate
 
@@ -112,19 +136,20 @@ User picked **Sprint 4 as MVP first, then Sprint 3**.
 2. ✅ **History + Settings tabs + persistence** — `MainWindow` is a
    `TabControl` with four tabs (Прошивка / Історія / Каталог / Налаштування).
    Settings persisted to `%LOCALAPPDATA%\Iskra\settings.json` via
-   `AppSettings` + atomic `.tmp` rename. Flash logic reads frequency,
-   power, connect-reset, timeout, gdb path, db path from settings.
+   `AppSettings` + atomic `.tmp` rename. Settings auto-save when leaving the
+   tab or closing the window; the header exposes dirty/saved/error state.
+   Flash logic reads frequency, power, connect-reset, timeout, gdb path, db path
+   from settings.
 3. ✅ **Catalog browser tab** — read-only view of the parsed catalog:
    each product as a card showing target descriptor (BMP match, part number,
    flash KB) and all releases (version, ELF filename, SHA-256, release
    date). Header shows trust status + count. "Перезавантажити" button.
-4. ✅ **Batch locking** — first PASS/FAIL row in a batch determines the
-   product+version lock. Subsequent flash attempts with a different
-   product or version fail with `E_BATCH_LOCKED` (Ukrainian hint
-   suggests changing the batch ID). Refused attempts are themselves
-   excluded from lock determination via the SQL filter in
-   `SqliteLogStore.GetBatchLock`. Live UI hint on the Flash tab shows
-   the current lock state as the operator types the batch ID.
+4. ✅ **Optional batch locking** — batch mode is disabled by default and has an
+   opt-in toggle beside the cloud-log `.pem` setting. Disabled mode uses a blank
+   batch ID and never creates a reservation. When enabled, the first PASS/FAIL
+   row in a batch determines the product+version lock; conflicting attempts fail
+   with `E_BATCH_LOCKED`. Refused attempts are excluded from lock determination,
+   and the Flash tab shows the current lock while the operator types the ID.
 5. ✅ **CSV export** — `SqliteLogStore.ExportCsv` streams the full
    `flash_attempts` table (or one batch's slice) to a UTF-8 CSV.
    RFC 4180 escaping via `CsvWriter`. Two buttons on the History tab:
@@ -152,6 +177,9 @@ User picked **Sprint 4 as MVP first, then Sprint 3**.
    post-install readiness check: gdb, BMP COM port, catalog JSON/signature,
    writable `%LOCALAPPDATA%\Iskra` / `%PROGRAMDATA%\Iskra`, and GitHub auth
    state.
+7. ✅ **Explicit station readiness** — the operator can refresh BMP discovery;
+   exactly one probe is required, and both zero and multiple probes block the
+   flash button with a visible Ukrainian readiness warning.
 
 ### Sprint 3 — done in code; live `--login` against the registered GitHub App is the only remaining gate
 
@@ -178,9 +206,10 @@ the Ed25519 catalog signature.
    which loads stored tokens, refreshes-and-persists if stale (5 min
    skew), deletes the blob if refresh is rejected.
 5. ✅ **CLI wiring** — `--login`, `--logout`, `--whoami` (the last calls
-   `GET /user` to show the GitHub login). `Iskra.Cli.csproj` bumped to
-   `net8.0-windows` since DPAPI is Windows-only. Exit code `5 = GitHub
-   auth / firmware download error`. Resolver no longer blocks on remote
+   `GET /user` to show the GitHub login). The CLI now targets generic
+   `net10.0`; private-token operations fail closed where a secure OS token-store
+   adapter is unavailable. Exit code `5 = GitHub auth / firmware download
+   error`. Resolver no longer blocks on remote
    releases — CLI calls `FirmwareCache.GetOrDownloadAsync` and injects
    `--elf <cache-path>` before `FlashOptions.Parse`.
 6. ✅ **WPF auth UI** — Settings tab "Авторизація GitHub" section with
@@ -435,9 +464,9 @@ Open Sprint 5 items:
 | ~~2.6~~ | ✅ Done in code: per-product flasher overrides via optional `frequency_hz` / `power_mode` / `connect_reset` / `timeout_s` in catalog `target` block; override global Settings at flash time |
 | ~~5~~ | ✅ Done in code (JSONL + GitHub App + LogShipper + WPF UX + iskra-logs workflow). Owner-actions outstanding: register App, install on iskra-logs, distribute .pem, drop workflow into iskra-logs |
 | ~~6~~ | ✅ Done in code (catalog allowlist, anti-rollback, revocation, security tests). Owner-actions outstanding: prod key rotation + GitHub repo settings |
-| 6.5 | Cross-station production batch lock — current `E_BATCH_LOCKED` is local SQLite only. Production needs a shared lock source (likely `iskra-logs`/cloud metadata or a small central API) so if station A starts batch `B` with product/version `X`, station B immediately knows batch `B` is locked and refuses any different product/version before flashing. Must remain offline-safe: when the shared lock source is unreachable, choose an explicit policy (`fail closed` for production, or supervisor override for lab recovery). |
+| 6.5 | Conditional cross-station production batch lock — not a blocker while the current workflow keeps batches disabled. If batches are enabled for production, current `E_BATCH_LOCKED` is local SQLite only and a shared lock becomes mandatory. It must bind batch, product/version/digest/target/station and use an explicit offline policy (`fail closed` for production, or audited supervisor recovery). |
 | 7 | Auto-pick product by board ID — needs firmware cooperation (write a board-ID byte to a known flash offset OR use chip UID + a per-product mapping table). Reads via `monitor read_mem`; matches against catalog before flashing |
-| 8 | Cross-platform app: platform-neutral services, secure OS adapters, Avalonia operator UI, Windows/Linux/macOS packaging and HIL. See `ROADMAP.md`. |
+| 8 | 🚧 Started: UI-neutral Application policies and the safe Avalonia preview exist. Remaining work is portable workflow orchestration, secure OS adapters, feature parity, Windows/Linux/macOS packaging, and HIL. See `ROADMAP.md`. |
 | 8.4 | Integrate only the replacement, owner-approved brand pack described in `docs/BRANDING_ASSET_REQUIREMENTS.md`. |
 | 9 | Final production security and release acceptance. Current audit classification: lab-ready, not factory-ready. |
 
@@ -505,8 +534,8 @@ Open Sprint 5 items:
   - `part_number` — display string shown to operators (`"PY32F002Ax5"`).
     NOT used for verification — BMP can't tell variants apart within a family.
 - **UI language:** Ukrainian only. No i18n framework; strings hardcoded in
-  WPF and CLI. Error codes (`E_*`) stay English / ASCII; the UI maps each
-  to a Ukrainian hint line.
+  WPF, Avalonia, and CLI. Error codes (`E_*`) stay English / ASCII; each UI
+  maps them to a Ukrainian hint line.
 - **MVP bench target:** `ci-clop` product, PY32F002Ax5 board. This is
   the *acceptance test* for Sprint 1, NOT a hardcoded assumption in code.
 - **Operator identity:** free-text dropdown at app start, stored per-station.
@@ -521,12 +550,14 @@ Open Sprint 5 items:
   signature/SHA-256, or a read-only GitHub App/service path if private access
   is required.
 - **Logging:** SQLite per station; CSV export per batch.
-- **Production safety:** batches lock the firmware version. The app NEVER
-  auto-updates firmware silently during a batch.
-- **Cross-station batch safety:** current batch locking is local to one
-  station's SQLite DB. Before full production, add a shared batch-lock check
-  so all stations know when a production batch ID is already locked to a
-  product/version and refuse conflicting attempts.
+- **Batch policy:** batches are disabled by default for the current use case.
+  Disabled mode records a blank batch ID and creates no lock. If explicitly
+  enabled, batches lock the full firmware identity and the app NEVER silently
+  auto-updates firmware during that batch.
+- **Cross-station batch safety:** this is conditional, not a current blocker
+  while batches stay disabled. If production enables batches, local SQLite is
+  insufficient; add a shared fail-closed check so every station refuses a
+  conflicting product/version/digest/target reservation.
 - **Hardware-in-the-loop testing** is available — use it from day one of
   Sprint 1 implementation. Don't build to a mock.
 

@@ -5,36 +5,69 @@ It drives the probe through `arm-none-eabi-gdb`, validates signed firmware
 catalog metadata, and logs every flash attempt to SQLite.
 
 > **Status (2026-07-12):** the Windows WPF app, CLI, catalog/signature flow,
-> logging, and installer are in place. Cross-platform work has started, but the
-> audited build remains lab-ready rather than factory-production-ready until
-> the gates in [`ROADMAP.md`](ROADMAP.md) are closed.
+> logging, and installer are in place. The UI-neutral application layer and a
+> safe, read-only Avalonia preview now build beside WPF. The audited build
+> remains lab-ready rather than factory-production-ready until the gates in
+> [`ROADMAP.md`](ROADMAP.md) are closed.
 
 ## Repository layout
 
 ```text
 Iskra.sln
 src/
-  Iskra.Core/       Class library: services, state machine, models
-  Iskra.Cli/        Console flasher
-  Iskra.Wpf/        Current Windows operator UI
+  Iskra.Core/        Target-agnostic flashing and trust engine
+  Iskra.Application/ UI-neutral catalog, readiness, and batch policy
+  Iskra.Cli/         Console flasher
+  Iskra.Wpf/         Shipping Windows operator UI
+  Iskra.Desktop/     Avalonia cross-platform preview (no flashing yet)
 tests/
-  Iskra.Core.Tests/ xUnit tests for the Core library
+  Iskra.Core.Tests/        xUnit tests for the Core library
+  Iskra.Application.Tests/ xUnit tests for shared application policy
 installer/
-  Product.wxs       App MSI
-  Bundle.wxs        Factory setup bundle
+  Product.wxs        App MSI
+  Bundle.wxs         Factory setup bundle
 ```
 
 ## Current Windows app prerequisites
 
 - Windows 10 / 11
-- .NET 8 SDK for development builds
+- .NET SDK 10.0.301 for development builds (pinned by `global.json`)
 - ARM GNU Toolchain for development runs, unless using the setup bundle
 - A Black Magic Probe attached to the target board
 
-The planned native Windows/Linux/macOS Avalonia UI, platform adapters, release
-order, and final security gates are tracked in [`ROADMAP.md`](ROADMAP.md).
+The Windows/Linux/macOS Avalonia migration, platform adapters, release order,
+and final security gates are tracked in [`ROADMAP.md`](ROADMAP.md).
 Requirements for the new owner-provided logos and brand system are in
 [`docs/BRANDING_ASSET_REQUIREMENTS.md`](docs/BRANDING_ASSET_REQUIREMENTS.md).
+
+## Current desktop UIs
+
+`Iskra.Wpf` remains the production-path Windows UI. Settings now save
+automatically when the operator leaves the Settings tab or closes the window;
+the header shows unsaved, saved, and save-error states. Probe readiness has an
+explicit refresh action, and flashing stays blocked unless exactly one BMP is
+detected.
+
+Batch mode is disabled by default for the current unbatched workflow. An opt-in
+toggle sits beside the cloud-log `.pem` configuration. With batches disabled,
+the hidden batch text is ignored, attempts use a blank batch ID, and no batch
+reservation is created. The existing digest-based lock remains available when
+the setting is enabled.
+
+`Iskra.Desktop` is the first Ukrainian four-tab Avalonia preview. It consumes
+the shared `Iskra.Application` catalog, readiness, and batch policies, but its
+flash and settings-mutation controls are deliberately disabled until workflow
+tests and hardware-in-the-loop parity exist. It does not replace WPF yet.
+
+```powershell
+$dotnet = "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe"
+& $dotnet run --project src\Iskra.Desktop
+```
+
+The repository now targets .NET 10 and pins SDK 10.0.301 through `global.json`.
+`Iskra.Desktop` uses Avalonia 12.1.0. This runtime/UI-toolkit migration does not
+by itself establish Windows/Linux/macOS visual, packaging, workflow, or HIL
+parity; WPF remains the shipping operator UI until those gates pass.
 
 ## Installer
 

@@ -156,6 +156,57 @@ public class SqliteLogStoreBatchLockTests
         }
     }
 
+    [Fact]
+    public void Append_logs_unbatched_attempts_without_creating_phantom_lock()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"unbatched-{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var store = new SqliteLogStore(path))
+            {
+                store.Append(Attempt("ci-clop", HashA), reserveBatchLock: false);
+                store.Append(Attempt("venovisor", HashB), reserveBatchLock: false);
+                Assert.Equal(2, store.Count());
+            }
+
+            using var raw = Open(path);
+            using var locks = raw.CreateCommand();
+            locks.CommandText = "SELECT COUNT(*) FROM batch_locks;";
+            Assert.Equal(0L, (long)(locks.ExecuteScalar() ?? -1L));
+
+            using var unbatched = raw.CreateCommand();
+            unbatched.CommandText = "SELECT COUNT(*) FROM flash_attempts WHERE batch_id = '';";
+            Assert.Equal(2L, (long)(unbatched.ExecuteScalar() ?? -1L));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    private static FlashAttemptRecord Attempt(string productId, string hash) => new(
+        TsUtc: DateTime.UtcNow,
+        Operator: "Iryna",
+        StationId: "BENCH-1",
+        BatchId: "",
+        ProductId: productId,
+        FirmwareVersion: "1.0.0",
+        FirmwareSha256: hash,
+        TargetBmpMatch: "PY32Fxxx",
+        TargetDetected: "PY32Fxxx M0+",
+        TargetFlashKb: 32,
+        ComPort: "COM30",
+        ProbeSerial: "BMP-1",
+        Power: PowerMode.External,
+        ConnectRst: false,
+        BmpFrequencyHz: 1_000_000,
+        Result: FlashResult.Pass,
+        ErrorCode: null,
+        ErrorMessage: null,
+        DurationMs: 800,
+        GdbTail: null);
+
     private static void CreateLegacyDatabase(string path)
     {
         using var legacy = Open(path);

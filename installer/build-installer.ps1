@@ -16,7 +16,7 @@
 #   installer/out/Iskra-<ver>-preinstall-check.ps1
 #
 # Requires:
-#   * .NET 8 SDK on PATH (or LOCALAPPDATA install; script handles both)
+#   * .NET SDK 10.0.301 on PATH (or LOCALAPPDATA install; `global.json` pins it)
 #   * `wix` global dotnet tool (install once: `dotnet tool install --global wix`)
 #   * curl.exe (built into supported Windows 10/11 images)
 #

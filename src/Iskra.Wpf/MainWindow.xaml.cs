@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.Diagnostics;
 using System.IO;
@@ -5,8 +6,10 @@ using System.Net.Http;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using Iskra.Application;
 using Iskra.Core;
 using Microsoft.Win32;
 
@@ -22,6 +25,12 @@ public partial class MainWindow : Window
     private string? _port;
     private string? _probeSerial;
     private string? _lastAppUpdateUrl;
+    private readonly ICatalogSession _catalogSession = new CatalogSession();
+    private bool _isLoaded;
+    private bool _flashInProgress;
+    private bool _suppressTabSelectionChanged;
+    private bool _isApplyingSettings;
+    private TabItem? _previousMainTab;
 
     public MainWindow()
     {
@@ -31,6 +40,21 @@ public partial class MainWindow : Window
         // the Flash tab — even with focus on the Operator/Batch boxes (Enter
         // is what barcode scanners emit as a line terminator).
         PreviewKeyDown += MainWindow_PreviewKeyDown;
+        MainTabs.SelectionChanged += MainTabs_SelectionChanged;
+        Closing += MainWindow_Closing;
+        SettingsTab.AddHandler(
+            TextBox.TextChangedEvent,
+            new TextChangedEventHandler(SettingsTextChanged));
+        SettingsTab.AddHandler(
+            ToggleButton.CheckedEvent,
+            new RoutedEventHandler(SettingsControlChanged));
+        SettingsTab.AddHandler(
+            ToggleButton.UncheckedEvent,
+            new RoutedEventHandler(SettingsControlChanged));
+        SettingsTab.AddHandler(
+            Selector.SelectionChangedEvent,
+            new SelectionChangedEventHandler(SettingsSelectionChanged));
+        _previousMainTab = MainTabs.SelectedItem as TabItem;
     }
 
     // ============================================================
@@ -44,7 +68,7 @@ public partial class MainWindow : Window
 
         if (!string.IsNullOrEmpty(_settings.LastOperator))
             OperatorBox.Text = _settings.LastOperator;
-        if (!string.IsNullOrEmpty(_settings.LastBatch))
+        if (_settings.BatchesEnabled && !string.IsNullOrEmpty(_settings.LastBatch))
             BatchBox.Text = _settings.LastBatch;
 
         DiscoverGdb();
@@ -55,6 +79,11 @@ public partial class MainWindow : Window
         RefreshCatalogCacheStatus();
         RefreshAppUpdateStatus();
         RefreshCloudSyncStatus();
+        ApplyBatchModeToUI();
+
+        _isLoaded = true;
+        _previousMainTab = MainTabs.SelectedItem as TabItem;
+        RefreshFlashReadiness(updateBanner: true);
 
         // Sprint 3.5: kick off a non-blocking background fetch of the remote
         // catalog. On success we cache to disk; user clicks "Перезавантажити"
@@ -69,6 +98,9 @@ public partial class MainWindow : Window
         StatusGdb.Text = _gdbExe is null
             ? "gdb: НЕ ЗНАЙДЕНО"
             : $"gdb: {Path.GetFileName(_gdbExe)}";
+        StatusGdb.Foreground = _gdbExe is null
+            ? new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0xB3))
+            : new SolidColorBrush(Color.FromRgb(0x9C, 0xDC, 0x9C));
     }
 
     private void DiscoverProbe()
@@ -80,19 +112,112 @@ public partial class MainWindow : Window
             _probeSerial = probes[0].SerialNumber;
             StatusPort.Text = $"Порт: {_port}" +
                 (string.IsNullOrWhiteSpace(_probeSerial) ? "" : $" · SN {_probeSerial}");
+            StatusPort.Foreground = new SolidColorBrush(Color.FromRgb(0x9C, 0xDC, 0x9C));
         }
         else if (probes.Count == 0)
         {
             _port = null;
             _probeSerial = null;
             StatusPort.Text = "Порт: BMP не знайдено";
+            StatusPort.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0xB3));
         }
         else
         {
             _port = null;
             _probeSerial = null;
             StatusPort.Text = $"Порт: знайдено {probes.Count} BMP (потрібно один)";
+            StatusPort.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x80));
         }
+    }
+
+    private void ProbeRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        ProbeRefreshButton.IsEnabled = false;
+        try
+        {
+            DiscoverProbe();
+            RefreshFlashReadiness(updateBanner: true);
+        }
+        finally
+        {
+            ProbeRefreshButton.IsEnabled = true;
+        }
+    }
+
+    private void RefreshFlashReadiness(bool updateBanner)
+    {
+        var operatorMissing = string.IsNullOrWhiteSpace(OperatorBox.Text);
+        var batchMissing = _settings.BatchesEnabled && string.IsNullOrWhiteSpace(BatchBox.Text);
+        var selectionMissing = ProductCombo.SelectedItem is not string
+            || VersionCombo.SelectedItem is not FirmwareRelease;
+
+        var ready = _gdbExe is not null
+            && _port is not null
+            && _catalog is not null
+            && !operatorMissing
+            && !batchMissing
+            && !selectionMissing;
+        FlashButton.IsEnabled = !_flashInProgress && ready;
+
+        if (!updateBanner || _flashInProgress)
+            return;
+
+        if (_port is null)
+        {
+            SetBannerNeutral(
+                "BLACK MAGIC PROBE НЕ ПІДКЛЮЧЕНО",
+                warning: true,
+                "Підключіть рівно один BMP і натисніть «Оновити BMP» у верхній панелі.");
+        }
+        else if (_gdbExe is null)
+        {
+            SetBannerNeutral(
+                "GDB НЕ ЗНАЙДЕНО",
+                warning: true,
+                "Вкажіть arm-none-eabi-gdb у Налаштуваннях або повторно запустіть інсталятор Iskra.");
+        }
+        else if (_catalog is null)
+        {
+            SetBannerNeutral(
+                "КАТАЛОГ НЕ ГОТОВИЙ",
+                warning: true,
+                "Перевірте підпис і шлях до catalog.json у Налаштуваннях.");
+        }
+        else if (operatorMissing)
+        {
+            SetBannerNeutral("ВКАЖІТЬ ОПЕРАТОРА", warning: false, "Після цього прошивка стане доступною.");
+        }
+        else if (batchMissing)
+        {
+            SetBannerNeutral("ВКАЖІТЬ ID ПАРТІЇ", warning: false, "Партії можна вимкнути в Налаштуваннях → Хмарний журнал.");
+        }
+        else if (selectionMissing)
+        {
+            SetBannerNeutral("ОБЕРІТЬ ПРОДУКТ І ВЕРСІЮ", warning: false);
+        }
+        else
+        {
+            var detail = _settings.BatchesEnabled
+                ? "Перевірте ID партії та натисніть кнопку нижче"
+                : "Партії вимкнено · спроба буде записана без ID партії";
+            SetBannerNeutral("ГОТОВО ДО ПРОШИВКИ", warning: false, detail);
+        }
+    }
+
+    private void SetFlashInProgress(bool value)
+    {
+        _flashInProgress = value;
+        // Keep the inputs that feed the durable attempt record stable across
+        // every await in the flash workflow. The current operation already
+        // snapshots product/release/options locally; blocking Settings and BMP
+        // refresh prevents station, database, batch-mode, port, or probe serial
+        // from changing before the final log append.
+        SettingsTab.IsEnabled = !value;
+        ProbeRefreshButton.IsEnabled = !value;
+        if (value)
+            FlashButton.IsEnabled = false;
+        else
+            RefreshFlashReadiness(updateBanner: false);
     }
 
     private void LoadCatalog()
@@ -103,108 +228,75 @@ public partial class MainWindow : Window
         ProductCombo.Items.Clear();
         VersionCombo.ItemsSource = null;
 
-        var candidates = new List<string>();
-        if (!string.IsNullOrEmpty(_settings.CatalogPath))
-            candidates.Add(_settings.CatalogPath);
-        // Sprint 3.5: auto-updated catalog cache. Wins over the bundled fallback
-        // but not over an explicit CatalogPath setting.
-        if (_settings.CatalogAutoUpdate)
+        // The shared application layer owns source precedence and trust. An
+        // explicit path is authoritative, and the first existing fallback is
+        // authoritative: a missing, malformed, or untrusted source never
+        // silently downgrades to a different catalog.
+        var session = _catalogSession.Load(_settings);
+        if (!session.IsReady)
         {
-            var cached = Path.Combine(RemoteCatalogClient.DefaultCacheDir(), RemoteCatalogClient.CatalogFileName);
-            if (File.Exists(cached)) candidates.Add(cached);
-        }
-        candidates.Add(Path.Combine(AppContext.BaseDirectory, "examples", "catalog.json"));
-        candidates.Add(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
-        candidates.Add("examples/catalog.json");
-        candidates.Add("catalog.json");
-
-        foreach (var c in candidates)
-        {
-            if (File.Exists(c) || Directory.Exists(c)) { _catalogPath = Path.GetFullPath(c); break; }
-        }
-        if (_catalogPath is null)
-        {
-            StatusCatalog.Text = "Каталог: не знайдено (вкажіть шлях у Налаштуваннях)";
+            var message = CatalogFailureMessage(session);
+            StatusCatalog.Text = $"Каталог: {message}";
+            CatalogHeader.Text = $"Каталог недоступний: {message}";
+            CatalogProductsList.ItemsSource = null;
             return;
         }
 
-        try
-        {
-            string trustText;
-            if (Directory.Exists(_catalogPath))
+        _catalog = session.Catalog;
+        _catalogPath = session.SourcePath;
+        _catalogDir = session.SourceDirectory;
+        var trustText = session.IsSideload
+            ? "sideload (лабораторний режим)"
+            : session.TrustResult switch
             {
-                if (_settings.RequireSignedCatalog)
-                {
-                    StatusCatalog.Text = "Каталог: sideload не дозволено, бо потрібен підпис";
-                    return;
-                }
-                _catalog = SideloadCatalogBuilder.BuildFromDirectory(_catalogPath);
-                _catalogDir = _catalogPath;
-                trustText = "sideload";
-            }
-            else
+                CatalogTrustResult.Verified => "✓ Ed25519",
+                CatalogTrustResult.UnsignedAllowed => "без підпису (лабораторний режим)",
+                _ => session.TrustResult?.ToString() ?? "невідомий стан довіри",
+            };
+
+        StatusCatalog.Text =
+            $"Каталог: {_catalog!.Products.Count} продукт(ів) · {trustText} · {Path.GetFileName(_catalogPath)}";
+
+        foreach (var product in _catalog.Products)
+            ProductCombo.Items.Add(product.ProductId);
+        if (ProductCombo.Items.Count > 0)
+            ProductCombo.SelectedIndex = 0;
+
+        var revokedCount = _catalog.Revoked?.Count ?? 0;
+        var revokedSuffix = revokedCount > 0 ? $" · {revokedCount} відкликано" : "";
+        CatalogHeader.Text =
+            $"{Path.GetFileName(_catalogPath)} · {_catalog.Products.Count} продукт(ів) · {trustText}{revokedSuffix}";
+        CatalogProductsList.ItemsSource = _catalog.Products;
+    }
+
+    private static string CatalogFailureMessage(CatalogSessionResult session)
+    {
+        return session.Status switch
+        {
+            CatalogSessionStatus.NotFound => "не знайдено (вкажіть шлях у Налаштуваннях)",
+            CatalogSessionStatus.ExplicitPathMissing =>
+                $"вказаний шлях не існує: {session.SourcePath}",
+            CatalogSessionStatus.SideloadRequiresLabMode =>
+                "sideload дозволено лише в явному лабораторному режимі",
+            CatalogSessionStatus.TrustRejected => session.TrustResult switch
             {
-                _catalog = CatalogJson.ParseFile(_catalogPath);
-                _catalogDir = Path.GetDirectoryName(_catalogPath);
-
-                var trust = CatalogTrust.VerifyCatalogFile(_catalogPath, _settings.RequireSignedCatalog);
-                trustText = trust switch
-                {
-                    CatalogTrustResult.Verified         => "✓ Ed25519",
-                    CatalogTrustResult.UnsignedAllowed  => "без підпису",
-                    CatalogTrustResult.UnsignedRejected => "✗ потрібен підпис",
-                    CatalogTrustResult.BadSignature     => "✗ невірний підпис",
-                    CatalogTrustResult.NoPublicKeyConfigured => "✗ немає ключа",
-                    CatalogTrustResult.IoError          => "✗ підпис неможливо прочитати",
-                    _                                   => trust.ToString(),
-                };
-
-                var trustAccepted = trust == CatalogTrustResult.Verified
-                    || (!_settings.RequireSignedCatalog
-                        && trust == CatalogTrustResult.UnsignedAllowed);
-                if (!trustAccepted)
-                {
-                    // Fail closed for every signature IO/format/key error. The
-                    // only unsigned path is the explicit lab override above.
-                    _catalog = null;
-                    return;
-                }
-            }
-            StatusCatalog.Text =
-                $"Каталог: {_catalog.Products.Count} продукт(ів) · {trustText} · {Path.GetFileName(_catalogPath)}";
-
-            foreach (var p in _catalog.Products)
-                ProductCombo.Items.Add(p.ProductId);
-            if (ProductCombo.Items.Count > 0)
-                ProductCombo.SelectedIndex = 0;
-
-            // Catalog browser tab
-            var revokedCount = _catalog.Revoked?.Count ?? 0;
-            var revokedSuffix = revokedCount > 0 ? $" · {revokedCount} відкликано" : "";
-            CatalogHeader.Text =
-                $"{Path.GetFileName(_catalogPath)} · {_catalog.Products.Count} продукт(ів) · {trustText}{revokedSuffix}";
-            CatalogProductsList.ItemsSource = _catalog.Products;
-        }
-        catch (CatalogParseException ex)
-        {
-            _catalog = null;
-            StatusCatalog.Text = $"Каталог: помилка — {ex.Message}";
-            CatalogHeader.Text = $"Помилка читання каталогу: {ex.Message}";
-            CatalogProductsList.ItemsSource = null;
-        }
-        catch (SideloadCatalogException ex)
-        {
-            _catalog = null;
-            StatusCatalog.Text = $"Sideload: помилка — {ex.Message}";
-            CatalogHeader.Text = $"Помилка sideload: {ex.Message}";
-            CatalogProductsList.ItemsSource = null;
-        }
+                CatalogTrustResult.UnsignedRejected => "підпис обов'язковий, але файл .sig відсутній",
+                CatalogTrustResult.BadSignature => "невірний підпис Ed25519",
+                CatalogTrustResult.NoPublicKeyConfigured => "у застосунку немає довіреного публічного ключа",
+                CatalogTrustResult.IoError => "файл підпису неможливо прочитати",
+                _ => "перевірку довіри не пройдено",
+            },
+            CatalogSessionStatus.ParseError => $"помилка формату — {session.Diagnostic}",
+            CatalogSessionStatus.IoError => $"помилка читання — {session.Diagnostic}",
+            _ => $"помилка — {session.Diagnostic}",
+        };
     }
 
     private void CatalogReload_Click(object sender, RoutedEventArgs e)
     {
         LoadCatalog();
         RefreshBatchLockStatus();
+        RefreshFlashReadiness(updateBanner: true);
     }
 
     private void ProductCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -213,12 +305,14 @@ public partial class MainWindow : Window
         if (_catalog is null || ProductCombo.SelectedItem is not string id)
         {
             RefreshAuthBanner(null);
+            RefreshFlashReadiness(updateBanner: true);
             return;
         }
         var product = _catalog.FindProduct(id);
         if (product is null)
         {
             RefreshAuthBanner(null);
+            RefreshFlashReadiness(updateBanner: true);
             return;
         }
 
@@ -231,6 +325,7 @@ public partial class MainWindow : Window
     private void VersionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         RefreshAuthBanner(VersionCombo.SelectedItem as FirmwareRelease);
+        RefreshFlashReadiness(updateBanner: true);
     }
 
     // ============================================================
@@ -242,11 +337,23 @@ public partial class MainWindow : Window
         if (_catalog is null) { Beep(); return; }
         if (ProductCombo.SelectedItem is not string productId) { Beep(); return; }
 
+        // Re-check the physical connection immediately before a flash. This
+        // catches a probe unplugged after startup instead of using stale state.
+        DiscoverProbe();
+        RefreshFlashReadiness(updateBanner: false);
+
         var op = OperatorBox.Text?.Trim() ?? "";
-        var batch = BatchBox.Text?.Trim() ?? "";
-        if (string.IsNullOrEmpty(op) || string.IsNullOrEmpty(batch))
+        var batchPolicy = BatchPolicy.Resolve(_settings, BatchBox.Text);
+        var batch = batchPolicy.EffectiveBatchId;
+        if (string.IsNullOrEmpty(op))
         {
-            SetBannerNeutral("Заповніть Оператор і Партія", warning: true);
+            SetBannerNeutral("Вкажіть оператора", warning: true);
+            return;
+        }
+        if (!batchPolicy.IsValid)
+        {
+            SetBannerNeutral("Вкажіть ID партії", warning: true,
+                "Або вимкніть партії в Налаштуваннях → Хмарний журнал.");
             return;
         }
         if (_gdbExe is null)
@@ -256,7 +363,8 @@ public partial class MainWindow : Window
         }
         if (_port is null)
         {
-            SetBannerNeutral("Black Magic Probe не знайдено", warning: true);
+            SetBannerNeutral("Black Magic Probe не знайдено", warning: true,
+                "Підключіть рівно один BMP і натисніть «Оновити BMP» у верхній панелі.");
             return;
         }
 
@@ -281,43 +389,46 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Atomically reserve the complete firmware identity before touching
-        // hardware. Product/version alone is insufficient when release bytes
-        // or target metadata change under a reused version.
-        try
+        if (batchPolicy.ShouldReserve)
         {
-            using var lockStore = new SqliteLogStore(ResolveDbPath());
-            var requested = new BatchLockDescriptor(
-                product.ProductId,
-                release.Version,
-                release.ElfSha256,
-                product.Target.BmpMatch,
-                product.Target.FlashKb);
-            var reservation = lockStore.ReserveBatchLock(batch, requested);
-            if (!reservation.IsAccepted)
+            // Atomically reserve the complete firmware identity before touching
+            // hardware. Product/version alone is insufficient when release bytes
+            // or target metadata change under a reused version.
+            try
             {
-                var locked = reservation.Lock;
-                var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion} "
-                    + $"sha256={ShortSha(locked.FirmwareSha256)}, attempted "
-                    + $"{product.ProductId} v{release.Version} sha256={ShortSha(release.ElfSha256)}";
-                ShowFail("E_BATCH_LOCKED", msg);
-                LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    "E_BATCH_LOCKED", msg, 0, null, null);
+                using var lockStore = new SqliteLogStore(ResolveDbPath());
+                var requested = new BatchLockDescriptor(
+                    product.ProductId,
+                    release.Version,
+                    release.ElfSha256,
+                    product.Target.BmpMatch,
+                    product.Target.FlashKb);
+                var reservation = lockStore.ReserveBatchLock(batch, requested);
+                if (!reservation.IsAccepted)
+                {
+                    var locked = reservation.Lock;
+                    var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion} "
+                        + $"sha256={ShortSha(locked.FirmwareSha256)}, attempted "
+                        + $"{product.ProductId} v{release.Version} sha256={ShortSha(release.ElfSha256)}";
+                    ShowFail("E_BATCH_LOCKED", msg);
+                    LogAttempt(op, batch, product, release, FlashResult.Fail,
+                        "E_BATCH_LOCKED", msg, 0, null, null);
+                    RefreshHistory();
+                    RefreshBatchLockStatus();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                // With optional batch safety enabled, an unavailable ledger
+                // means the station cannot prove the batch identity.
+                ShowFail("E_BATCH_LOCK_CHECK_FAILED", ex.Message);
                 RefreshHistory();
-                RefreshBatchLockStatus();
                 return;
             }
         }
-        catch (Exception ex)
-        {
-            // Production safety: an unavailable ledger means the station cannot
-            // prove the batch identity, so flashing must fail closed.
-            ShowFail("E_BATCH_LOCK_CHECK_FAILED", ex.Message);
-            RefreshHistory();
-            return;
-        }
 
-        FlashButton.IsEnabled = false;
+        SetFlashInProgress(true);
         GdbOutput.Clear();
 
         string elfPath;
@@ -334,7 +445,7 @@ public partial class MainWindow : Window
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_NOT_SIGNED_IN", "remote firmware requires GitHub sign-in", 0, null, null);
                 RefreshHistory();
-                FlashButton.IsEnabled = true;
+                SetFlashInProgress(false);
                 RefreshAuthStatus();
                 return;
             }
@@ -344,7 +455,7 @@ public partial class MainWindow : Window
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_AUTH_EXPIRED", "github refresh token expired", 0, null, null);
                 RefreshHistory();
-                FlashButton.IsEnabled = true;
+                SetFlashInProgress(false);
                 RefreshAuthStatus();
                 return;
             }
@@ -354,7 +465,7 @@ public partial class MainWindow : Window
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_ASSET_NOT_FOUND", ex.Message, 0, null, null);
                 RefreshHistory();
-                FlashButton.IsEnabled = true;
+                SetFlashInProgress(false);
                 return;
             }
             catch (Exception ex)
@@ -363,7 +474,7 @@ public partial class MainWindow : Window
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_FW_DOWNLOAD_FAILED", ex.Message, 0, null, null);
                 RefreshHistory();
-                FlashButton.IsEnabled = true;
+                SetFlashInProgress(false);
                 return;
             }
         }
@@ -379,7 +490,7 @@ public partial class MainWindow : Window
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_FW_NOT_FOUND", elfPath, 0, null, null);
                 RefreshHistory();
-                FlashButton.IsEnabled = true;
+                SetFlashInProgress(false);
                 return;
             }
         }
@@ -388,7 +499,7 @@ public partial class MainWindow : Window
 
         // Remember the operator + batch for next launch.
         _settings.LastOperator = op;
-        _settings.LastBatch = batch;
+        _settings.LastBatch = batchPolicy.ShouldReserve ? batch : null;
         try { AppSettingsStore.Save(_settings); } catch { /* non-fatal */ }
 
         try
@@ -471,7 +582,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            FlashButton.IsEnabled = true;
+            SetFlashInProgress(false);
         }
     }
 
@@ -495,7 +606,7 @@ public partial class MainWindow : Window
             GdbOutput.AppendText($"\n[Деталі помилки]\n{detail}\n");
     }
 
-    private void SetBannerNeutral(string msg, bool warning)
+    private void SetBannerNeutral(string msg, bool warning, string? detail = null)
     {
         ResultBanner.Background = warning
             ? new SolidColorBrush(Color.FromRgb(0xF2, 0xC1, 0x4E))
@@ -503,7 +614,7 @@ public partial class MainWindow : Window
         ResultText.Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
         ResultDetail.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
         ResultText.Text = msg;
-        ResultDetail.Text = "";
+        ResultDetail.Text = detail ?? "";
     }
 
     private void LogAttempt(string op, string batch, Product product, FirmwareRelease release,
@@ -534,7 +645,8 @@ public partial class MainWindow : Window
                 ErrorCode:        errCode,
                 ErrorMessage:     errMsg,
                 DurationMs:       durMs,
-                GdbTail:          gdbTail));
+                GdbTail:          gdbTail),
+                reserveBatchLock: _settings.BatchesEnabled);
         }
         catch { /* never let log failures crash the UI */ }
     }
@@ -564,13 +676,27 @@ public partial class MainWindow : Window
 
     private void HistoryRefresh_Click(object sender, RoutedEventArgs e) => RefreshHistory();
 
+    private void OperatorBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_isLoaded) return;
+        RefreshFlashReadiness(updateBanner: true);
+    }
+
     private void BatchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
+        if (!_isLoaded) return;
         RefreshBatchLockStatus();
+        RefreshFlashReadiness(updateBanner: true);
     }
 
     private void RefreshBatchLockStatus()
     {
+        if (!_settings.BatchesEnabled)
+        {
+            BatchLockLabel.Text = "";
+            return;
+        }
+
         var batch = BatchBox.Text?.Trim();
         if (string.IsNullOrEmpty(batch))
         {
@@ -613,6 +739,12 @@ public partial class MainWindow : Window
 
     private void ExportCsv(bool batchOnly)
     {
+        if (batchOnly && !_settings.BatchesEnabled)
+        {
+            BatchSummary.Text = "Партії вимкнено. Скористайтеся експортом усього журналу.";
+            return;
+        }
+
         var dbPath = ResolveDbPath();
         if (!File.Exists(dbPath))
         {
@@ -667,8 +799,8 @@ public partial class MainWindow : Window
             var rows = store.QueryRecent(200);
             HistoryGrid.ItemsSource = rows;
 
-            var currentBatch = BatchBox.Text?.Trim();
-            if (!string.IsNullOrEmpty(currentBatch))
+            var currentBatch = _settings.BatchesEnabled ? BatchBox.Text?.Trim() : null;
+            if (_settings.BatchesEnabled && !string.IsNullOrEmpty(currentBatch))
             {
                 var (total, pass, fail) = store.CountsForBatch(currentBatch);
                 if (total > 0)
@@ -684,7 +816,9 @@ public partial class MainWindow : Window
             }
             else
             {
-                BatchSummary.Text = $"Останні {rows.Count} записів (вкажіть Партію для зведення).";
+                BatchSummary.Text = _settings.BatchesEnabled
+                    ? $"Останні {rows.Count} записів (вкажіть Партію для зведення)."
+                    : $"Останні {rows.Count} записів. Партії вимкнено.";
             }
         }
         catch (Exception ex)
@@ -700,6 +834,9 @@ public partial class MainWindow : Window
 
     private void ApplySettingsToUI()
     {
+        _isApplyingSettings = true;
+        try
+        {
         SettingsCatalogPath.Text   = _settings.CatalogPath ?? "";
         SettingsRequireSigned.IsChecked = _settings.RequireSignedCatalog;
         SettingsRequireSigned.IsEnabled = CatalogTrust.IsUnsignedLabModeEnabled();
@@ -720,6 +857,7 @@ public partial class MainWindow : Window
         SettingsTimeout.Text       = _settings.TimeoutSeconds.ToString(CultureInfo.InvariantCulture);
         SettingsDbPath.Text        = _settings.DbPath ?? "";
         SettingsStationId.Text     = _settings.StationId;
+        SettingsBatchesEnabled.IsChecked = _settings.BatchesEnabled;
         SelectHotkeyComboItem(_settings.FlashHotkey);
         RefreshFlashHotkeyHint();
 
@@ -729,6 +867,36 @@ public partial class MainWindow : Window
         SettingsLogShipperKey.Text           = _settings.LogShipperPrivateKeyPath;
         SettingsLogsSourceLocked.Text        = $"{GitHubAppConfig.LogsRepoOwner}/{GitHubAppConfig.LogsRepoName} (read-only)";
         AppUpdateSourceLocked.Text           = $"{GitHubAppConfig.AppUpdatesRepoOwner}/{GitHubAppConfig.AppUpdatesRepoName}";
+        ApplyBatchModeToUI();
+        }
+        finally
+        {
+            _isApplyingSettings = false;
+        }
+    }
+
+    private void ApplyBatchModeToUI()
+    {
+        var enabled = _settings.BatchesEnabled;
+        BatchLabel.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        BatchBox.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        BatchBox.IsEnabled = enabled;
+        Grid.SetColumnSpan(OperatorBox, enabled ? 1 : 4);
+        BatchLockLabel.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        ExportCsvBatchButton.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+
+        if (enabled)
+        {
+            if (string.IsNullOrWhiteSpace(BatchBox.Text)
+                && !string.IsNullOrWhiteSpace(_settings.LastBatch))
+                BatchBox.Text = _settings.LastBatch;
+            RefreshBatchLockStatus();
+        }
+        else
+        {
+            BatchBox.Text = "";
+            BatchLockLabel.Text = "";
+        }
     }
 
     private void SelectHotkeyComboItem(FlashHotkey hk)
@@ -807,48 +975,137 @@ public partial class MainWindow : Window
         FlashButton_Click(FlashButton, new RoutedEventArgs());
     }
 
+    private void SettingsTextChanged(object sender, TextChangedEventArgs e) => MarkSettingsDirty();
+
+    private void SettingsControlChanged(object sender, RoutedEventArgs e) => MarkSettingsDirty();
+
+    private void SettingsSelectionChanged(object sender, SelectionChangedEventArgs e) => MarkSettingsDirty();
+
+    private void MarkSettingsDirty()
+    {
+        if (!_isLoaded || _isApplyingSettings)
+            return;
+
+        SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x8A, 0x62, 0x00));
+        SettingsStatus.Text = "Є незбережені зміни — вони збережуться при виході з вкладки.";
+        StatusSave.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x80));
+        StatusSave.Text = "Є незбережені зміни";
+    }
+
+
+    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_isLoaded || _suppressTabSelectionChanged || !ReferenceEquals(e.OriginalSource, MainTabs))
+            return;
+
+        var selected = MainTabs.SelectedItem as TabItem;
+        if (ReferenceEquals(_previousMainTab, SettingsTab)
+            && !ReferenceEquals(selected, SettingsTab)
+            && !TrySaveSettings(automatic: true, showDialogOnError: true))
+        {
+            _suppressTabSelectionChanged = true;
+            try
+            {
+                MainTabs.SelectedItem = SettingsTab;
+                _previousMainTab = SettingsTab;
+            }
+            finally
+            {
+                _suppressTabSelectionChanged = false;
+            }
+            return;
+        }
+
+        _previousMainTab = selected;
+    }
+
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (!_isLoaded)
+            return;
+
+        if (_flashInProgress)
+        {
+            e.Cancel = true;
+            MessageBox.Show(
+                this,
+                "Дочекайтеся завершення прошивки перед закриттям Iskra.",
+                "Прошивка виконується",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        if (!TrySaveSettings(automatic: true, showDialogOnError: true))
+        {
+            e.Cancel = true;
+            _suppressTabSelectionChanged = true;
+            try
+            {
+                MainTabs.SelectedItem = SettingsTab;
+                _previousMainTab = SettingsTab;
+            }
+            finally
+            {
+                _suppressTabSelectionChanged = false;
+            }
+        }
+    }
 
     private void SettingsSave_Click(object sender, RoutedEventArgs e)
     {
+        TrySaveSettings(automatic: false, showDialogOnError: false);
+    }
+
+    private bool TrySaveSettings(bool automatic, bool showDialogOnError)
+    {
         try
         {
-            _settings.CatalogPath          = NullIfEmpty(SettingsCatalogPath.Text);
-            _settings.RequireSignedCatalog = !CatalogTrust.IsUnsignedLabModeEnabled()
+            var candidate = _settings.Clone();
+            candidate.CatalogPath          = NullIfEmpty(SettingsCatalogPath.Text);
+            candidate.RequireSignedCatalog = !CatalogTrust.IsUnsignedLabModeEnabled()
                 || SettingsRequireSigned.IsChecked == true;
-            _settings.CatalogAutoUpdate    = SettingsCatalogAutoUpdate.IsChecked == true;
+            candidate.CatalogAutoUpdate    = SettingsCatalogAutoUpdate.IsChecked == true;
             // Sprint 6: owner/repo are hard-locked to the embedded allowlist —
             // not user-editable. Always persist the canonical values so a stale
             // settings.json from a prior dev build doesn't linger.
-            _settings.CatalogOwner         = CatalogTrust.OfficialCatalogSource.Owner;
-            _settings.CatalogRepo          = CatalogTrust.OfficialCatalogSource.Repo;
-            _settings.GdbPath              = NullIfEmpty(SettingsGdbPath.Text);
-            _settings.Power                = SettingsPowerProbe.IsChecked == true
-                                              ? PowerMode.Probe : PowerMode.External;
-            _settings.ConnectUnderReset    = SettingsConnectReset.IsChecked == true;
-            _settings.DbPath               = NullIfEmpty(SettingsDbPath.Text);
-            _settings.StationId            = string.IsNullOrWhiteSpace(SettingsStationId.Text)
-                                              ? Environment.MachineName
-                                              : SettingsStationId.Text.Trim();
+            candidate.CatalogOwner         = CatalogTrust.OfficialCatalogSource.Owner;
+            candidate.CatalogRepo          = CatalogTrust.OfficialCatalogSource.Repo;
+            candidate.GdbPath              = NullIfEmpty(SettingsGdbPath.Text);
+            candidate.Power                = SettingsPowerProbe.IsChecked == true
+                                               ? PowerMode.Probe : PowerMode.External;
+            candidate.ConnectUnderReset    = SettingsConnectReset.IsChecked == true;
+            candidate.DbPath               = NullIfEmpty(SettingsDbPath.Text);
+            candidate.StationId            = string.IsNullOrWhiteSpace(SettingsStationId.Text)
+                                               ? Environment.MachineName
+                                               : SettingsStationId.Text.Trim();
+            candidate.BatchesEnabled       = SettingsBatchesEnabled.IsChecked == true;
+            candidate.LastOperator         = NullIfEmpty(OperatorBox.Text);
+            candidate.LastBatch            = candidate.BatchesEnabled
+                ? NullIfEmpty(BatchBox.Text)
+                : null;
 
             if (!int.TryParse(SettingsBmpFreq.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var f) || f <= 0)
                 throw new FormatException("Частота повинна бути додатнім цілим числом (Hz).");
-            _settings.BmpFrequencyHz = f;
+            candidate.BmpFrequencyHz = f;
 
             if (!int.TryParse(SettingsTimeout.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var t) || t <= 0)
                 throw new FormatException("Тайм-аут повинен бути додатнім цілим (секунди).");
-            _settings.TimeoutSeconds = t;
+            candidate.TimeoutSeconds = t;
 
-            _settings.FlashHotkey = ReadHotkeyComboSelection();
+            candidate.FlashHotkey = ReadHotkeyComboSelection();
 
-            _settings.LogShippingEnabled = SettingsLogShippingEnabled.IsChecked == true;
+            candidate.LogShippingEnabled = SettingsLogShippingEnabled.IsChecked == true;
             if (!int.TryParse(SettingsLogShipInterval.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mins) || mins <= 0)
                 throw new FormatException("Інтервал вивантаження повинен бути додатнім цілим (хвилини).");
-            _settings.LogShipIntervalMinutes = mins;
-            _settings.LogShipperPrivateKeyPath = string.IsNullOrWhiteSpace(SettingsLogShipperKey.Text)
+            candidate.LogShipIntervalMinutes = mins;
+            candidate.LogShipperPrivateKeyPath = string.IsNullOrWhiteSpace(SettingsLogShipperKey.Text)
                 ? AppSettings.DefaultLogShipperPrivateKeyPath
                 : SettingsLogShipperKey.Text.Trim();
 
-            AppSettingsStore.Save(_settings);
+            AppSettingsStore.Save(candidate);
+            _settings = candidate;
+            ApplyBatchModeToUI();
             RefreshFlashHotkeyHint();
 
             // Re-discover with new settings in case catalog/gdb paths changed.
@@ -856,14 +1113,32 @@ public partial class MainWindow : Window
             LoadCatalog();
             RefreshHistory();
             RefreshCloudSyncStatus();
+            RefreshFlashReadiness(updateBanner: true);
 
             SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-            SettingsStatus.Text = $"✓ Збережено о {DateTime.Now:HH:mm:ss}";
+            SettingsStatus.Text = automatic
+                ? $"✓ Автозбережено о {DateTime.Now:HH:mm:ss}"
+                : $"✓ Збережено о {DateTime.Now:HH:mm:ss}";
+            StatusSave.Foreground = new SolidColorBrush(Color.FromRgb(0x9C, 0xDC, 0x9C));
+            StatusSave.Text = automatic ? "✓ Автозбережено" : "✓ Збережено";
+            return true;
         }
         catch (Exception ex)
         {
             SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            SettingsStatus.Text = $"✗ {ex.Message}";
+            SettingsStatus.Text = $"✗ Не збережено: {ex.Message}";
+            StatusSave.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0xB3));
+            StatusSave.Text = "✗ Не збережено";
+            if (showDialogOnError)
+            {
+                MessageBox.Show(
+                    this,
+                    $"Налаштування не збережено:\n\n{ex.Message}\n\nВиправте значення та повторіть.",
+                    "Помилка налаштувань",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            return false;
         }
     }
 
@@ -872,7 +1147,9 @@ public partial class MainWindow : Window
         _settings = new AppSettings();
         ApplySettingsToUI();
         SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-        SettingsStatus.Text = "Значення скинуто. Натисніть «Зберегти», щоб застосувати.";
+        SettingsStatus.Text = "Значення скинуто. Вони збережуться автоматично при виході з вкладки.";
+        StatusSave.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x80));
+        StatusSave.Text = "Є незбережені зміни";
     }
 
     private void PickCatalogPath_Click(object sender, RoutedEventArgs e)
