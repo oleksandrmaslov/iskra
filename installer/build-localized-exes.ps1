@@ -1,5 +1,7 @@
 param(
-    [string] $Version = "1.0.0",
+    [Parameter(Mandatory = $true)]
+    [string] $Version,
+    [string] $AvaloniaVersion = "",
     [string] $Runtime = "win-x64",
     [string] $Configuration = "Release",
     [string] $OutputDirectory = ""
@@ -8,7 +10,15 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
-$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
+
+$dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
+if (-not (Test-Path -LiteralPath $dotnet)) {
+    throw "The repository SDK host was not found at $dotnet"
+}
+
+if ([string]::IsNullOrWhiteSpace($AvaloniaVersion)) {
+    $AvaloniaVersion = "$Version-alpha.1"
+}
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $repoRoot "artifacts\Iskra-$Version-$Runtime"
@@ -26,66 +36,134 @@ if (Test-Path -LiteralPath $output) {
     Remove-Item -LiteralPath $output -Recurse -Force
 }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
+$staging = Join-Path $output ".publish"
+New-Item -ItemType Directory -Path $staging -Force | Out-Null
 
-function Publish-SingleFile([string] $Project) {
-    dotnet publish $Project `
+Write-Host "Restoring committed package locks..." -ForegroundColor Cyan
+& $dotnet restore Iskra.sln --locked-mode --nologo | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Locked solution restore failed (exit $LASTEXITCODE)"
+}
+
+function Publish-SingleFile(
+    [string] $Project,
+    [string] $ProductVersion,
+    [string] $StageName,
+    [string] $PublishedExecutable,
+    [string] $BundleExecutable
+) {
+    $stage = Join-Path $staging $StageName
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+    & $dotnet publish $Project `
         -c $Configuration `
         -r $Runtime `
         --self-contained true `
+        --no-restore `
         -p:PublishSingleFile=true `
         -p:IncludeAllContentForSelfExtract=true `
         -p:PublishTrimmed=false `
         -p:DebugType=None `
         -p:DebugSymbols=false `
-        -p:RestorePackagesWithLockFile=true `
-        -p:RestoreLockedMode=false `
-        -p:NuGetLockFilePath=obj\publish-lock\packages.lock.json `
-        -p:Version=$Version `
-        -o $output | Out-Host
+        -p:Version=$ProductVersion `
+        -o $stage | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet publish failed for $Project (exit $LASTEXITCODE)"
     }
-}
 
-Write-Host "Publishing Iskra WPF..." -ForegroundColor Cyan
-Publish-SingleFile "src/Iskra.Wpf/Iskra.Wpf.csproj"
-
-Write-Host "Publishing Iskra Avalonia preview..." -ForegroundColor Cyan
-Publish-SingleFile "src/Iskra.Desktop/Iskra.Desktop.csproj"
-
-Write-Host "Publishing Iskra CLI..." -ForegroundColor Cyan
-Publish-SingleFile "src/Iskra.Cli/Iskra.Cli.csproj"
-
-# Native Avalonia dependencies can emit large symbol files even when the app
-# itself is published without debug symbols. They are not required to run the
-# operator binaries and would nearly double the handoff size.
-Get-ChildItem -LiteralPath $output -Filter "*.pdb" -File |
-    Remove-Item -Force
-
-$requiredExecutables = @("Iskra.exe", "Iskra.Desktop.exe", "Iskra.Cli.exe")
-foreach ($name in $requiredExecutables) {
-    $path = Join-Path $output $name
-    if (-not (Test-Path -LiteralPath $path)) {
-        throw "Publish completed but $name is missing from $output"
+    $publishedPath = Join-Path $stage $PublishedExecutable
+    if (-not (Test-Path -LiteralPath $publishedPath)) {
+        throw "Publish completed but $PublishedExecutable is missing from $stage"
     }
+
+    Copy-Item -LiteralPath $publishedPath -Destination (Join-Path $output $BundleExecutable) -Force
 }
+
+Write-Host "Publishing supported WPF $Version..." -ForegroundColor Cyan
+Publish-SingleFile `
+    "src/Iskra.Wpf/Iskra.Wpf.csproj" `
+    $Version `
+    "wpf" `
+    "Iskra.exe" `
+    "Iskra.exe"
+
+Write-Host "Publishing CLI $Version..." -ForegroundColor Cyan
+Publish-SingleFile `
+    "src/Iskra.Cli/Iskra.Cli.csproj" `
+    $Version `
+    "cli" `
+    "Iskra.Cli.exe" `
+    "Iskra.Cli.exe"
+
+Write-Host "Publishing read-only Avalonia alpha $AvaloniaVersion..." -ForegroundColor Cyan
+Publish-SingleFile `
+    "src/Iskra.Desktop/Iskra.Desktop.csproj" `
+    $AvaloniaVersion `
+    "avalonia" `
+    "Iskra.Desktop.exe" `
+    "Iskra.Avalonia.Alpha.exe"
+
+Remove-Item -LiteralPath $staging -Recurse -Force
 
 $examples = Join-Path $output "examples"
 New-Item -ItemType Directory -Path $examples -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot "examples\catalog.json") -Destination $examples -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "examples\catalog.json.sig") -Destination $examples -Force
 
-$checksumLines = foreach ($name in $requiredExecutables) {
+$sdkVersion = (& $dotnet --version).Trim()
+$gitCommit = (& git rev-parse --short=12 HEAD).Trim()
+$gitState = if (@(& git status --porcelain).Count -gt 0) { "dirty" } else { "clean" }
+$builtAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+$manifest = @"
+Iskra Windows executable bundle
+
+WPF:       Iskra.exe $Version (supported Windows variant)
+CLI:       Iskra.Cli.exe $Version
+Avalonia:  Iskra.Avalonia.Alpha.exe $AvaloniaVersion (alpha, read-only; flashing disabled)
+Runtime:   $Runtime, self-contained, single-file
+.NET SDK:  $sdkVersion
+Commit:    $gitCommit ($gitState working tree)
+Built UTC: $builtAt
+
+This is a local unsigned engineering release bundle. It is not an
+Authenticode-signed factory release and does not claim Sprint 9 acceptance.
+"@
+[IO.File]::WriteAllText(
+    (Join-Path $output "BUNDLE-MANIFEST.txt"),
+    $manifest.TrimStart(),
+    [Text.UTF8Encoding]::new($false))
+
+$checksumFiles = @(
+    "Iskra.exe",
+    "Iskra.Cli.exe",
+    "Iskra.Avalonia.Alpha.exe",
+    "examples\catalog.json",
+    "examples\catalog.json.sig",
+    "BUNDLE-MANIFEST.txt"
+)
+$checksumLines = foreach ($name in $checksumFiles) {
     $hash = (Get-FileHash -LiteralPath (Join-Path $output $name) -Algorithm SHA256).Hash.ToLowerInvariant()
-    "$hash  $name"
+    "$hash  $($name.Replace('\', '/'))"
 }
 [IO.File]::WriteAllLines(
     (Join-Path $output "SHA256SUMS.txt"),
     $checksumLines,
     [Text.UTF8Encoding]::new($false))
 
-Write-Host "Localized executables are ready:" -ForegroundColor Green
+$zipPath = "$output.zip"
+if (Test-Path -LiteralPath $zipPath) {
+    Remove-Item -LiteralPath $zipPath -Force
+}
+Compress-Archive -Path (Join-Path $output "*") -DestinationPath $zipPath -CompressionLevel Optimal
+$zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText(
+    "$zipPath.sha256",
+    "$zipHash  $([IO.Path]::GetFileName($zipPath))`n",
+    [Text.UTF8Encoding]::new($false))
+
+Write-Host "Windows executable bundle is ready:" -ForegroundColor Green
 Write-Host "  $output"
+Write-Host "  $zipPath"
 Get-ChildItem -LiteralPath $output -File |
     Select-Object Name, @{Name="SizeMB"; Expression={ [Math]::Round($_.Length / 1MB, 1) }} |
     Format-Table -AutoSize

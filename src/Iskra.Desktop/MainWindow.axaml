@@ -6,7 +6,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:vm="using:Iskra.Desktop"
-    Title="{Binding Text.WindowTitle}"
+    Title="{Binding AlphaWindowTitle}"
     Width="1120"
     Height="760"
     MinWidth="900"
@@ -50,6 +50,13 @@
       <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
         <StackPanel Grid.Column="0" Spacing="3">
           <TextBlock FontSize="25" FontWeight="Bold" Foreground="White" Text="ISKRA" />
+          <Border HorizontalAlignment="Left"
+                  Background="#FFD97706"
+                  CornerRadius="4"
+                  Padding="8,3"
+                  Margin="0,2,0,2">
+            <TextBlock FontSize="11" FontWeight="Bold" Foreground="White" Text="{Binding AlphaBadge}" />
+          </Border>
           <TextBlock Foreground="#FFCAD5E6" TextWrapping="Wrap" Text="{Binding Text.Tagline}" />
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="18">
@@ -144,14 +151,30 @@
         <ScrollViewer>
           <StackPanel Margin="4,18" Spacing="16">
             <TextBlock Classes="section-title" Text="{Binding Text.LocalLog}" />
-            <TextBlock Classes="muted" Text="{Binding Text.HistoryMigration}" />
+            <TextBlock Classes="muted" Text="{Binding HistoryAlphaNotice}" />
             <Border Classes="card">
               <StackPanel Spacing="8">
                 <TextBlock Classes="label" Text="{Binding Text.FileStatus}" />
                 <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding HistoryStatusText}" />
                 <TextBlock Classes="muted" Text="{Binding DatabasePath}" />
+                <TextBlock FontWeight="SemiBold" Margin="0,6,0,0" Text="{Binding HistorySummaryText}" />
               </StackPanel>
             </Border>
+            <ItemsControl ItemsSource="{Binding HistoryRows}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:HistoryRowViewModel">
+                  <Border Classes="card" Padding="12" Margin="0,0,0,8">
+                    <Grid ColumnDefinitions="145,90,*,*,120" ColumnSpacing="12">
+                      <TextBlock Grid.Column="0" Classes="muted" Text="{Binding TimestampText}" />
+                      <TextBlock Grid.Column="1" FontWeight="Bold" Text="{Binding Result}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ProductVersion}" />
+                      <TextBlock Grid.Column="3" Classes="muted" Text="{Binding OperatorBatch}" />
+                      <TextBlock Grid.Column="4" Foreground="#FFB42318" Text="{Binding Error}" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
           </StackPanel>
         </ScrollViewer>
       </TabItem>

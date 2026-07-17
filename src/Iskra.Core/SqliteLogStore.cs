@@ -144,7 +144,7 @@ public sealed class SqliteLogStore : IDisposable
         }
 
         // Local batch-lock hardening migration. The earliest historical row
-        // that was not itself refused by a batch-lock check becomes the durable
+        // that was not itself refused by a safety gate becomes the durable
         // winner. INSERT OR IGNORE preserves any reservation already made by a
         // newer process and makes repeated/re-entrant migrations harmless.
         using (var backfill = _conn.CreateCommand())
@@ -159,12 +159,16 @@ public sealed class SqliteLogStore : IDisposable
                        fa.target_flash_kb, fa.ts_utc
                 FROM flash_attempts AS fa
                 WHERE trim(fa.batch_id) != ''
-                  AND (fa.error_code IS NULL OR fa.error_code != 'E_BATCH_LOCKED')
+                  AND (fa.error_code IS NULL OR fa.error_code NOT IN (
+                    'E_BATCH_LOCKED', 'E_RELEASE_REVOKED'
+                  ))
                   AND NOT EXISTS (
                     SELECT 1
                     FROM flash_attempts AS earlier
                     WHERE earlier.batch_id = fa.batch_id
-                      AND (earlier.error_code IS NULL OR earlier.error_code != 'E_BATCH_LOCKED')
+                      AND (earlier.error_code IS NULL OR earlier.error_code NOT IN (
+                        'E_BATCH_LOCKED', 'E_RELEASE_REVOKED'
+                      ))
                       AND earlier.id < fa.id
                   );
                 """;
@@ -195,7 +199,8 @@ public sealed class SqliteLogStore : IDisposable
         // is deliberately in the same transaction as the attempt row.
         if (reserveBatchLock
             && !string.IsNullOrWhiteSpace(r.BatchId)
-            && !string.Equals(r.ErrorCode, "E_BATCH_LOCKED", StringComparison.Ordinal))
+            && !string.Equals(r.ErrorCode, "E_BATCH_LOCKED", StringComparison.Ordinal)
+            && !string.Equals(r.ErrorCode, "E_RELEASE_REVOKED", StringComparison.Ordinal))
         {
             InsertBatchLock(
                 tx,

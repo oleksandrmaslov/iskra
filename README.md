@@ -16,7 +16,7 @@ catalog metadata, and logs every flash attempt to SQLite.
 Iskra.sln
 src/
   Iskra.Core/        Target-agnostic flashing and trust engine
-  Iskra.Application/ UI-neutral catalog, readiness, and batch policy
+  Iskra.Application/ UI-neutral workflows and shared application policy
   Iskra.Cli/         Console flasher
   Iskra.Wpf/         Shipping Windows operator UI
   Iskra.Desktop/     Avalonia cross-platform preview (no flashing yet)
@@ -42,7 +42,9 @@ Requirements for the new owner-provided logos and brand system are in
 
 ## Current desktop UIs
 
-`Iskra.Wpf` remains the production-path Windows UI. Settings now save
+`Iskra.Wpf` remains a supported production-path Windows UI throughout Sprint 8;
+Avalonia is being developed beside it rather than replacing or deleting it.
+Settings now save
 automatically when the operator leaves the Settings tab or closes the window;
 the header shows unsaved, saved, and save-error states. Probe readiness has an
 explicit refresh action, and flashing stays blocked unless exactly one BMP is
@@ -54,10 +56,18 @@ the hidden batch text is ignored, attempts use a blank batch ID, and no batch
 reservation is created. The existing digest-based lock remains available when
 the setting is enabled.
 
-`Iskra.Desktop` is the first localized four-tab Avalonia preview. It consumes
-the shared `Iskra.Application` catalog, readiness, and batch policies, but its
-flash and settings-mutation controls are deliberately disabled until workflow
-tests and hardware-in-the-loop parity exist. It does not replace WPF yet.
+`Iskra.Desktop` is the localized four-tab Avalonia alpha. It consumes shared
+catalog/readiness policy and shows real read-only recent history. Its title and
+header identify the alpha boundary, and flashing remains disabled until
+workflow tests and hardware-in-the-loop parity exist. The language selector is
+the only settings write and reloads the latest settings before saving, avoiding
+stale cross-UI overwrites. It does not replace WPF.
+
+The WPF flash screen now consumes the UI-neutral `FlashWorkflow`, which owns
+the complete fail-closed transaction from catalog/revocation and optional batch
+reservation through firmware integrity, two-phase GDB execution, and SQLite
+attempt logging. This keeps WPF supported while allowing Avalonia to adopt the
+same tested transaction later.
 
 ```powershell
 $dotnet = "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe"
@@ -76,21 +86,27 @@ Select the language in WPF/Avalonia settings, or use `Iskra.Cli --lang
 uk|en|de ...`. Error codes, logs, CLI flags, hashes, catalog metadata, and raw
 GDB diagnostics remain language-neutral.
 
-Build the three self-contained Windows x64 executables and checksums with:
+Build the supported WPF app, CLI, and explicitly named read-only Avalonia alpha
+as a self-contained Windows x64 engineering bundle with:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build-localized-exes.ps1 -Version 1.0.0
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build-localized-exes.ps1 `
+  -Version 1.4.0 `
+  -AvaloniaVersion 1.4.0-alpha.1
 ```
 
 Outputs are written under `artifacts/Iskra-<version>-win-x64/` as `Iskra.exe`,
-`Iskra.Desktop.exe`, and `Iskra.Cli.exe`, with the signed example catalog.
+`Iskra.Cli.exe`, and `Iskra.Avalonia.Alpha.exe`, with the signed example
+catalog, bundle manifest, SHA-256 manifest, `.zip`, and sibling `.zip.sha256`.
+This script creates an unsigned local engineering release; Authenticode signing
+and Sprint 9 acceptance remain separate release gates.
 
 ## Installer
 
 Build the factory installer bundle:
 
 ```powershell
-pwsh ./installer/build-installer.ps1 -Version 1.2.3
+pwsh ./installer/build-installer.ps1 -Version 1.4.0
 ```
 
 Use `installer/out/Iskra-<ver>-setup-x64.exe` on operator stations. It checks
@@ -99,6 +115,13 @@ the embedded Arm GNU Toolchain 15.2.rel1 before Iskra when GDB is missing. The
 sibling `Iskra-<ver>-x64.msi` is app-only: it uses an MSI-native x64 Windows
 compatibility check and blocks a fresh install if `arm-none-eabi-gdb.exe` is not
 already installed. Use the setup EXE for new factory PCs.
+
+The installer build restores committed package locks, verifies the pinned Arm
+GNU Toolchain 15.2.rel1 MSI SHA-256, and emits
+`Iskra-<ver>-SHA256SUMS.txt` beside the setup EXE, app-only MSI, and preinstall
+check. The WiX installer contains the supported WPF app and CLI; the Avalonia
+alpha remains an explicitly separate engineering executable until parity and
+HIL acceptance.
 
 The build also emits `installer/out/Iskra-<ver>-preinstall-check.ps1`. Run it
 before setup on a new station:

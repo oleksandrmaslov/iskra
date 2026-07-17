@@ -24,7 +24,7 @@ transcript. This file is the *condensed* working copy of those decisions.
 
 ---
 
-## Status snapshot (2026-07-12)
+## Status snapshot (2026-07-17)
 
 The canonical forward plan is [`ROADMAP.md`](ROADMAP.md). It records the
 Windows/Linux/macOS Avalonia migration, fresh branding handoff, carried
@@ -51,10 +51,17 @@ production blockers, and the final Sprint 9 security acceptance gate.
 - `src/Iskra.Application/` now owns fail-closed catalog-session selection,
   exactly-one-BMP station readiness, and optional batch policy without taking a
   dependency on WPF or Avalonia.
+- `src/Iskra.Application/FlashWorkflow.cs` now owns the complete flash
+  transaction. WPF consumes it through a Windows remote-firmware adapter and
+  remains a supported Windows variant throughout Sprint 8 and beyond.
+- `HistoryWorkflow`, `SettingsWorkflow`, and shared database-path policy now
+  centralize read-only history/export and settings validation/persistence. WPF
+  consumes them without losing its dialogs, localization, or dirty-state UX.
 - `src/Iskra.Desktop/` is a localized four-tab Avalonia 12.1.0 preview on
-  `net10.0`. It reads existing settings and performs safe, read-only readiness
-  checks; flashing and settings mutation are deliberately disabled until
-  workflow-test and hardware-in-the-loop parity are demonstrated.
+  `net10.0`. It is explicitly identified as alpha/read-only, shows real recent
+  history, and uses a narrow reload-before-save language update. Flashing and
+  all other settings mutation remain disabled until workflow-test and
+  hardware-in-the-loop parity are demonstrated.
 - WPF now auto-saves settings when leaving the Settings tab or closing the
   window and shows dirty, saved, and save-error state. BMP discovery has an
   explicit refresh action; zero or multiple probes block flashing.
@@ -69,6 +76,10 @@ production blockers, and the final Sprint 9 security acceptance gate.
   persisted selector, and CLI supports `--lang uk|en|de`.
 - WPF remains the shipping Windows UI. This slice does not claim Linux/macOS UI,
   packaging, or HIL validation.
+- Windows release scripts now use a locked solution restore. The standalone
+  bundle emits supported `Iskra.exe`, `Iskra.Cli.exe`, and the explicitly named
+  `Iskra.Avalonia.Alpha.exe`; the WiX setup remains WPF+CLI and embeds the
+  SHA-256-pinned Arm GNU Toolchain prerequisite.
 
 ### Sprint 1 — done in code; bench acceptance is the only remaining gate
 
@@ -221,8 +232,8 @@ the Ed25519 catalog signature.
    modal shows verification URL + huge user code + Copy / Open-in-browser
    helpers, polls in background, closes on success. Flash tab has a
    collapsed-by-default yellow hint banner that appears when the selected
-   release is remote AND we're not signed in. `FlashButton_Click` calls
-   `DownloadRemoteFirmwareAsync` before integrity check; maps
+   release is remote AND we're not signed in. The shared `FlashWorkflow` calls
+   WPF's `GitHubRemoteFirmwareProvider` before the integrity check and maps
    `NotSignedInException` / `RefreshTokenExpiredException` /
    `GitHubAssetNotFoundException` / general download failure to new
    error codes `E_NOT_SIGNED_IN` / `E_AUTH_EXPIRED` / `E_ASSET_NOT_FOUND`
@@ -516,9 +527,11 @@ Open Sprint 5 items:
 
 ## Design decisions locked in (don't relitigate without reason)
 
-- **Stack:** keep the target-agnostic .NET Core engine. WPF remains the shipping
-  Windows UI until a side-by-side Avalonia desktop app reaches feature and HIL
-  parity on Windows, Linux, and macOS. Target .NET 10 LTS before production.
+- **Stack:** keep the target-agnostic .NET Core engine. WPF remains a supported
+  Windows UI throughout Sprint 8 and beyond. Avalonia is developed beside it
+  for cross-platform use and may become the default only after feature and HIL
+  parity on Windows, Linux, and macOS; that does not remove WPF support. Target
+  .NET 10 LTS before production.
 - **gdb shipping:** chained full ARM toolchain MSI inside our installer
   (NOT vendoring just `gdb.exe`). App detects existing install at the
   standard ARM path; prompts to re-run installer if missing.

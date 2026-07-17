@@ -5,12 +5,14 @@ historical sprint handoff; new goals and acceptance gates live here.
 
 ## Current position
 
-- Windows WPF remains the shipping operator UI until its replacement reaches
-  feature parity and passes hardware-in-the-loop acceptance.
+- Windows WPF remains a supported Windows operator UI throughout Sprint 8 and
+  beyond. Avalonia is a cross-platform sibling, not a reason to remove the
+  proven WPF station variant; any change of the default Windows frontend still
+  requires feature parity and hardware-in-the-loop acceptance.
 - `Iskra.Core` remains the target-agnostic flashing and trust engine.
-- `Iskra.Application` is the new UI-neutral seam for catalog-session,
-  station-readiness, and optional batch-policy behavior. More workflow
-  orchestration still needs to move there before WPF can be retired.
+- `Iskra.Application` is the UI-neutral seam for catalog-session,
+  station-readiness, optional batch policy, flash transactions, read-only
+  history/export, settings validation, and atomic settings persistence.
 - The cross-platform target is Windows, Linux, and macOS with a native Avalonia
   desktop UI. `Iskra.Desktop` is now a read-only safety preview beside WPF, not
   a replacement or a claim of platform/HIL parity.
@@ -31,10 +33,19 @@ historical sprint handoff; new goals and acceptance gates live here.
   and reviewer-gated signing. These templates still require owner deployment.
 - Added `Iskra.Application` with fail-closed catalog selection, exactly-one-BMP
   station readiness, and shared optional-batch policy, plus focused tests.
+- Extracted the complete flash transaction into the UI-neutral
+  `FlashWorkflow`: catalog selection gates, revocation, optional batch
+  reservation, local/remote firmware acquisition, preflight and SHA-256,
+  two-phase GDB execution, and durable attempt logging. WPF now consumes this
+  service through its Windows DPAPI/GitHub adapter and remains supported.
+- Extracted `HistoryWorkflow`, `SettingsWorkflow`, and shared database-path
+  policy. WPF now consumes the shared history/export and settings services;
+  the Avalonia alpha shows real read-only recent history and uses a narrow
+  reload-before-save language update so it cannot overwrite newer WPF values.
 - Added the Ukrainian four-tab `Iskra.Desktop` Avalonia preview. It reads the
-  current settings and performs read-only BMP/GDB/catalog/SQLite checks; flash
-  execution and settings mutation stay disabled until workflow-test and HIL
-  parity with WPF.
+  current settings and performs read-only BMP/GDB/catalog/SQLite checks. It is
+  explicitly branded alpha/read-only, and flash execution stays disabled until
+  workflow-test and HIL parity with WPF.
 - Improved the shipping WPF UX: Settings auto-save when leaving the tab or
   closing the window, save/dirty/error state is visible, BMP discovery has an
   explicit refresh action, and zero or multiple probes block flashing.
@@ -47,6 +58,10 @@ historical sprint handoff; new goals and acceptance gates live here.
   solution to .NET 10, and migrated `Iskra.Desktop` to Avalonia 12.1.0. This
   completes the runtime/toolkit upgrade, not visual, packaging, workflow, or
   HIL parity.
+- Hardened the Windows engineering-release scripts around locked restores and
+  isolated publish staging. The standalone bundle names the preview
+  `Iskra.Avalonia.Alpha.exe`; the WiX setup continues to install supported WPF
+  plus CLI and embeds the SHA-256-pinned Arm GNU Toolchain prerequisite.
 
 ## Production blockers and conditional gates carried forward
 
@@ -68,14 +83,23 @@ historical sprint handoff; new goals and acceptance gates live here.
 
 ### 8.0 — platform-neutral application layer
 
-**Started:** `Iskra.Application` now owns fail-closed catalog-session selection,
-station readiness, and optional batch policy. WPF consumes the shared batch
-policy; Avalonia consumes all three services. Flash, history, settings,
-authentication, update, and cloud-sync orchestration still need extraction.
+**In progress:** `Iskra.Application` now owns fail-closed catalog-session
+selection, station readiness, optional batch policy, the flash transaction,
+read-only history/export, and shared settings validation/persistence. WPF
+consumes these services; Avalonia consumes the safe read-only subset.
+Authentication, update, and cloud-sync orchestration still need extraction.
 
 - Extract startup, catalog, flash, history, settings, authentication, update,
   and cloud-sync orchestration from `MainWindow.xaml.cs` into testable services
   and view models.
+- Done for the flash transaction: `FlashWorkflow` is UI-neutral and covered by
+  workflow tests for blocking, integrity refusal, batch conflict, remote-auth
+  failure, target overrides, two-phase execution, and PASS/FAIL logging.
+- Done for history/settings: `HistoryWorkflow` avoids creating a database during
+  read-only inspection and centralizes export/batch counts; `SettingsWorkflow`
+  centralizes invariant validation, normalization, trust locks, and atomic
+  persistence. Toolkit dialogs, localization, and WPF dirty-state UX stay in
+  their frontends.
 - Keep Ukrainian operator text in the application/UI layer; Core error codes and
   diagnostics remain English/ASCII.
 - ✅ Moved to .NET 10 LTS, pinned SDK 10.0.301 in `global.json`, and refreshed
@@ -102,9 +126,11 @@ until secure-store adapters exist.
 
 ### 8.2 — Avalonia operator UI redesign
 
-**Preview started:** `src/Iskra.Desktop` provides the localized four-tab shell
-and shared read-only readiness checks. Flashing and settings mutation are
-intentionally disabled. No Windows/Linux/macOS visual, packaging, or HIL parity
+**Alpha started:** `src/Iskra.Desktop` provides the localized four-tab shell,
+shared read-only readiness checks, and real recent-history rows. The title and
+header identify it as an alpha with flashing disabled. Its only settings write
+is the shared narrow language update, which reloads the latest file before the
+atomic save. No Windows/Linux/macOS visual, workflow, packaging, or HIL parity
 is claimed by this slice.
 
 - Continue `src/Iskra.Desktop` beside `src/Iskra.Wpf` using MVVM/commands.
@@ -116,7 +142,9 @@ is claimed by this slice.
   compatibility default and keep logs/protocol values language-neutral.
 - Centralize color, spacing, typography, focus, high-contrast, and semantic
   status resources. Add Avalonia headless UI tests.
-- Retire WPF only after Windows behavior parity, packaged-app acceptance, and HIL.
+- Keep WPF maintained as a supported Windows variant. Avalonia may become the
+  cross-platform/default frontend only after Windows behavior parity,
+  packaged-app acceptance, and HIL; it does not delete WPF support.
 
 ### 8.3 — packaging, CI, and HIL parity
 

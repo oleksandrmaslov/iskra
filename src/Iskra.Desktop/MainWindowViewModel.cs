@@ -15,8 +15,10 @@ public sealed class MainWindowViewModel : ViewModelBase
     private static readonly IBrush ReadyBrush = new SolidColorBrush(Color.Parse("#2E8B57"));
     private static readonly IBrush AttentionBrush = new SolidColorBrush(Color.Parse("#D97706"));
 
-    private readonly AppSettings _settings;
+    private AppSettings _settings;
     private readonly StationReadinessService _readinessService;
+    private readonly HistoryWorkflow _historyWorkflow;
+    private readonly SettingsWorkflow _settingsWorkflow;
     private DesktopText _text = DesktopLocalization.For(DesktopLocalization.DefaultLanguageCode);
     private LanguageOption _selectedLanguage = DesktopLocalization.Languages[0];
     private string _languageSaveStatus = string.Empty;
@@ -32,11 +34,25 @@ public sealed class MainWindowViewModel : ViewModelBase
     private string _catalogDetailText = string.Empty;
     private string _catalogOverviewText = string.Empty;
     private string _historyStatusText = string.Empty;
+    private string _historySummaryText = string.Empty;
 
     public MainWindowViewModel()
+        : this(
+            new SettingsWorkflow(),
+            new HistoryWorkflow(),
+            new StationReadinessService(new CatalogSession()))
     {
-        _settings = AppSettingsStore.Load();
-        _readinessService = new StationReadinessService(new CatalogSession());
+    }
+
+    public MainWindowViewModel(
+        SettingsWorkflow settingsWorkflow,
+        HistoryWorkflow historyWorkflow,
+        StationReadinessService readinessService)
+    {
+        _settingsWorkflow = settingsWorkflow ?? throw new ArgumentNullException(nameof(settingsWorkflow));
+        _historyWorkflow = historyWorkflow ?? throw new ArgumentNullException(nameof(historyWorkflow));
+        _readinessService = readinessService ?? throw new ArgumentNullException(nameof(readinessService));
+        _settings = _settingsWorkflow.Load();
         ApplyLanguage(_settings.LanguageCode, persist: false);
         RefreshReadinessCommand = new RelayCommand(RefreshReadiness);
         RefreshReadiness();
@@ -45,6 +61,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public ICommand RefreshReadinessCommand { get; }
     public ObservableCollection<ProductSummaryViewModel> Products { get; } = [];
     public ObservableCollection<string> ProductNames { get; } = [];
+    public ObservableCollection<HistoryRowViewModel> HistoryRows { get; } = [];
     public IReadOnlyList<LanguageOption> LanguageOptions => DesktopLocalization.Languages;
 
     public DesktopText Text
@@ -75,6 +92,19 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     public string PlatformLabel => $"{RuntimeInformation.OSDescription.Trim()} · {RuntimeInformation.ProcessArchitecture}";
+    public string AlphaWindowTitle => $"{Text.WindowTitle} — Avalonia Alpha";
+    public string AlphaBadge => Text.LanguageCode switch
+    {
+        IskraLanguages.English => "AVALONIA ALPHA · READ-ONLY · FLASH DISABLED",
+        IskraLanguages.German => "AVALONIA ALPHA · SCHREIBGESCHÜTZT · FLASHEN GESPERRT",
+        _ => "AVALONIA ALPHA · ЛИШЕ ЧИТАННЯ · ПРОШИВАННЯ ЗАБЛОКОВАНО",
+    };
+    public string HistoryAlphaNotice => Text.LanguageCode switch
+    {
+        IskraLanguages.English => "Recent SQLite attempts are read through the shared history workflow. Export and flashing remain disabled in this alpha.",
+        IskraLanguages.German => "Letzte SQLite-Versuche werden über den gemeinsamen Verlauf geladen. Export und Flashen bleiben in dieser Alpha gesperrt.",
+        _ => "Останні спроби SQLite читаються через спільний процес історії. Експорт і прошивання в цій альфа-версії залишаються вимкненими.",
+    };
     public string SettingsPath => AppSettingsStore.DefaultPath;
     public string StationId => string.IsNullOrWhiteSpace(_settings.StationId) ? Environment.MachineName : _settings.StationId;
     public string OperatorName => _settings.LastOperator ?? string.Empty;
@@ -99,6 +129,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string CatalogDetailText { get => _catalogDetailText; private set => SetProperty(ref _catalogDetailText, value); }
     public string CatalogOverviewText { get => _catalogOverviewText; private set => SetProperty(ref _catalogOverviewText, value); }
     public string HistoryStatusText { get => _historyStatusText; private set => SetProperty(ref _historyStatusText, value); }
+    public string HistorySummaryText { get => _historySummaryText; private set => SetProperty(ref _historySummaryText, value); }
 
     private void RefreshReadiness()
     {
@@ -182,10 +213,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             CatalogOverviewText = CatalogDetailText;
         }
 
-        var databasePath = ResolveDatabasePath();
-        HistoryStatusText = File.Exists(databasePath)
-            ? Text.FileFound(FormatBytes(new FileInfo(databasePath).Length))
-            : Text.FileCreateLater;
+        RefreshHistory();
 
         var readyChecks = (snapshot.Probe.IsReady ? 1 : 0)
             + (snapshot.Gdb.IsReady ? 1 : 0)
@@ -210,27 +238,50 @@ public sealed class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(LogShippingStatusText));
         OnPropertyChanged(nameof(BatchModeStatusText));
         OnPropertyChanged(nameof(MigrationSafetyNotice));
+        OnPropertyChanged(nameof(AlphaWindowTitle));
+        OnPropertyChanged(nameof(AlphaBadge));
+        OnPropertyChanged(nameof(HistoryAlphaNotice));
 
         if (!persist)
         {
             return;
         }
 
-        _settings.LanguageCode = normalized;
-        try
+        var save = _settingsWorkflow.UpdateLanguage(normalized);
+        if (save.IsSaved)
         {
-            AppSettingsStore.Save(_settings);
+            _settings = save.Settings!;
             LanguageSaveStatus = string.Empty;
         }
-        catch (Exception ex)
+        else
         {
-            LanguageSaveStatus = $"{Text.LanguageSaveFailed}: {ex.Message}";
+            LanguageSaveStatus = $"{Text.LanguageSaveFailed}: {save.Diagnostic ?? save.Status.ToString()}";
         }
     }
 
-    private string ResolveDatabasePath() => string.IsNullOrWhiteSpace(_settings.DbPath)
-        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Iskra", "flash_log.db")
-        : Path.GetFullPath(_settings.DbPath);
+    private void RefreshHistory()
+    {
+        var snapshot = _historyWorkflow.Load(_settings, _settings.LastBatch, limit: 50);
+        HistoryRows.Clear();
+        foreach (var row in snapshot.Rows)
+            HistoryRows.Add(new HistoryRowViewModel(row, Text.Culture));
+
+        HistoryStatusText = snapshot.Status switch
+        {
+            HistoryLoadStatus.Loaded when File.Exists(snapshot.DatabasePath) =>
+                Text.FileFound(FormatBytes(new FileInfo(snapshot.DatabasePath).Length)),
+            HistoryLoadStatus.DatabaseMissing => Text.FileCreateLater,
+            _ => snapshot.Diagnostic ?? Text.LogNotCreated,
+        };
+        HistorySummaryText = Text.LanguageCode switch
+        {
+            IskraLanguages.English => $"Recent attempts: {snapshot.Rows.Count}",
+            IskraLanguages.German => $"Letzte Versuche: {snapshot.Rows.Count}",
+            _ => $"Останні спроби: {snapshot.Rows.Count}",
+        };
+    }
+
+    private string ResolveDatabasePath() => ApplicationPaths.ResolveDatabasePath(_settings);
 
     private string FormatBytes(long bytes) => bytes switch
     {
@@ -238,6 +289,26 @@ public sealed class MainWindowViewModel : ViewModelBase
         >= 1024 => Text.Kilobytes(bytes / 1024d),
         _ => Text.Bytes(bytes),
     };
+}
+
+public sealed record HistoryRowViewModel(
+    string TimestampText,
+    string Result,
+    string ProductVersion,
+    string OperatorBatch,
+    string Error)
+{
+    public HistoryRowViewModel(FlashAttemptRow row, CultureInfo culture)
+        : this(
+            row.TsUtc.ToLocalTime().ToString("g", culture),
+            row.Result,
+            $"{row.ProductId} v{row.FirmwareVersion}",
+            string.IsNullOrWhiteSpace(row.BatchId)
+                ? row.Operator
+                : $"{row.Operator} · {row.BatchId}",
+            row.ErrorCode ?? string.Empty)
+    {
+    }
 }
 
 public sealed record ProductSummaryViewModel(

@@ -1,19 +1,21 @@
 # Builds a release installer for Iskra.
 #
 # Steps:
-#   1. Publish the WPF app as a single-file, self-contained Windows-x64 exe.
-#   2. Publish the CLI as a single-file, self-contained Windows-x64 exe.
-#   3. Add required WiX extensions if not already present.
-#   4. Run wix to compile installer/Product.wxs into an app .msi.
-#   5. Remove large publish/bin intermediates unless -KeepPublishOutput is set.
-#   6. Download/cache the pinned Arm GNU Toolchain MSI if needed.
-#   7. Run wix to compile installer/Bundle.wxs into a single setup .exe
+#   1. Restore the committed package locks without narrowing the RID matrix.
+#   2. Publish the WPF app as a single-file, self-contained Windows-x64 exe.
+#   3. Publish the CLI as a single-file, self-contained Windows-x64 exe.
+#   4. Add required WiX extensions if not already present.
+#   5. Run wix to compile installer/Product.wxs into an app .msi.
+#   6. Remove large publish/bin intermediates unless -KeepPublishOutput is set.
+#   7. Download/cache the pinned Arm GNU Toolchain MSI if needed.
+#   8. Run wix to compile installer/Bundle.wxs into a single setup .exe
 #      that checks prerequisites, chains the Arm toolchain MSI, and the Iskra MSI.
 #
 # Outputs:
 #   installer/out/Iskra-<ver>-x64.msi
 #   installer/out/Iskra-<ver>-setup-x64.exe
 #   installer/out/Iskra-<ver>-preinstall-check.ps1
+#   installer/out/Iskra-<ver>-SHA256SUMS.txt
 #
 # Requires:
 #   * .NET SDK 10.0.301 on PATH (or LOCALAPPDATA install; `global.json` pins it)
@@ -44,6 +46,10 @@ Set-Location $repoRoot
 
 # Ensure dotnet + wix tool are on PATH for this session.
 $env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH;$env:USERPROFILE\.dotnet\tools"
+$dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
+if (-not (Test-Path -LiteralPath $dotnet)) {
+    throw "The repository SDK host was not found at $dotnet"
+}
 
 function Get-Sha256([string] $Path) {
     return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
@@ -137,12 +143,17 @@ function Remove-PublishIntermediates {
     Remove-GeneratedDirectory (Join-Path $repoRoot "src\Iskra.Core\bin")
 }
 
-Write-Host "[1/7] dotnet publish WPF (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
+Write-Host "[1/8] locked solution restore" -ForegroundColor Cyan
+& $dotnet restore Iskra.sln --locked-mode --nologo | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "locked solution restore failed (exit $LASTEXITCODE)" }
+
+Write-Host "[2/8] dotnet publish WPF (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
 $publishDir = Join-Path $repoRoot "publish\$Runtime"
-dotnet publish src/Iskra.Wpf `
+& $dotnet publish src/Iskra.Wpf `
     -c $Configuration `
     -r $Runtime `
     --self-contained true `
+    --no-restore `
     -p:PublishSingleFile=true `
     -p:IncludeAllContentForSelfExtract=true `
     -p:Version=$Version `
@@ -153,12 +164,13 @@ if (-not (Test-Path (Join-Path $publishDir "Iskra.exe"))) {
     throw "publish completed but Iskra.exe not at $publishDir"
 }
 
-Write-Host "[2/7] dotnet publish CLI (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
+Write-Host "[3/8] dotnet publish CLI (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
 $cliPublishDir = Join-Path $repoRoot "publish\cli-$Runtime"
-dotnet publish src/Iskra.Cli `
+& $dotnet publish src/Iskra.Cli `
     -c $Configuration `
     -r $Runtime `
     --self-contained true `
+    --no-restore `
     -p:PublishSingleFile=true `
     -p:IncludeAllContentForSelfExtract=true `
     -p:Version=$Version `
@@ -169,14 +181,14 @@ if (-not (Test-Path (Join-Path $cliPublishDir "Iskra.Cli.exe"))) {
     throw "publish completed but Iskra.Cli.exe not at $cliPublishDir"
 }
 
-Write-Host "[3/7] WiX extensions (idempotent)" -ForegroundColor Cyan
+Write-Host "[4/8] WiX extensions (idempotent)" -ForegroundColor Cyan
 # Pin extensions to the matching WiX v5 line. v7-line extensions do not unpack
 # into the v5 layout (warning WIX6101).
 Add-WixExtension "WixToolset.UI.wixext"
 Add-WixExtension "WixToolset.BootstrapperApplications.wixext"
 Add-WixExtension "WixToolset.Util.wixext"
 
-Write-Host "[4/7] wix build MSI -> installer/out/Iskra-$Version-x64.msi" -ForegroundColor Cyan
+Write-Host "[5/8] wix build MSI -> installer/out/Iskra-$Version-x64.msi" -ForegroundColor Cyan
 $outDir = Join-Path $PSScriptRoot "out"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $msiPath = Join-Path $outDir "Iskra-$Version-x64.msi"
@@ -194,13 +206,13 @@ wix build `
     -out $msiPath | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "wix build failed (exit $LASTEXITCODE)" }
 
-Write-Host "[5/7] trim intermediate publish output" -ForegroundColor Cyan
+Write-Host "[6/8] trim intermediate publish output" -ForegroundColor Cyan
 Remove-PublishIntermediates
 
-Write-Host "[6/7] Arm GNU Toolchain $ArmToolchainVersion MSI" -ForegroundColor Cyan
+Write-Host "[7/8] Arm GNU Toolchain $ArmToolchainVersion MSI" -ForegroundColor Cyan
 $armToolchainMsi = Resolve-ArmToolchainInstaller
 
-Write-Host "[7/7] wix build bundle -> installer/out/Iskra-$Version-setup-x64.exe" -ForegroundColor Cyan
+Write-Host "[8/8] wix build bundle -> installer/out/Iskra-$Version-setup-x64.exe" -ForegroundColor Cyan
 $bundlePath = Join-Path $outDir "Iskra-$Version-setup-x64.exe"
 
 wix build `
@@ -214,6 +226,17 @@ wix build `
     -out $bundlePath | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "wix bundle build failed (exit $LASTEXITCODE)" }
 
+$checksumPath = Join-Path $outDir "Iskra-$Version-SHA256SUMS.txt"
+$checksumFiles = @($bundlePath, $msiPath, $preinstallCheckPath)
+$checksumLines = foreach ($path in $checksumFiles) {
+    "$(Get-Sha256 $path)  $([IO.Path]::GetFileName($path))"
+}
+[IO.File]::WriteAllLines(
+    $checksumPath,
+    $checksumLines,
+    [Text.UTF8Encoding]::new($false))
+
 Write-Host ""
 Write-Host "[OK] Built installer bundle and app MSI" -ForegroundColor Green
-Get-Item $bundlePath, $msiPath, $preinstallCheckPath | Select-Object FullName, Length, LastWriteTime
+Get-Item $bundlePath, $msiPath, $preinstallCheckPath, $checksumPath |
+    Select-Object FullName, Length, LastWriteTime

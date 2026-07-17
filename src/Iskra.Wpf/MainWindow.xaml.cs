@@ -28,6 +28,9 @@ public partial class MainWindow : Window
     private string? _probeSerial;
     private string? _lastAppUpdateUrl;
     private readonly ICatalogSession _catalogSession = new CatalogSession();
+    private readonly FlashWorkflow _flashWorkflow = new(new GitHubRemoteFirmwareProvider());
+    private readonly HistoryWorkflow _historyWorkflow = new();
+    private readonly SettingsWorkflow _settingsWorkflow = new();
     private bool _isLoaded;
     private bool _flashInProgress;
     private bool _suppressTabSelectionChanged;
@@ -67,7 +70,7 @@ public partial class MainWindow : Window
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        _settings = AppSettingsStore.Load();
+        _settings = _settingsWorkflow.Load();
         ApplySettingsToUI();
 
         if (!string.IsNullOrEmpty(_settings.LastOperator))
@@ -341,244 +344,74 @@ public partial class MainWindow : Window
         if (_catalog is null) { Beep(); return; }
         if (ProductCombo.SelectedItem is not string productId) { Beep(); return; }
 
-        // Re-check the physical connection immediately before a flash. This
-        // catches a probe unplugged after startup instead of using stale state.
+        // Refresh the physical endpoint immediately before the shared workflow
+        // snapshots its request. WPF remains a supported Windows frontend; it
+        // now delegates transaction policy rather than duplicating it.
         DiscoverProbe();
         RefreshFlashReadiness(updateBanner: false);
-
-        var op = OperatorBox.Text?.Trim() ?? "";
-        var batchPolicy = BatchPolicy.Resolve(_settings, BatchBox.Text);
-        var batch = batchPolicy.EffectiveBatchId;
-        if (string.IsNullOrEmpty(op))
-        {
-            SetBannerNeutral(T("Flash.EnterOperator"), warning: true);
-            return;
-        }
-        if (!batchPolicy.IsValid)
-        {
-            SetBannerNeutral(T("Flash.EnterBatch"), warning: true,
-                T("Flash.DisableBatchHint"));
-            return;
-        }
-        if (_gdbExe is null)
-        {
-            SetBannerNeutral(T("Flash.GdbMissing"), warning: true);
-            return;
-        }
-        if (_port is null)
-        {
-            SetBannerNeutral(T("Flash.ProbeMissing"), warning: true,
-                T("Ready.Probe.Detail"));
-            return;
-        }
 
         var product = _catalog.FindProduct(productId);
         var release = VersionCombo.SelectedItem as FirmwareRelease ?? product?.Default();
         if (product is null || release is null) { Beep(); return; }
 
-        // Sprint 6: revocation gate. If the catalog (which we already verified
-        // is signed + parseable) explicitly disables this release, fail fast
-        // before any work — even before the batch lock check, so an operator
-        // can immediately see the version is dead and pick another.
-        var revocation = _catalog.FindRevocation(product.ProductId, release.Version);
-        if (revocation is not null)
-        {
-            var msg = string.IsNullOrWhiteSpace(revocation.Reason)
-                ? $"{product.ProductId} v{release.Version} revoked in catalog"
-                : $"{product.ProductId} v{release.Version} revoked: {revocation.Reason}";
-            ShowFail("E_RELEASE_REVOKED", msg);
-            LogAttempt(op, batch, product, release, FlashResult.Fail,
-                "E_RELEASE_REVOKED", msg, 0, null, null);
-            RefreshHistory();
-            return;
-        }
-
-        if (batchPolicy.ShouldReserve)
-        {
-            // Atomically reserve the complete firmware identity before touching
-            // hardware. Product/version alone is insufficient when release bytes
-            // or target metadata change under a reused version.
-            try
-            {
-                using var lockStore = new SqliteLogStore(ResolveDbPath());
-                var requested = new BatchLockDescriptor(
-                    product.ProductId,
-                    release.Version,
-                    release.ElfSha256,
-                    product.Target.BmpMatch,
-                    product.Target.FlashKb);
-                var reservation = lockStore.ReserveBatchLock(batch, requested);
-                if (!reservation.IsAccepted)
-                {
-                    var locked = reservation.Lock;
-                    var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion} "
-                        + $"sha256={ShortSha(locked.FirmwareSha256)}, attempted "
-                        + $"{product.ProductId} v{release.Version} sha256={ShortSha(release.ElfSha256)}";
-                    ShowFail("E_BATCH_LOCKED", msg);
-                    LogAttempt(op, batch, product, release, FlashResult.Fail,
-                        "E_BATCH_LOCKED", msg, 0, null, null);
-                    RefreshHistory();
-                    RefreshBatchLockStatus();
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                // With optional batch safety enabled, an unavailable ledger
-                // means the station cannot prove the batch identity.
-                ShowFail("E_BATCH_LOCK_CHECK_FAILED", ex.Message);
-                RefreshHistory();
-                return;
-            }
-        }
-
         SetFlashInProgress(true);
         GdbOutput.Clear();
-
-        string elfPath;
-        if (release.IsRemote)
-        {
-            SetBannerNeutral(T("Flash.Downloading"), warning: false);
-            try
-            {
-                elfPath = await DownloadRemoteFirmwareAsync(release);
-            }
-            catch (NotSignedInException)
-            {
-                ShowFail("E_NOT_SIGNED_IN", T("Flash.AuthOpenSettings"));
-                LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    "E_NOT_SIGNED_IN", "remote firmware requires GitHub sign-in", 0, null, null);
-                RefreshHistory();
-                SetFlashInProgress(false);
-                RefreshAuthStatus();
-                return;
-            }
-            catch (RefreshTokenExpiredException)
-            {
-                ShowFail("E_AUTH_EXPIRED", T("Flash.AuthExpired"));
-                LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    "E_AUTH_EXPIRED", "github refresh token expired", 0, null, null);
-                RefreshHistory();
-                SetFlashInProgress(false);
-                RefreshAuthStatus();
-                return;
-            }
-            catch (GitHubAssetNotFoundException ex)
-            {
-                ShowFail("E_ASSET_NOT_FOUND", ex.Message);
-                LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    "E_ASSET_NOT_FOUND", ex.Message, 0, null, null);
-                RefreshHistory();
-                SetFlashInProgress(false);
-                return;
-            }
-            catch (Exception ex)
-            {
-                ShowFail("E_FW_DOWNLOAD_FAILED", ex.Message);
-                LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    "E_FW_DOWNLOAD_FAILED", ex.Message, 0, null, null);
-                RefreshHistory();
-                SetFlashInProgress(false);
-                return;
-            }
-        }
-        else
-        {
-            elfPath = Path.IsPathRooted(release.ElfFilename)
-                ? release.ElfFilename
-                : Path.Combine(_catalogDir!, release.ElfFilename);
-
-            if (!File.Exists(elfPath))
-            {
-                ShowFail("E_FW_NOT_FOUND", T("Flash.FileNotFound", elfPath));
-                LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    "E_FW_NOT_FOUND", elfPath, 0, null, null);
-                RefreshHistory();
-                SetFlashInProgress(false);
-                return;
-            }
-        }
-
-        SetBannerNeutral(T("Flash.Running"), warning: false);
-
-        // Remember the operator + batch for next launch.
-        _settings.LastOperator = op;
-        _settings.LastBatch = batchPolicy.ShouldReserve ? batch : null;
-        try { AppSettingsStore.Save(_settings); } catch { /* non-fatal */ }
-
         try
         {
-            var preflight = FirmwarePreflight.Check(elfPath, release.FirmwareKind);
-            if (preflight != FirmwarePreflight.CheckResult.Ok)
+            var progress = new Progress<FlashWorkflowProgress>(update =>
             {
-                var kind = FirmwarePreflight.DisplayName(release.FirmwareKind);
-                var msg = preflight switch
-                {
-                    FirmwarePreflight.CheckResult.NotFound => T("Flash.FileNotFound", elfPath),
-                    FirmwarePreflight.CheckResult.IoError  => T("Flash.FileReadFailed", elfPath),
-                    _                                      => T("Flash.FileBadFormat", kind, elfPath),
-                };
-                var code = preflight switch
-                {
-                    FirmwarePreflight.CheckResult.NotFound => "E_FW_NOT_FOUND",
-                    FirmwarePreflight.CheckResult.IoError  => "E_FW_READ_FAILED",
-                    _                                      => "E_FW_BAD_FORMAT",
-                };
-                ShowFail(code, msg);
-                LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    code, msg, 0, null, null);
-                RefreshHistory();
-                return;
-            }
+                if (update.Stage == FlashWorkflowStage.AcquiringFirmware && release.IsRemote)
+                    SetBannerNeutral(T("Flash.Downloading"), warning: false);
+                else if (update.Stage is FlashWorkflowStage.ValidatingFirmware or FlashWorkflowStage.Flashing)
+                    SetBannerNeutral(T("Flash.Running"), warning: false);
+            });
+            var request = new FlashWorkflowRequest(
+                Catalog: _catalog,
+                CatalogDirectory: _catalogDir,
+                ProductId: product.ProductId,
+                FirmwareVersion: release.Version,
+                Settings: _settings.Clone(),
+                Operator: OperatorBox.Text,
+                EnteredBatchId: BatchBox.Text,
+                GdbPath: _gdbExe,
+                Port: _port,
+                ProbeSerial: _probeSerial);
+            var result = await _flashWorkflow.ExecuteAsync(
+                request,
+                progress,
+                line => Dispatcher.Invoke(() => GdbOutput.AppendText(line.Text + "\n")));
 
-            var sha = FirmwareIntegrity.ComputeSha256Hex(elfPath);
-            if (!FirmwareIntegrity.HashesMatch(sha, release.ElfSha256))
+            if (result.IsBlocked)
             {
-                var msg = $"computed {sha}, expected {release.ElfSha256.ToLowerInvariant()}";
-                ShowFail("E_FW_HASH_MISMATCH", msg);
-                LogAttempt(op, batch, product, release, FlashResult.Fail,
-                    "E_FW_HASH_MISMATCH", msg, 0, null, null);
-                RefreshHistory();
-                return;
+                ShowWorkflowBlocked(result);
             }
-
-            var flash = EffectiveFlashSettings(product);
-            var opts = new FlashOptions(
-                ElfPath:            elfPath,
-                Port:               _port,
-                Power:              flash.Power,
-                BmpFrequencyHz:     flash.FrequencyHz,
-                ConnectUnderReset:  flash.ConnectReset,
-                Product:            product.ProductId,
-                Operator:           op,
-                Batch:              batch,
-                StationId:          _settings.StationId,
-                TargetBmpMatch:     product.Target.BmpMatch,
-                TargetFlashKb:      product.Target.FlashKb,
-                FirmwareVersion:    release.Version,
-                FirmwareSha256:     release.ElfSha256,
-                GdbPath:            _gdbExe,
-                DbPath:             _settings.DbPath,
-                FirmwareKind:       release.FirmwareKind,
-                TimeoutSeconds:     flash.TimeoutSeconds);
-
-            var gdb = new GdbProcess(_gdbExe);
-            var outcome = await FlashStateMachine.RunAsync(
-                gdb,
-                opts,
-                timeout: TimeSpan.FromSeconds(Math.Max(1, opts.TimeoutSeconds)),
-                onLine: line => Dispatcher.Invoke(() => GdbOutput.AppendText(line.Text + "\n")));
-
-            if (outcome.IsPass)
-                ShowPass(outcome.Duration);
+            else if (result.IsPass)
+            {
+                ShowPass(result.Outcome.Duration);
+            }
             else
-                ShowFail(outcome.ErrorCode!, outcome.ErrorMessage ?? "");
+            {
+                ShowFail(result.Outcome.ErrorCode ?? "E_INTERNAL",
+                    result.Outcome.ErrorMessage ?? string.Empty);
+            }
 
-            LogAttempt(op, batch, product, release, outcome.Result,
-                outcome.ErrorCode, outcome.ErrorMessage,
-                (long)outcome.Duration.TotalMilliseconds, outcome.GdbTail, outcome.DetectedTarget);
+            // Remember successful acquisition choices. Settings remain a WPF
+            // concern until Sprint 8 extracts a separate settings service.
+            if (result.FirmwarePath is not null)
+            {
+                var remembered = _settingsWorkflow.RememberOperatorSelection(
+                    _settings,
+                    OperatorBox.Text,
+                    result.EffectiveBatchId);
+                if (remembered.IsSaved)
+                    _settings = remembered.Settings!;
+            }
+
             RefreshHistory();
+            RefreshBatchLockStatus();
             RefreshCloudSyncStatus();
+            if (result.Outcome.ErrorCode is "E_NOT_SIGNED_IN" or "E_AUTH_EXPIRED")
+                RefreshAuthStatus();
         }
         catch (Exception ex)
         {
@@ -587,6 +420,31 @@ public partial class MainWindow : Window
         finally
         {
             SetFlashInProgress(false);
+        }
+    }
+
+    private void ShowWorkflowBlocked(FlashWorkflowResult result)
+    {
+        switch (result.Outcome.ErrorCode)
+        {
+            case "E_OPERATOR_REQUIRED":
+                SetBannerNeutral(T("Flash.EnterOperator"), warning: true);
+                break;
+            case BatchPolicy.RequiredErrorCode:
+                SetBannerNeutral(T("Flash.EnterBatch"), warning: true,
+                    T("Flash.DisableBatchHint"));
+                break;
+            case "E_GDB_NOT_FOUND":
+                SetBannerNeutral(T("Flash.GdbMissing"), warning: true);
+                break;
+            case "E_PROBE_NOT_FOUND":
+                SetBannerNeutral(T("Flash.ProbeMissing"), warning: true,
+                    T("Ready.Probe.Detail"));
+                break;
+            default:
+                ShowFail(result.Outcome.ErrorCode ?? "E_INTERNAL",
+                    result.Outcome.ErrorMessage ?? string.Empty);
+                break;
         }
     }
 
@@ -621,57 +479,9 @@ public partial class MainWindow : Window
         ResultDetail.Text = detail ?? "";
     }
 
-    private void LogAttempt(string op, string batch, Product product, FirmwareRelease release,
-        FlashResult result, string? errCode, string? errMsg, long durMs,
-        string? gdbTail, string? detected)
-    {
-        try
-        {
-            var flash = EffectiveFlashSettings(product);
-            using var log = new SqliteLogStore(ResolveDbPath());
-            log.Append(new FlashAttemptRecord(
-                TsUtc:            DateTime.UtcNow,
-                Operator:         op,
-                StationId:        _settings.StationId,
-                BatchId:          batch,
-                ProductId:        product.ProductId,
-                FirmwareVersion:  release.Version,
-                FirmwareSha256:   release.ElfSha256,
-                TargetBmpMatch:   product.Target.BmpMatch,
-                TargetDetected:   detected,
-                TargetFlashKb:    product.Target.FlashKb,
-                ComPort:          _port ?? "",
-                ProbeSerial:      _probeSerial,
-                Power:            flash.Power,
-                ConnectRst:       flash.ConnectReset,
-                BmpFrequencyHz:   flash.FrequencyHz,
-                Result:           result,
-                ErrorCode:        errCode,
-                ErrorMessage:     errMsg,
-                DurationMs:       durMs,
-                GdbTail:          gdbTail),
-                reserveBatchLock: _settings.BatchesEnabled);
-        }
-        catch { /* never let log failures crash the UI */ }
-    }
-
-    private (PowerMode Power, int FrequencyHz, bool ConnectReset, int TimeoutSeconds) EffectiveFlashSettings(Product product)
-    {
-        return (
-            Power: product.Target.PowerMode ?? _settings.Power,
-            FrequencyHz: product.Target.FrequencyHz ?? _settings.BmpFrequencyHz,
-            ConnectReset: product.Target.ConnectReset ?? _settings.ConnectUnderReset,
-            TimeoutSeconds: product.Target.TimeoutSeconds ?? _settings.TimeoutSeconds);
-    }
-
     private string ResolveDbPath()
     {
-        if (!string.IsNullOrEmpty(_settings.DbPath)) return _settings.DbPath;
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Iskra");
-        Directory.CreateDirectory(dir);
-        return Path.Combine(dir, "flash_log.db");
+        return ApplicationPaths.ResolveDatabasePath(_settings, ensureDirectory: true);
     }
 
     // ============================================================
@@ -695,38 +505,27 @@ public partial class MainWindow : Window
 
     private void RefreshBatchLockStatus()
     {
-        if (!_settings.BatchesEnabled)
+        var snapshot = _historyWorkflow.LookupBatchLock(_settings, BatchBox.Text);
+        switch (snapshot.Status)
         {
-            BatchLockLabel.Text = "";
-            return;
-        }
-
-        var batch = BatchBox.Text?.Trim();
-        if (string.IsNullOrEmpty(batch))
-        {
-            BatchLockLabel.Text = "";
-            return;
-        }
-        try
-        {
-            var dbPath = ResolveDbPath();
-            if (!File.Exists(dbPath))
-            {
+            case BatchLockLookupStatus.BatchesDisabled:
+            case BatchLockLookupStatus.BatchRequired:
+            case BatchLockLookupStatus.DatabaseMissing:
                 BatchLockLabel.Text = "";
-                return;
-            }
-            using var store = new SqliteLogStore(dbPath);
-            var locked = store.GetBatchLock(batch);
-            BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-            if (locked is { } l)
+                break;
+            case BatchLockLookupStatus.Reserved:
+                var l = snapshot.Lock!;
+                BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
                 BatchLockLabel.Text = T("Batch.Locked", l.ProductId, l.FirmwareVersion, ShortSha(l.FirmwareSha256));
-            else
+                break;
+            case BatchLockLookupStatus.NotReserved:
+                BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
                 BatchLockLabel.Text = T("Batch.New");
-        }
-        catch (Exception ex)
-        {
-            BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            BatchLockLabel.Text = T("Batch.CheckFailed", ex.Message);
+                break;
+            default:
+                BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                BatchLockLabel.Text = T("Batch.CheckFailed", snapshot.Diagnostic ?? T("Common.Unknown"));
+                break;
         }
     }
 
@@ -749,10 +548,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        var dbPath = ResolveDbPath();
-        if (!File.Exists(dbPath))
+        var availability = _historyWorkflow.Load(_settings, BatchBox.Text, limit: 1);
+        if (availability.Status == HistoryLoadStatus.DatabaseMissing)
         {
             BatchSummary.Text = T("History.NothingToExport");
+            return;
+        }
+        if (availability.Status == HistoryLoadStatus.Failed)
+        {
+            BatchSummary.Text = T("History.ExportError", availability.Diagnostic ?? T("Common.Unknown"));
             return;
         }
 
@@ -776,58 +580,55 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog() != true) return;
 
-        try
+        var export = _historyWorkflow.Export(
+            _settings,
+            BatchBox.Text,
+            batchOnly ? HistoryExportScope.CurrentBatch : HistoryExportScope.All,
+            dlg.FileName);
+        if (export.Status == HistoryExportStatus.Exported)
         {
-            using var store = new SqliteLogStore(dbPath);
-            var rows = store.ExportCsv(dlg.FileName, batch);
-            BatchSummary.Text = T("History.Exported", rows, Path.GetFileName(dlg.FileName));
+            BatchSummary.Text = T("History.Exported", export.RowsWritten, Path.GetFileName(dlg.FileName));
         }
-        catch (Exception ex)
+        else
         {
-            BatchSummary.Text = T("History.ExportError", ex.Message);
+            BatchSummary.Text = T("History.ExportError", export.Diagnostic ?? export.Status.ToString());
         }
     }
 
     private void RefreshHistory()
     {
-        try
+        var snapshot = _historyWorkflow.Load(_settings, BatchBox.Text);
+        if (snapshot.Status == HistoryLoadStatus.DatabaseMissing)
         {
-            var dbPath = ResolveDbPath();
-            if (!File.Exists(dbPath))
-            {
-                HistoryGrid.ItemsSource = null;
-                BatchSummary.Text = T("History.NoLog");
-                return;
-            }
-            using var store = new SqliteLogStore(dbPath);
-            var rows = store.QueryRecent(200);
-            HistoryGrid.ItemsSource = rows;
+            HistoryGrid.ItemsSource = null;
+            BatchSummary.Text = T("History.NoLog");
+            return;
+        }
+        if (snapshot.Status == HistoryLoadStatus.Failed)
+        {
+            BatchSummary.Text = T("History.ReadError", snapshot.Diagnostic ?? T("Common.Unknown"));
+            HistoryGrid.ItemsSource = null;
+            return;
+        }
 
-            var currentBatch = _settings.BatchesEnabled ? BatchBox.Text?.Trim() : null;
-            if (_settings.BatchesEnabled && !string.IsNullOrEmpty(currentBatch))
+        HistoryGrid.ItemsSource = snapshot.Rows;
+        if (snapshot.BatchId is not null && snapshot.BatchCounts is { } counts)
+        {
+            if (counts.Total > 0)
             {
-                var (total, pass, fail) = store.CountsForBatch(currentBatch);
-                if (total > 0)
-                {
-                    var rate = (double)pass / total;
-                    BatchSummary.Text = T("History.BatchSummary", currentBatch, pass, fail, rate);
-                }
-                else
-                {
-                    BatchSummary.Text = T("History.BatchEmpty", currentBatch);
-                }
+                BatchSummary.Text = T("History.BatchSummary", snapshot.BatchId,
+                    counts.Pass, counts.Fail, counts.PassRate);
             }
             else
             {
-                BatchSummary.Text = _settings.BatchesEnabled
-                    ? T("History.RecentNeedBatch", rows.Count)
-                    : T("History.RecentNoBatches", rows.Count);
+                BatchSummary.Text = T("History.BatchEmpty", snapshot.BatchId);
             }
         }
-        catch (Exception ex)
+        else
         {
-            BatchSummary.Text = T("History.ReadError", ex.Message);
-            HistoryGrid.ItemsSource = null;
+            BatchSummary.Text = snapshot.BatchesEnabled
+                ? T("History.RecentNeedBatch", snapshot.Rows.Count)
+                : T("History.RecentNoBatches", snapshot.Rows.Count);
         }
     }
 
@@ -1087,50 +888,40 @@ public partial class MainWindow : Window
     {
         try
         {
-            var candidate = _settings.Clone();
-            candidate.LanguageCode        = ReadLanguageComboSelection();
-            candidate.CatalogPath          = NullIfEmpty(SettingsCatalogPath.Text);
-            candidate.RequireSignedCatalog = !CatalogTrust.IsUnsignedLabModeEnabled()
-                || SettingsRequireSigned.IsChecked == true;
-            candidate.CatalogAutoUpdate    = SettingsCatalogAutoUpdate.IsChecked == true;
-            // Sprint 6: owner/repo are hard-locked to the embedded allowlist —
-            // not user-editable. Always persist the canonical values so a stale
-            // settings.json from a prior dev build doesn't linger.
-            candidate.CatalogOwner         = CatalogTrust.OfficialCatalogSource.Owner;
-            candidate.CatalogRepo          = CatalogTrust.OfficialCatalogSource.Repo;
-            candidate.GdbPath              = NullIfEmpty(SettingsGdbPath.Text);
-            candidate.Power                = SettingsPowerProbe.IsChecked == true
-                                               ? PowerMode.Probe : PowerMode.External;
-            candidate.ConnectUnderReset    = SettingsConnectReset.IsChecked == true;
-            candidate.DbPath               = NullIfEmpty(SettingsDbPath.Text);
-            candidate.StationId            = string.IsNullOrWhiteSpace(SettingsStationId.Text)
-                                               ? Environment.MachineName
-                                               : SettingsStationId.Text.Trim();
-            candidate.BatchesEnabled       = SettingsBatchesEnabled.IsChecked == true;
-            candidate.LastOperator         = NullIfEmpty(OperatorBox.Text);
-            candidate.LastBatch            = candidate.BatchesEnabled
-                ? NullIfEmpty(BatchBox.Text)
-                : null;
-
-            if (!int.TryParse(SettingsBmpFreq.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var f) || f <= 0)
-                throw new FormatException(T("Settings.FrequencyInvalid"));
-            candidate.BmpFrequencyHz = f;
-
-            if (!int.TryParse(SettingsTimeout.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var t) || t <= 0)
-                throw new FormatException(T("Settings.TimeoutInvalid"));
-            candidate.TimeoutSeconds = t;
-
-            candidate.FlashHotkey = ReadHotkeyComboSelection();
-
-            candidate.LogShippingEnabled = SettingsLogShippingEnabled.IsChecked == true;
-            if (!int.TryParse(SettingsLogShipInterval.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mins) || mins <= 0)
-                throw new FormatException(T("Settings.IntervalInvalid"));
-            candidate.LogShipIntervalMinutes = mins;
-            candidate.LogShipperPrivateKeyPath = string.IsNullOrWhiteSpace(SettingsLogShipperKey.Text)
-                ? AppSettings.DefaultLogShipperPrivateKeyPath
-                : SettingsLogShipperKey.Text.Trim();
-
-            AppSettingsStore.Save(candidate);
+            var draft = new SettingsDraft(
+                LanguageCode: ReadLanguageComboSelection(),
+                CatalogPath: SettingsCatalogPath.Text,
+                RequireSignedCatalog: SettingsRequireSigned.IsChecked == true,
+                CatalogAutoUpdate: SettingsCatalogAutoUpdate.IsChecked == true,
+                GdbPath: SettingsGdbPath.Text,
+                BmpFrequencyHz: SettingsBmpFreq.Text,
+                Power: SettingsPowerProbe.IsChecked == true
+                    ? PowerMode.Probe
+                    : PowerMode.External,
+                ConnectUnderReset: SettingsConnectReset.IsChecked == true,
+                TimeoutSeconds: SettingsTimeout.Text,
+                DbPath: SettingsDbPath.Text,
+                StationId: SettingsStationId.Text,
+                BatchesEnabled: SettingsBatchesEnabled.IsChecked == true,
+                LastOperator: OperatorBox.Text,
+                LastBatch: BatchBox.Text,
+                FlashHotkey: ReadHotkeyComboSelection(),
+                LogShippingEnabled: SettingsLogShippingEnabled.IsChecked == true,
+                LogShipIntervalMinutes: SettingsLogShipInterval.Text,
+                LogShipperPrivateKeyPath: SettingsLogShipperKey.Text);
+            var save = _settingsWorkflow.Save(_settings, draft);
+            if (!save.IsSaved)
+            {
+                var message = save.InvalidField switch
+                {
+                    SettingsField.BmpFrequencyHz => T("Settings.FrequencyInvalid"),
+                    SettingsField.TimeoutSeconds => T("Settings.TimeoutInvalid"),
+                    SettingsField.LogShipIntervalMinutes => T("Settings.IntervalInvalid"),
+                    _ => save.Diagnostic ?? T("Common.Unknown"),
+                };
+                throw new InvalidOperationException(message);
+            }
+            var candidate = save.Settings!;
             _settings = candidate;
             ApplyBatchModeToUI();
             RefreshFlashHotkeyHint();
@@ -1176,7 +967,7 @@ public partial class MainWindow : Window
 
     private void SettingsReset_Click(object sender, RoutedEventArgs e)
     {
-        _settings = new AppSettings();
+        _settings = _settingsWorkflow.Defaults();
         ApplySettingsToUI();
         SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
         SettingsStatus.Text = T("Settings.ResetNotice");
@@ -1329,7 +1120,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
     private static void Beep() => System.Media.SystemSounds.Beep.Play();
 
     // ============================================================
@@ -1536,20 +1326,6 @@ public partial class MainWindow : Window
         {
             RefreshAuthStatus();
         }
-    }
-
-    private async Task<string> DownloadRemoteFirmwareAsync(FirmwareRelease release)
-    {
-        if (release.ElfSource is null)
-            throw new InvalidOperationException("release.ElfSource is null but IsRemote is true");
-
-        using var http = new HttpClient();
-        var flow = new GitHubDeviceFlow(http, GitHubAppConfig.ClientId);
-        var store = new TokenStore();
-        var provider = new AccessTokenProvider(store, flow);
-        var api = new GitHubReleaseAssetClient(http);
-        var cache = new FirmwareCache(api, provider.GetFreshAccessTokenAsync);
-        return await cache.GetOrDownloadAsync(release.ElfSource, release.ElfSha256);
     }
 
     // ============================================================
