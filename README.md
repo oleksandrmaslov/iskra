@@ -54,7 +54,7 @@ the hidden batch text is ignored, attempts use a blank batch ID, and no batch
 reservation is created. The existing digest-based lock remains available when
 the setting is enabled.
 
-`Iskra.Desktop` is the first Ukrainian four-tab Avalonia preview. It consumes
+`Iskra.Desktop` is the first localized four-tab Avalonia preview. It consumes
 the shared `Iskra.Application` catalog, readiness, and batch policies, but its
 flash and settings-mutation controls are deliberately disabled until workflow
 tests and hardware-in-the-loop parity exist. It does not replace WPF yet.
@@ -68,6 +68,22 @@ The repository now targets .NET 10 and pins SDK 10.0.301 through `global.json`.
 `Iskra.Desktop` uses Avalonia 12.1.0. This runtime/UI-toolkit migration does not
 by itself establish Windows/Linux/macOS visual, packaging, workflow, or HIL
 parity; WPF remains the shipping operator UI until those gates pass.
+
+## Languages and standalone executables
+
+Operator presentation supports Ukrainian (default), English, and German.
+Select the language in WPF/Avalonia settings, or use `Iskra.Cli --lang
+uk|en|de ...`. Error codes, logs, CLI flags, hashes, catalog metadata, and raw
+GDB diagnostics remain language-neutral.
+
+Build the three self-contained Windows x64 executables and checksums with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build-localized-exes.ps1 -Version 1.0.0
+```
+
+Outputs are written under `artifacts/Iskra-<version>-win-x64/` as `Iskra.exe`,
+`Iskra.Desktop.exe`, and `Iskra.Cli.exe`, with the signed example catalog.
 
 ## Installer
 

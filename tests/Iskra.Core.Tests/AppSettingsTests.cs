@@ -27,6 +27,7 @@ public class AppSettingsTests : IDisposable
         Assert.Equal(15, s.TimeoutSeconds);
         Assert.Equal(Environment.MachineName, s.StationId);
         Assert.False(s.BatchesEnabled);
+        Assert.Equal(IskraLanguages.Ukrainian, s.LanguageCode);
         Assert.Null(s.CatalogPath);
         Assert.Null(s.GdbPath);
         Assert.Equal(FlashHotkey.Enter, s.FlashHotkey);
@@ -54,6 +55,7 @@ public class AppSettingsTests : IDisposable
     {
         var original = new AppSettings
         {
+            LanguageCode         = IskraLanguages.German,
             CatalogPath           = @"D:\fw\catalog.json",
             RequireSignedCatalog  = true,
             GdbPath               = @"C:\arm\bin\arm-none-eabi-gdb.exe",
@@ -72,6 +74,7 @@ public class AppSettingsTests : IDisposable
         var loaded = AppSettingsStore.Load(_path);
 
         Assert.Equal(original.CatalogPath,          loaded.CatalogPath);
+        Assert.Equal(original.LanguageCode,         loaded.LanguageCode);
         Assert.Equal(original.RequireSignedCatalog, loaded.RequireSignedCatalog);
         Assert.Equal(original.GdbPath,              loaded.GdbPath);
         Assert.Equal(original.BmpFrequencyHz,       loaded.BmpFrequencyHz);
@@ -147,6 +150,45 @@ public class AppSettingsTests : IDisposable
         Assert.Equal("a", original.CatalogPath);
         Assert.Equal(500_000, original.BmpFrequencyHz);
         Assert.True(original.BatchesEnabled);
+        Assert.Equal(IskraLanguages.Ukrainian, original.LanguageCode);
+    }
+
+    [Theory]
+    [InlineData("uk-UA", "uk")]
+    [InlineData("EN_us", "en")]
+    [InlineData("de-CH", "de")]
+    [InlineData("unsupported", "uk")]
+    public void Load_normalizes_language_without_discarding_other_settings(
+        string persistedLanguage,
+        string expectedLanguage)
+    {
+        AppSettingsStore.Save(new AppSettings
+        {
+            LanguageCode = persistedLanguage,
+            StationId = "STATION-KEPT",
+        }, _path);
+
+        var loaded = AppSettingsStore.Load(_path);
+
+        Assert.Equal(expectedLanguage, loaded.LanguageCode);
+        Assert.Equal("STATION-KEPT", loaded.StationId);
+    }
+
+    [Fact]
+    public void Load_legacy_json_without_language_uses_ukrainian_and_keeps_other_fields()
+    {
+        File.WriteAllText(_path, """
+            {
+              "station_id": "LEGACY-STATION",
+              "bmp_frequency_hz": 2000000
+            }
+            """);
+
+        var loaded = AppSettingsStore.Load(_path);
+
+        Assert.Equal(IskraLanguages.Ukrainian, loaded.LanguageCode);
+        Assert.Equal("LEGACY-STATION", loaded.StationId);
+        Assert.Equal(2_000_000, loaded.BmpFrequencyHz);
     }
 
     // Sprint 5 fields ------------------------------------------------------

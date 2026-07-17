@@ -17,6 +17,8 @@ namespace Iskra.Wpf;
 
 public partial class MainWindow : Window
 {
+    private static string T(string key, params object?[] args) => UiText.Get(key, args);
+
     private AppSettings _settings = new();
     private Catalog? _catalog;
     private string? _catalogPath;
@@ -31,6 +33,8 @@ public partial class MainWindow : Window
     private bool _suppressTabSelectionChanged;
     private bool _isApplyingSettings;
     private TabItem? _previousMainTab;
+    private readonly string _activeLanguageCode =
+        IskraLanguages.NormalizeOrDefault(CultureInfo.CurrentUICulture.Name);
 
     public MainWindow()
     {
@@ -96,7 +100,7 @@ public partial class MainWindow : Window
     {
         _gdbExe = GdbDiscovery.Find(_settings.GdbPath);
         StatusGdb.Text = _gdbExe is null
-            ? "gdb: НЕ ЗНАЙДЕНО"
+            ? T("Gdb.NotFound.Status")
             : $"gdb: {Path.GetFileName(_gdbExe)}";
         StatusGdb.Foreground = _gdbExe is null
             ? new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0xB3))
@@ -110,22 +114,22 @@ public partial class MainWindow : Window
         {
             _port = probes[0].PortName;
             _probeSerial = probes[0].SerialNumber;
-            StatusPort.Text = $"Порт: {_port}" +
-                (string.IsNullOrWhiteSpace(_probeSerial) ? "" : $" · SN {_probeSerial}");
+            StatusPort.Text = T("Probe.Port", _port,
+                string.IsNullOrWhiteSpace(_probeSerial) ? "" : $" · SN {_probeSerial}");
             StatusPort.Foreground = new SolidColorBrush(Color.FromRgb(0x9C, 0xDC, 0x9C));
         }
         else if (probes.Count == 0)
         {
             _port = null;
             _probeSerial = null;
-            StatusPort.Text = "Порт: BMP не знайдено";
+            StatusPort.Text = T("Probe.NotFound.Status");
             StatusPort.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0xB3));
         }
         else
         {
             _port = null;
             _probeSerial = null;
-            StatusPort.Text = $"Порт: знайдено {probes.Count} BMP (потрібно один)";
+            StatusPort.Text = T("Probe.Multiple.Status", probes.Count);
             StatusPort.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x80));
         }
     }
@@ -165,42 +169,42 @@ public partial class MainWindow : Window
         if (_port is null)
         {
             SetBannerNeutral(
-                "BLACK MAGIC PROBE НЕ ПІДКЛЮЧЕНО",
+                T("Ready.Probe.Title"),
                 warning: true,
-                "Підключіть рівно один BMP і натисніть «Оновити BMP» у верхній панелі.");
+                T("Ready.Probe.Detail"));
         }
         else if (_gdbExe is null)
         {
             SetBannerNeutral(
-                "GDB НЕ ЗНАЙДЕНО",
+                T("Ready.Gdb.Title"),
                 warning: true,
-                "Вкажіть arm-none-eabi-gdb у Налаштуваннях або повторно запустіть інсталятор Iskra.");
+                T("Ready.Gdb.Detail"));
         }
         else if (_catalog is null)
         {
             SetBannerNeutral(
-                "КАТАЛОГ НЕ ГОТОВИЙ",
+                T("Ready.Catalog.Title"),
                 warning: true,
-                "Перевірте підпис і шлях до catalog.json у Налаштуваннях.");
+                T("Ready.Catalog.Detail"));
         }
         else if (operatorMissing)
         {
-            SetBannerNeutral("ВКАЖІТЬ ОПЕРАТОРА", warning: false, "Після цього прошивка стане доступною.");
+            SetBannerNeutral(T("Ready.Operator.Title"), warning: false, T("Ready.Operator.Detail"));
         }
         else if (batchMissing)
         {
-            SetBannerNeutral("ВКАЖІТЬ ID ПАРТІЇ", warning: false, "Партії можна вимкнути в Налаштуваннях → Хмарний журнал.");
+            SetBannerNeutral(T("Ready.Batch.Title"), warning: false, T("Ready.Batch.Detail"));
         }
         else if (selectionMissing)
         {
-            SetBannerNeutral("ОБЕРІТЬ ПРОДУКТ І ВЕРСІЮ", warning: false);
+            SetBannerNeutral(T("Ready.Selection.Title"), warning: false);
         }
         else
         {
             var detail = _settings.BatchesEnabled
-                ? "Перевірте ID партії та натисніть кнопку нижче"
-                : "Партії вимкнено · спроба буде записана без ID партії";
-            SetBannerNeutral("ГОТОВО ДО ПРОШИВКИ", warning: false, detail);
+                ? T("Ready.BatchEnabled.Detail")
+                : T("Ready.BatchDisabled.Detail");
+            SetBannerNeutral(T("Flash.Ready.Title"), warning: false, detail);
         }
     }
 
@@ -236,8 +240,8 @@ public partial class MainWindow : Window
         if (!session.IsReady)
         {
             var message = CatalogFailureMessage(session);
-            StatusCatalog.Text = $"Каталог: {message}";
-            CatalogHeader.Text = $"Каталог недоступний: {message}";
+            StatusCatalog.Text = T("Catalog.Status", message);
+            CatalogHeader.Text = T("Catalog.Unavailable", message);
             CatalogProductsList.ItemsSource = null;
             return;
         }
@@ -246,16 +250,16 @@ public partial class MainWindow : Window
         _catalogPath = session.SourcePath;
         _catalogDir = session.SourceDirectory;
         var trustText = session.IsSideload
-            ? "sideload (лабораторний режим)"
+            ? T("Catalog.Trust.Sideload")
             : session.TrustResult switch
             {
                 CatalogTrustResult.Verified => "✓ Ed25519",
-                CatalogTrustResult.UnsignedAllowed => "без підпису (лабораторний режим)",
-                _ => session.TrustResult?.ToString() ?? "невідомий стан довіри",
+                CatalogTrustResult.UnsignedAllowed => T("Catalog.Trust.Unsigned"),
+                _ => session.TrustResult?.ToString() ?? T("Catalog.Trust.Unknown"),
             };
 
-        StatusCatalog.Text =
-            $"Каталог: {_catalog!.Products.Count} продукт(ів) · {trustText} · {Path.GetFileName(_catalogPath)}";
+        StatusCatalog.Text = T("Catalog.Loaded.Status", _catalog!.Products.Count,
+            trustText, Path.GetFileName(_catalogPath));
 
         foreach (var product in _catalog.Products)
             ProductCombo.Items.Add(product.ProductId);
@@ -263,9 +267,9 @@ public partial class MainWindow : Window
             ProductCombo.SelectedIndex = 0;
 
         var revokedCount = _catalog.Revoked?.Count ?? 0;
-        var revokedSuffix = revokedCount > 0 ? $" · {revokedCount} відкликано" : "";
-        CatalogHeader.Text =
-            $"{Path.GetFileName(_catalogPath)} · {_catalog.Products.Count} продукт(ів) · {trustText}{revokedSuffix}";
+        var revokedSuffix = revokedCount > 0 ? T("Catalog.Revoked.Suffix", revokedCount) : "";
+        CatalogHeader.Text = T("Catalog.Header", Path.GetFileName(_catalogPath),
+            _catalog.Products.Count, trustText, revokedSuffix);
         CatalogProductsList.ItemsSource = _catalog.Products;
     }
 
@@ -273,22 +277,22 @@ public partial class MainWindow : Window
     {
         return session.Status switch
         {
-            CatalogSessionStatus.NotFound => "не знайдено (вкажіть шлях у Налаштуваннях)",
+            CatalogSessionStatus.NotFound => T("Catalog.Fail.NotFound"),
             CatalogSessionStatus.ExplicitPathMissing =>
-                $"вказаний шлях не існує: {session.SourcePath}",
+                T("Catalog.Fail.PathMissing", session.SourcePath),
             CatalogSessionStatus.SideloadRequiresLabMode =>
-                "sideload дозволено лише в явному лабораторному режимі",
+                T("Catalog.Fail.SideloadLab"),
             CatalogSessionStatus.TrustRejected => session.TrustResult switch
             {
-                CatalogTrustResult.UnsignedRejected => "підпис обов'язковий, але файл .sig відсутній",
-                CatalogTrustResult.BadSignature => "невірний підпис Ed25519",
-                CatalogTrustResult.NoPublicKeyConfigured => "у застосунку немає довіреного публічного ключа",
-                CatalogTrustResult.IoError => "файл підпису неможливо прочитати",
-                _ => "перевірку довіри не пройдено",
+                CatalogTrustResult.UnsignedRejected => T("Catalog.Fail.Unsigned"),
+                CatalogTrustResult.BadSignature => T("Catalog.Fail.BadSignature"),
+                CatalogTrustResult.NoPublicKeyConfigured => T("Catalog.Fail.NoKey"),
+                CatalogTrustResult.IoError => T("Catalog.Fail.SignatureIo"),
+                _ => T("Catalog.Fail.Trust"),
             },
-            CatalogSessionStatus.ParseError => $"помилка формату — {session.Diagnostic}",
-            CatalogSessionStatus.IoError => $"помилка читання — {session.Diagnostic}",
-            _ => $"помилка — {session.Diagnostic}",
+            CatalogSessionStatus.ParseError => T("Catalog.Fail.Parse", session.Diagnostic),
+            CatalogSessionStatus.IoError => T("Catalog.Fail.Read", session.Diagnostic),
+            _ => T("Catalog.Fail.Generic", session.Diagnostic),
         };
     }
 
@@ -347,24 +351,24 @@ public partial class MainWindow : Window
         var batch = batchPolicy.EffectiveBatchId;
         if (string.IsNullOrEmpty(op))
         {
-            SetBannerNeutral("Вкажіть оператора", warning: true);
+            SetBannerNeutral(T("Flash.EnterOperator"), warning: true);
             return;
         }
         if (!batchPolicy.IsValid)
         {
-            SetBannerNeutral("Вкажіть ID партії", warning: true,
-                "Або вимкніть партії в Налаштуваннях → Хмарний журнал.");
+            SetBannerNeutral(T("Flash.EnterBatch"), warning: true,
+                T("Flash.DisableBatchHint"));
             return;
         }
         if (_gdbExe is null)
         {
-            SetBannerNeutral("gdb не знайдено. Повторно запустіть інсталятор Iskra.", warning: true);
+            SetBannerNeutral(T("Flash.GdbMissing"), warning: true);
             return;
         }
         if (_port is null)
         {
-            SetBannerNeutral("Black Magic Probe не знайдено", warning: true,
-                "Підключіть рівно один BMP і натисніть «Оновити BMP» у верхній панелі.");
+            SetBannerNeutral(T("Flash.ProbeMissing"), warning: true,
+                T("Ready.Probe.Detail"));
             return;
         }
 
@@ -434,14 +438,14 @@ public partial class MainWindow : Window
         string elfPath;
         if (release.IsRemote)
         {
-            SetBannerNeutral("Завантаження прошивки з GitHub…", warning: false);
+            SetBannerNeutral(T("Flash.Downloading"), warning: false);
             try
             {
                 elfPath = await DownloadRemoteFirmwareAsync(release);
             }
             catch (NotSignedInException)
             {
-                ShowFail("E_NOT_SIGNED_IN", "Відкрийте Налаштування → Авторизація GitHub → Увійти.");
+                ShowFail("E_NOT_SIGNED_IN", T("Flash.AuthOpenSettings"));
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_NOT_SIGNED_IN", "remote firmware requires GitHub sign-in", 0, null, null);
                 RefreshHistory();
@@ -451,7 +455,7 @@ public partial class MainWindow : Window
             }
             catch (RefreshTokenExpiredException)
             {
-                ShowFail("E_AUTH_EXPIRED", "Сесію GitHub потрібно поновити (>6 міс без оновлення).");
+                ShowFail("E_AUTH_EXPIRED", T("Flash.AuthExpired"));
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_AUTH_EXPIRED", "github refresh token expired", 0, null, null);
                 RefreshHistory();
@@ -486,7 +490,7 @@ public partial class MainWindow : Window
 
             if (!File.Exists(elfPath))
             {
-                ShowFail("E_FW_NOT_FOUND", $"Файл прошивки не знайдено: {elfPath}");
+                ShowFail("E_FW_NOT_FOUND", T("Flash.FileNotFound", elfPath));
                 LogAttempt(op, batch, product, release, FlashResult.Fail,
                     "E_FW_NOT_FOUND", elfPath, 0, null, null);
                 RefreshHistory();
@@ -495,7 +499,7 @@ public partial class MainWindow : Window
             }
         }
 
-        SetBannerNeutral("Виконується…", warning: false);
+        SetBannerNeutral(T("Flash.Running"), warning: false);
 
         // Remember the operator + batch for next launch.
         _settings.LastOperator = op;
@@ -510,9 +514,9 @@ public partial class MainWindow : Window
                 var kind = FirmwarePreflight.DisplayName(release.FirmwareKind);
                 var msg = preflight switch
                 {
-                    FirmwarePreflight.CheckResult.NotFound => $"Файл прошивки не знайдено: {elfPath}",
-                    FirmwarePreflight.CheckResult.IoError  => $"Не вдалося прочитати файл прошивки: {elfPath}",
-                    _                                      => $"Файл не є коректним {kind}: {elfPath}",
+                    FirmwarePreflight.CheckResult.NotFound => T("Flash.FileNotFound", elfPath),
+                    FirmwarePreflight.CheckResult.IoError  => T("Flash.FileReadFailed", elfPath),
+                    _                                      => T("Flash.FileBadFormat", kind, elfPath),
                 };
                 var code = preflight switch
                 {
@@ -591,8 +595,8 @@ public partial class MainWindow : Window
         ResultBanner.Background = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
         ResultText.Foreground = Brushes.White;
         ResultDetail.Foreground = Brushes.White;
-        ResultText.Text = "✓ ПРОШИВКА УСПІШНА";
-        ResultDetail.Text = $"{duration.TotalMilliseconds:F0} мс";
+        ResultText.Text = T("Flash.Success");
+        ResultDetail.Text = T("Flash.Duration", duration.TotalMilliseconds);
     }
 
     private void ShowFail(string code, string detail)
@@ -601,9 +605,9 @@ public partial class MainWindow : Window
         ResultText.Foreground = Brushes.White;
         ResultDetail.Foreground = Brushes.White;
         ResultText.Text = $"✗ {code}";
-        ResultDetail.Text = ErrorHints.For(code);
+        ResultDetail.Text = UiText.ErrorHint(code);
         if (!string.IsNullOrEmpty(detail))
-            GdbOutput.AppendText($"\n[Деталі помилки]\n{detail}\n");
+            GdbOutput.AppendText($"\n[{T("Flash.ErrorDetails")}]\n{detail}\n");
     }
 
     private void SetBannerNeutral(string msg, bool warning, string? detail = null)
@@ -715,20 +719,20 @@ public partial class MainWindow : Window
             var locked = store.GetBatchLock(batch);
             BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
             if (locked is { } l)
-                BatchLockLabel.Text = $"🔒 Партію заблоковано на {l.ProductId} v{l.FirmwareVersion} · SHA {ShortSha(l.FirmwareSha256)}";
+                BatchLockLabel.Text = T("Batch.Locked", l.ProductId, l.FirmwareVersion, ShortSha(l.FirmwareSha256));
             else
-                BatchLockLabel.Text = "Партія нова — перша прошивка визначить продукт + версію.";
+                BatchLockLabel.Text = T("Batch.New");
         }
         catch (Exception ex)
         {
             BatchLockLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            BatchLockLabel.Text = $"Неможливо перевірити блокування партії: {ex.Message}";
+            BatchLockLabel.Text = T("Batch.CheckFailed", ex.Message);
         }
     }
 
     private static string ShortSha(string value) =>
         string.IsNullOrWhiteSpace(value)
-            ? "невідомо"
+            ? T("Common.Unknown")
             : value[..Math.Min(12, value.Length)].ToLowerInvariant();
 
     private void ExportCsvBatch_Click(object sender, RoutedEventArgs e)
@@ -741,21 +745,21 @@ public partial class MainWindow : Window
     {
         if (batchOnly && !_settings.BatchesEnabled)
         {
-            BatchSummary.Text = "Партії вимкнено. Скористайтеся експортом усього журналу.";
+            BatchSummary.Text = T("History.BatchesDisabled");
             return;
         }
 
         var dbPath = ResolveDbPath();
         if (!File.Exists(dbPath))
         {
-            BatchSummary.Text = "Журнал ще не створено — нічого експортувати.";
+            BatchSummary.Text = T("History.NothingToExport");
             return;
         }
 
         string? batch = batchOnly ? BatchBox.Text?.Trim() : null;
         if (batchOnly && string.IsNullOrEmpty(batch))
         {
-            BatchSummary.Text = "Введіть Партію на вкладці Прошивка, щоб експортувати тільки її.";
+            BatchSummary.Text = T("History.EnterBatch");
             return;
         }
 
@@ -766,8 +770,8 @@ public partial class MainWindow : Window
 
         var dlg = new SaveFileDialog
         {
-            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-            Title = batchOnly ? $"Експорт партії {batch}" : "Експорт усього журналу",
+            Filter = T("Dialog.Filter.Csv"),
+            Title = batchOnly ? T("History.ExportBatch.Title", batch) : T("History.ExportAll.Title"),
             FileName = defaultName,
         };
         if (dlg.ShowDialog() != true) return;
@@ -776,11 +780,11 @@ public partial class MainWindow : Window
         {
             using var store = new SqliteLogStore(dbPath);
             var rows = store.ExportCsv(dlg.FileName, batch);
-            BatchSummary.Text = $"✓ Експортовано {rows} рядків у {Path.GetFileName(dlg.FileName)}";
+            BatchSummary.Text = T("History.Exported", rows, Path.GetFileName(dlg.FileName));
         }
         catch (Exception ex)
         {
-            BatchSummary.Text = $"Помилка експорту: {ex.Message}";
+            BatchSummary.Text = T("History.ExportError", ex.Message);
         }
     }
 
@@ -792,7 +796,7 @@ public partial class MainWindow : Window
             if (!File.Exists(dbPath))
             {
                 HistoryGrid.ItemsSource = null;
-                BatchSummary.Text = "Журнал ще не створено.";
+                BatchSummary.Text = T("History.NoLog");
                 return;
             }
             using var store = new SqliteLogStore(dbPath);
@@ -806,24 +810,23 @@ public partial class MainWindow : Window
                 if (total > 0)
                 {
                     var rate = (double)pass / total;
-                    BatchSummary.Text =
-                        $"Партія «{currentBatch}»: {pass} PASS / {fail} FAIL  ({rate:P0} успіх)";
+                    BatchSummary.Text = T("History.BatchSummary", currentBatch, pass, fail, rate);
                 }
                 else
                 {
-                    BatchSummary.Text = $"Партія «{currentBatch}»: ще немає записів.";
+                    BatchSummary.Text = T("History.BatchEmpty", currentBatch);
                 }
             }
             else
             {
                 BatchSummary.Text = _settings.BatchesEnabled
-                    ? $"Останні {rows.Count} записів (вкажіть Партію для зведення)."
-                    : $"Останні {rows.Count} записів. Партії вимкнено.";
+                    ? T("History.RecentNeedBatch", rows.Count)
+                    : T("History.RecentNoBatches", rows.Count);
             }
         }
         catch (Exception ex)
         {
-            BatchSummary.Text = $"Помилка читання журналу: {ex.Message}";
+            BatchSummary.Text = T("History.ReadError", ex.Message);
             HistoryGrid.ItemsSource = null;
         }
     }
@@ -841,8 +844,8 @@ public partial class MainWindow : Window
         SettingsRequireSigned.IsChecked = _settings.RequireSignedCatalog;
         SettingsRequireSigned.IsEnabled = CatalogTrust.IsUnsignedLabModeEnabled();
         SettingsRequireSigned.ToolTip = SettingsRequireSigned.IsEnabled
-            ? "Лабораторний режим дозволено змінною ISKRA_LAB_ALLOW_UNSIGNED_CATALOG."
-            : "На операторській станції підпис каталогу обовʼязковий.";
+            ? T("Settings.LabAllowed")
+            : T("Settings.SignatureMandatory");
         SettingsCatalogAutoUpdate.IsChecked = _settings.CatalogAutoUpdate;
         // Sprint 6: catalog source is hard-locked. Display the official source
         // read-only — AppSettings.Load already clamped any settings.json values
@@ -858,6 +861,7 @@ public partial class MainWindow : Window
         SettingsDbPath.Text        = _settings.DbPath ?? "";
         SettingsStationId.Text     = _settings.StationId;
         SettingsBatchesEnabled.IsChecked = _settings.BatchesEnabled;
+        SelectLanguageComboItem(_settings.LanguageCode);
         SelectHotkeyComboItem(_settings.FlashHotkey);
         RefreshFlashHotkeyHint();
 
@@ -865,7 +869,7 @@ public partial class MainWindow : Window
         SettingsLogShippingEnabled.IsChecked = _settings.LogShippingEnabled;
         SettingsLogShipInterval.Text         = _settings.LogShipIntervalMinutes.ToString(CultureInfo.InvariantCulture);
         SettingsLogShipperKey.Text           = _settings.LogShipperPrivateKeyPath;
-        SettingsLogsSourceLocked.Text        = $"{GitHubAppConfig.LogsRepoOwner}/{GitHubAppConfig.LogsRepoName} (read-only)";
+        SettingsLogsSourceLocked.Text        = $"{GitHubAppConfig.LogsRepoOwner}/{GitHubAppConfig.LogsRepoName} {T("Settings.ReadOnlySuffix")}";
         AppUpdateSourceLocked.Text           = $"{GitHubAppConfig.AppUpdatesRepoOwner}/{GitHubAppConfig.AppUpdatesRepoName}";
         ApplyBatchModeToUI();
         }
@@ -913,6 +917,28 @@ public partial class MainWindow : Window
         SettingsFlashHotkey.SelectedIndex = 0;
     }
 
+    private void SelectLanguageComboItem(string? languageCode)
+    {
+        var normalized = IskraLanguages.NormalizeOrDefault(languageCode);
+        foreach (var obj in SettingsLanguage.Items)
+        {
+            if (obj is ComboBoxItem item && item.Tag is string tag
+                && string.Equals(tag, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                SettingsLanguage.SelectedItem = item;
+                return;
+            }
+        }
+        SettingsLanguage.SelectedIndex = 0;
+    }
+
+    private string ReadLanguageComboSelection()
+    {
+        if (SettingsLanguage.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            return IskraLanguages.NormalizeOrDefault(tag);
+        return IskraLanguages.Ukrainian;
+    }
+
     private FlashHotkey ReadHotkeyComboSelection()
     {
         if (SettingsFlashHotkey.SelectedItem is ComboBoxItem item
@@ -932,18 +958,18 @@ public partial class MainWindow : Window
         if (_settings.FlashHotkey == FlashHotkey.None)
         {
             FlashHotkeyHint.Text = "";
-            FlashButtonTooltipText.Text = "Запустити прошивку поточної плати";
+            FlashButtonTooltipText.Text = T("Flash.Tooltip");
         }
         else
         {
-            FlashHotkeyHint.Text = $"(або натисніть {label})";
-            FlashButtonTooltipText.Text = $"Запустити прошивку. Гаряча клавіша: {label}";
+            FlashHotkeyHint.Text = T("Flash.HotkeyHint", label);
+            FlashButtonTooltipText.Text = T("Flash.HotkeyTooltip", label);
         }
     }
 
     private static (string Label, Key Key) HotkeyDisplay(FlashHotkey hk) => hk switch
     {
-        FlashHotkey.Space => ("Пробіл", Key.Space),
+        FlashHotkey.Space => (T("Hotkey.Space"), Key.Space),
         FlashHotkey.Enter => ("Enter",  Key.Enter),
         FlashHotkey.F2    => ("F2",     Key.F2),
         FlashHotkey.F5    => ("F5",     Key.F5),
@@ -959,7 +985,7 @@ public partial class MainWindow : Window
         // Only fire when the Flash tab is the active one — otherwise the
         // operator could land on a TextBox in another tab and unintentionally
         // trigger a flash on Enter.
-        if ((MainTabs.SelectedItem as TabItem)?.Header as string is not "Прошивка") return;
+        if (!ReferenceEquals(MainTabs.SelectedItem, FlashTab)) return;
 
         // Don't fire when the button is disabled (mid-flash) — and don't double-fire
         // for keys repeated while held down.
@@ -987,9 +1013,9 @@ public partial class MainWindow : Window
             return;
 
         SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x8A, 0x62, 0x00));
-        SettingsStatus.Text = "Є незбережені зміни — вони збережуться при виході з вкладки.";
+        SettingsStatus.Text = T("Settings.Dirty.Detail");
         StatusSave.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x80));
-        StatusSave.Text = "Є незбережені зміни";
+        StatusSave.Text = T("Settings.Dirty.Short");
     }
 
 
@@ -1029,8 +1055,8 @@ public partial class MainWindow : Window
             e.Cancel = true;
             MessageBox.Show(
                 this,
-                "Дочекайтеся завершення прошивки перед закриттям Iskra.",
-                "Прошивка виконується",
+                T("Settings.CloseDuringFlash"),
+                T("Settings.FlashRunning.Title"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return;
@@ -1062,6 +1088,7 @@ public partial class MainWindow : Window
         try
         {
             var candidate = _settings.Clone();
+            candidate.LanguageCode        = ReadLanguageComboSelection();
             candidate.CatalogPath          = NullIfEmpty(SettingsCatalogPath.Text);
             candidate.RequireSignedCatalog = !CatalogTrust.IsUnsignedLabModeEnabled()
                 || SettingsRequireSigned.IsChecked == true;
@@ -1086,18 +1113,18 @@ public partial class MainWindow : Window
                 : null;
 
             if (!int.TryParse(SettingsBmpFreq.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var f) || f <= 0)
-                throw new FormatException("Частота повинна бути додатнім цілим числом (Hz).");
+                throw new FormatException(T("Settings.FrequencyInvalid"));
             candidate.BmpFrequencyHz = f;
 
             if (!int.TryParse(SettingsTimeout.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var t) || t <= 0)
-                throw new FormatException("Тайм-аут повинен бути додатнім цілим (секунди).");
+                throw new FormatException(T("Settings.TimeoutInvalid"));
             candidate.TimeoutSeconds = t;
 
             candidate.FlashHotkey = ReadHotkeyComboSelection();
 
             candidate.LogShippingEnabled = SettingsLogShippingEnabled.IsChecked == true;
             if (!int.TryParse(SettingsLogShipInterval.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mins) || mins <= 0)
-                throw new FormatException("Інтервал вивантаження повинен бути додатнім цілим (хвилини).");
+                throw new FormatException(T("Settings.IntervalInvalid"));
             candidate.LogShipIntervalMinutes = mins;
             candidate.LogShipperPrivateKeyPath = string.IsNullOrWhiteSpace(SettingsLogShipperKey.Text)
                 ? AppSettings.DefaultLogShipperPrivateKeyPath
@@ -1117,24 +1144,29 @@ public partial class MainWindow : Window
 
             SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
             SettingsStatus.Text = automatic
-                ? $"✓ Автозбережено о {DateTime.Now:HH:mm:ss}"
-                : $"✓ Збережено о {DateTime.Now:HH:mm:ss}";
+                ? T("Settings.AutoSaved", DateTime.Now)
+                : T("Settings.Saved", DateTime.Now);
             StatusSave.Foreground = new SolidColorBrush(Color.FromRgb(0x9C, 0xDC, 0x9C));
-            StatusSave.Text = automatic ? "✓ Автозбережено" : "✓ Збережено";
+            StatusSave.Text = automatic ? T("Settings.AutoSaved.Short") : T("Settings.Saved.Short");
+            if (!string.Equals(candidate.LanguageCode, _activeLanguageCode, StringComparison.Ordinal))
+            {
+                SettingsStatus.Text = T("Settings.RestartNotice");
+                StatusSave.Text = T("Settings.RestartNotice.Short");
+            }
             return true;
         }
         catch (Exception ex)
         {
             SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            SettingsStatus.Text = $"✗ Не збережено: {ex.Message}";
+            SettingsStatus.Text = T("Settings.NotSaved.Detail", ex.Message);
             StatusSave.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xB3, 0xB3));
-            StatusSave.Text = "✗ Не збережено";
+            StatusSave.Text = T("Settings.NotSaved.Short");
             if (showDialogOnError)
             {
                 MessageBox.Show(
                     this,
-                    $"Налаштування не збережено:\n\n{ex.Message}\n\nВиправте значення та повторіть.",
-                    "Помилка налаштувань",
+                    T("Settings.SaveError.Body", ex.Message),
+                    T("Settings.SaveError.Title"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
@@ -1147,17 +1179,17 @@ public partial class MainWindow : Window
         _settings = new AppSettings();
         ApplySettingsToUI();
         SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-        SettingsStatus.Text = "Значення скинуто. Вони збережуться автоматично при виході з вкладки.";
+        SettingsStatus.Text = T("Settings.ResetNotice");
         StatusSave.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x80));
-        StatusSave.Text = "Є незбережені зміни";
+        StatusSave.Text = T("Settings.Dirty.Short");
     }
 
     private void PickCatalogPath_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog
         {
-            Filter = "Catalog files (*.json)|*.json|All files (*.*)|*.*",
-            Title  = "Виберіть catalog.json (або введіть sideload-папку вручну)",
+            Filter = T("Dialog.Filter.Catalog"),
+            Title  = T("Dialog.Catalog.Title"),
         };
         if (dlg.ShowDialog() == true) SettingsCatalogPath.Text = dlg.FileName;
     }
@@ -1166,8 +1198,8 @@ public partial class MainWindow : Window
     {
         var dlg = new OpenFileDialog
         {
-            Filter = "arm-none-eabi-gdb.exe|arm-none-eabi-gdb.exe|Executables (*.exe)|*.exe|All files (*.*)|*.*",
-            Title  = "Виберіть arm-none-eabi-gdb.exe",
+            Filter = T("Dialog.Filter.Gdb"),
+            Title  = T("Dialog.Gdb.Title"),
         };
         if (dlg.ShowDialog() == true) SettingsGdbPath.Text = dlg.FileName;
     }
@@ -1176,8 +1208,8 @@ public partial class MainWindow : Window
     {
         var dlg = new SaveFileDialog
         {
-            Filter = "SQLite databases (*.db)|*.db|All files (*.*)|*.*",
-            Title  = "Файл журналу",
+            Filter = T("Dialog.Filter.Sqlite"),
+            Title  = T("Dialog.Log.Title"),
             FileName = "flash_log.db",
         };
         if (dlg.ShowDialog() == true) SettingsDbPath.Text = dlg.FileName;
@@ -1187,8 +1219,8 @@ public partial class MainWindow : Window
     {
         var dlg = new OpenFileDialog
         {
-            Filter = "PEM private keys (*.pem)|*.pem|All files (*.*)|*.*",
-            Title  = "Виберіть приватний ключ GitHub App",
+            Filter = T("Dialog.Filter.Pem"),
+            Title  = T("Dialog.Pem.Title"),
         };
         if (dlg.ShowDialog() == true) SettingsLogShipperKey.Text = dlg.FileName;
     }
@@ -1202,14 +1234,14 @@ public partial class MainWindow : Window
     {
         if (!_settings.LogShippingEnabled)
         {
-            StatusCloud.Text = "Хмара: вимкнено";
-            LogShipStatus.Text = "Вивантаження вимкнено в налаштуваннях.";
+            StatusCloud.Text = T("Cloud.Disabled.Status");
+            LogShipStatus.Text = T("Cloud.Disabled.Detail");
             return;
         }
         if (!GitHubAppConfig.IsLogShipperConfigured)
         {
-            StatusCloud.Text = "Хмара: не налаштовано";
-            LogShipStatus.Text = "GitHub App ще не зареєстровано — зверніться до розробника.";
+            StatusCloud.Text = T("Cloud.Unconfigured.Status");
+            LogShipStatus.Text = T("Cloud.Unconfigured.Detail");
             return;
         }
         try
@@ -1217,20 +1249,20 @@ public partial class MainWindow : Window
             var dbPath = ResolveDbPath();
             if (!File.Exists(dbPath))
             {
-                StatusCloud.Text = "Хмара: 0 в черзі";
-                LogShipStatus.Text = "Журнал порожній.";
+                StatusCloud.Text = T("Cloud.Empty.Status");
+                LogShipStatus.Text = T("Cloud.Empty.Detail");
                 return;
             }
             using var store = new SqliteLogStore(dbPath);
             var pending = store.CountUnsynced();
-            StatusCloud.Text = pending == 0 ? "Хмара: ✓ синхр." : $"Хмара: {pending} в черзі";
+            StatusCloud.Text = pending == 0 ? T("Cloud.Synced.Status") : T("Cloud.Queued.Status", pending);
             LogShipStatus.Text = pending == 0
-                ? "✓ Усі рядки вивантажено."
-                : $"{pending} рядк(ів) очікують на вивантаження.";
+                ? T("Cloud.UploadedAll")
+                : T("Cloud.RowsWaiting", pending);
         }
         catch (Exception ex)
         {
-            StatusCloud.Text = "Хмара: помилка";
+            StatusCloud.Text = T("Cloud.Error.Status");
             LogShipStatus.Text = $"✗ {ex.Message}";
         }
     }
@@ -1240,13 +1272,13 @@ public partial class MainWindow : Window
         if (!_settings.LogShippingEnabled)
         {
             LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-            LogShipStatus.Text = "Спочатку увімкніть авто-вивантаження.";
+            LogShipStatus.Text = T("Cloud.EnableFirst");
             return;
         }
         if (!GitHubAppConfig.IsLogShipperConfigured)
         {
             LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            LogShipStatus.Text = "GitHub App не налаштовано — зверніться до розробника.";
+            LogShipStatus.Text = T("Cloud.Unconfigured.Detail");
             return;
         }
 
@@ -1256,13 +1288,13 @@ public partial class MainWindow : Window
         if (!File.Exists(keyPath))
         {
             LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            LogShipStatus.Text = $"✗ Ключ не знайдено: {keyPath}";
+            LogShipStatus.Text = T("Cloud.KeyMissing", keyPath);
             return;
         }
 
         LogShipNowButton.IsEnabled = false;
         LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-        LogShipStatus.Text = "Вивантаження…";
+        LogShipStatus.Text = T("Cloud.Uploading");
         try
         {
             ShipReport report;
@@ -1281,9 +1313,9 @@ public partial class MainWindow : Window
                 report = await shipper.ShipPendingAsync();
             }
             LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-            LogShipStatus.Text = $"✓ Вивантажено {report.RowsPushed} рядк(ів) "
-                + $"({report.FilesCreated} нових + {report.FilesUpdated} оновлено)"
-                + (report.RowsLeftover > 0 ? $", залишилось {report.RowsLeftover}." : ".");
+            LogShipStatus.Text = T("Cloud.UploadReport", report.RowsPushed,
+                report.FilesCreated, report.FilesUpdated,
+                report.RowsLeftover > 0 ? T("Cloud.Leftover", report.RowsLeftover) : ".");
         }
         catch (Exception ex)
         {
@@ -1314,7 +1346,7 @@ public partial class MainWindow : Window
         catch (TokenStoreException ex)
         {
             AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            AuthStatusLabel.Text = $"✗ Файл токенів пошкоджено: {ex.Message}";
+            AuthStatusLabel.Text = T("Auth.TokenCorrupt", ex.Message);
             AuthLoginButton.IsEnabled  = GitHubAppConfig.IsConfigured;
             AuthLogoutButton.IsEnabled = true;
             RefreshAuthBanner(CurrentSelectedRelease());
@@ -1324,7 +1356,7 @@ public partial class MainWindow : Window
         if (!GitHubAppConfig.IsConfigured)
         {
             AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            AuthStatusLabel.Text = "✗ GitHub Client ID не налаштовано в збірці.";
+            AuthStatusLabel.Text = T("Auth.ClientMissing.Short");
             AuthLoginButton.IsEnabled = false;
             AuthLogoutButton.IsEnabled = stored is not null;
             RefreshAuthBanner(CurrentSelectedRelease());
@@ -1334,7 +1366,7 @@ public partial class MainWindow : Window
         if (stored is null)
         {
             AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
-            AuthStatusLabel.Text = "Не авторизовано.";
+            AuthStatusLabel.Text = T("Auth.NotSignedIn");
             AuthLoginButton.IsEnabled = true;
             AuthLogoutButton.IsEnabled = false;
             RefreshAuthBanner(CurrentSelectedRelease());
@@ -1345,7 +1377,7 @@ public partial class MainWindow : Window
         if (stored.RefreshTokenIsExpired(now))
         {
             AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            AuthStatusLabel.Text = "✗ Сесія застаріла. Увійдіть знову.";
+            AuthStatusLabel.Text = T("Auth.SessionExpired");
             AuthLoginButton.IsEnabled = true;
             AuthLogoutButton.IsEnabled = true;
             RefreshAuthBanner(CurrentSelectedRelease());
@@ -1354,9 +1386,9 @@ public partial class MainWindow : Window
 
         var freshAccess = stored.AccessTokenIsFresh(now, AuthRefreshSkew);
         AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-        AuthStatusLabel.Text =
-            $"✓ Авторизовано. Access {(freshAccess ? "дійсний" : "оновиться")} до {stored.AccessTokenExpiresAtUtc:yyyy-MM-dd HH:mm} UTC · " +
-            $"Refresh до {stored.RefreshTokenExpiresAtUtc:yyyy-MM-dd} UTC";
+        AuthStatusLabel.Text = T("Auth.SignedIn",
+            freshAccess ? T("Auth.Access.Valid") : T("Auth.Access.Refresh"),
+            stored.AccessTokenExpiresAtUtc, stored.RefreshTokenExpiresAtUtc);
         AuthLoginButton.IsEnabled = true;
         AuthLogoutButton.IsEnabled = true;
         RefreshAuthBanner(CurrentSelectedRelease());
@@ -1392,10 +1424,10 @@ public partial class MainWindow : Window
         else
         {
             AuthHintText.Text = !GitHubAppConfig.IsConfigured
-                ? "Цей продукт потребує завантаження з GitHub, але Client ID не налаштовано в збірці."
+                ? T("Auth.ProductClientMissing")
                 : (stored is null
-                    ? $"Прошивка «{release.Version}» завантажується з GitHub. Потрібен вхід."
-                    : "Сесія GitHub застаріла. Увійдіть знову для завантаження прошивки.");
+                    ? T("Auth.ProductNeedsSignIn", release.Version)
+                    : T("Auth.ProductSessionExpired"));
             AuthHintLoginButton.IsEnabled = GitHubAppConfig.IsConfigured;
             AuthHintBanner.Visibility = Visibility.Visible;
         }
@@ -1413,8 +1445,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Не вдалося видалити токени: {ex.Message}",
-                "Iskra — вихід", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, T("Auth.DeleteFailed", ex.Message),
+                T("Auth.SignOut.Title"), MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         RefreshAuthStatus();
     }
@@ -1445,7 +1477,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            AuthStatusLabel.Text = $"✗ Не вдалося перевірити: {ex.Message}";
+            AuthStatusLabel.Text = T("Auth.RefreshFailed", ex.Message);
         }
         finally
         {
@@ -1458,8 +1490,8 @@ public partial class MainWindow : Window
         if (!GitHubAppConfig.IsConfigured)
         {
             MessageBox.Show(this,
-                "GitHub Client ID не налаштовано в збірці. Зверніться до розробника.",
-                "Iskra — вхід", MessageBoxButton.OK, MessageBoxImage.Error);
+                T("Auth.ClientMissing"),
+                T("Auth.SignIn.Title"), MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
 
@@ -1473,8 +1505,8 @@ public partial class MainWindow : Window
             try { code = await flow.RequestDeviceCodeAsync(); }
             catch (Exception ex)
             {
-                MessageBox.Show(this, $"Не вдалося запросити код пристрою: {ex.Message}",
-                    "Iskra — вхід", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(this, T("Auth.DeviceCodeFailed", ex.Message),
+                    T("Auth.SignIn.Title"), MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
@@ -1484,7 +1516,7 @@ public partial class MainWindow : Window
             if (ok != true)
             {
                 if (!string.IsNullOrEmpty(dlg.ErrorMessage))
-                    MessageBox.Show(this, dlg.ErrorMessage, "Iskra — вхід",
+                    MessageBox.Show(this, dlg.ErrorMessage, T("Auth.SignIn.Title"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -1495,10 +1527,8 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this,
-                    $"Не вдалося зберегти токени у %PROGRAMDATA%\\Iskra: {ex.Message}\n\n" +
-                    "Можливо, потрібно запустити програму від імені адміністратора (один раз).",
-                    "Iskra — вхід", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(this, T("Auth.SaveFailed", ex.Message),
+                    T("Auth.SignIn.Title"), MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
         }
@@ -1546,7 +1576,7 @@ public partial class MainWindow : Window
         AppUpdateSourceLocked.Text = $"{GitHubAppConfig.AppUpdatesRepoOwner}/{GitHubAppConfig.AppUpdatesRepoName}";
         AppUpdateOpenButton.IsEnabled = false;
         AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-        AppUpdateStatusLabel.Text = "Натисніть «Перевірити», щоб знайти новий інсталятор Iskra.";
+        AppUpdateStatusLabel.Text = T("Update.Prompt");
     }
 
     private async void AppUpdateCheck_Click(object sender, RoutedEventArgs e)
@@ -1555,7 +1585,7 @@ public partial class MainWindow : Window
         AppUpdateOpenButton.IsEnabled = false;
         _lastAppUpdateUrl = null;
         AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-        AppUpdateStatusLabel.Text = "Перевірка релізів GitHub...";
+        AppUpdateStatusLabel.Text = T("Update.Checking");
 
         try
         {
@@ -1573,27 +1603,25 @@ public partial class MainWindow : Window
             {
                 case AppUpdateStatus.UpdateAvailable:
                     AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
-                    AppUpdateStatusLabel.Text =
-                        $"Доступна версія {result.LatestVersion} ({result.TagName}). " +
-                        (result.SetupDownloadUrl is not null
-                            ? "Відкрийте реліз і запустіть setup EXE після завершення роботи."
-                            : "Відкрийте реліз і завантажте інсталятор.");
+                    AppUpdateStatusLabel.Text = result.SetupDownloadUrl is not null
+                        ? T("Update.Available.Setup", result.LatestVersion, result.TagName)
+                        : T("Update.Available.Download", result.LatestVersion, result.TagName);
                     break;
                 case AppUpdateStatus.UpToDate:
                     AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-                    AppUpdateStatusLabel.Text = $"✓ Поточна версія актуальна: {result.CurrentVersion}.";
+                    AppUpdateStatusLabel.Text = T("Update.Current", result.CurrentVersion);
                     break;
                 case AppUpdateStatus.NoRelease:
                     AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
-                    AppUpdateStatusLabel.Text = "У репозиторії Iskra ще немає релізів.";
+                    AppUpdateStatusLabel.Text = T("Update.NoRelease");
                     break;
                 case AppUpdateStatus.NetworkError:
                     AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-                    AppUpdateStatusLabel.Text = $"✗ Мережна помилка: {result.Message}";
+                    AppUpdateStatusLabel.Text = T("Update.NetworkError", result.Message);
                     break;
                 case AppUpdateStatus.ParseError:
                     AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-                    AppUpdateStatusLabel.Text = $"✗ Реліз неможливо прочитати: {result.Message}";
+                    AppUpdateStatusLabel.Text = T("Update.ParseError", result.Message);
                     break;
             }
         }
@@ -1623,7 +1651,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AppUpdateStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            AppUpdateStatusLabel.Text = $"✗ Не вдалося відкрити браузер: {ex.Message}";
+            AppUpdateStatusLabel.Text = T("Browser.OpenFailed", ex.Message);
         }
     }
 
@@ -1645,17 +1673,17 @@ public partial class MainWindow : Window
         if (tag is null && cached is null)
         {
             CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
-            CatalogCacheStatus.Text = "Кеш порожній — натисніть «Перевірити оновлення».";
+            CatalogCacheStatus.Text = T("CatalogCache.Empty");
         }
         else if (cached is null)
         {
             CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            CatalogCacheStatus.Text = $"✗ Кешований {tag}, але підпис не пройшов перевірку.";
+            CatalogCacheStatus.Text = T("CatalogCache.Bad", tag);
         }
         else
         {
             CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-            CatalogCacheStatus.Text = $"✓ {tag} · {cached.Products.Count} продукт(ів) · згенеровано {cached.GeneratedAt:yyyy-MM-dd HH:mm} UTC";
+            CatalogCacheStatus.Text = T("CatalogCache.Ready", tag, cached.Products.Count, cached.GeneratedAt);
         }
     }
 
@@ -1671,8 +1699,7 @@ public partial class MainWindow : Window
                 RefreshCatalogCacheStatus();
                 if (r.Status == RemoteCatalogStatus.Updated && r.ChangedFromCached)
                 {
-                    StatusCatalog.Text =
-                        $"Каталог: оновлено до {r.TagName} — натисніть «Перезавантажити» на вкладці Каталог.";
+                    StatusCatalog.Text = T("CatalogCache.BackgroundUpdated", r.TagName);
                 }
             });
         }
@@ -1687,7 +1714,7 @@ public partial class MainWindow : Window
     {
         CatalogUpdateButton.IsEnabled = false;
         CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-        CatalogCacheStatus.Text = "Перевірка…";
+        CatalogCacheStatus.Text = T("CatalogCache.Checking");
 
         // Sprint 6: source is hard-locked; no user-editable owner/repo to read.
 
@@ -1702,32 +1729,32 @@ public partial class MainWindow : Window
                 case RemoteCatalogStatus.Updated:
                     CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
                     CatalogCacheStatus.Text = r.ChangedFromCached
-                        ? $"✓ Оновлено до {r.TagName}. Перезавантажте каталог щоб застосувати."
-                        : $"✓ {r.TagName} (без змін з попередньої перевірки).";
+                        ? T("CatalogCache.Updated", r.TagName)
+                        : T("CatalogCache.Unchanged", r.TagName);
                     break;
                 case RemoteCatalogStatus.AlreadyUpToDate:
                     CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-                    CatalogCacheStatus.Text = $"✓ Вже актуально: {r.TagName}.";
+                    CatalogCacheStatus.Text = T("CatalogCache.Current", r.TagName);
                     break;
                 case RemoteCatalogStatus.NoRelease:
                     CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
-                    CatalogCacheStatus.Text = $"⚠ {_settings.CatalogOwner}/{_settings.CatalogRepo} поки що не має жодного релізу.";
+                    CatalogCacheStatus.Text = T("CatalogCache.NoRelease", _settings.CatalogOwner, _settings.CatalogRepo);
                     break;
                 case RemoteCatalogStatus.BadSignature:
                     CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-                    CatalogCacheStatus.Text = "✗ Підпис каталогу не співпадає з ключем у застосунку (можлива атака; кеш не змінено).";
+                    CatalogCacheStatus.Text = T("CatalogCache.BadSignature");
                     break;
                 case RemoteCatalogStatus.AssetsMissing:
                     CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-                    CatalogCacheStatus.Text = $"✗ Реліз без catalog.json або catalog.json.sig — {r.Message}";
+                    CatalogCacheStatus.Text = T("CatalogCache.AssetsMissing", r.Message);
                     break;
                 case RemoteCatalogStatus.ParseError:
                     CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-                    CatalogCacheStatus.Text = $"✗ Завантажений каталог не вдалось розпарсити: {r.Message}";
+                    CatalogCacheStatus.Text = T("CatalogCache.ParseError", r.Message);
                     break;
                 default:
                     CatalogCacheStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-                    CatalogCacheStatus.Text = $"✗ Помилка: {r.Status} — {r.Message}";
+                    CatalogCacheStatus.Text = T("CatalogCache.Error", r.Status, r.Message);
                     break;
             }
         }

@@ -1,7 +1,8 @@
 <Window x:Class="Iskra.Wpf.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Iskra — масова прошивка"
+        xmlns:local="clr-namespace:Iskra.Wpf"
+        Title="{local:Tr Window.Title}"
         Height="800" Width="1100"
         MinHeight="640" MinWidth="900"
         WindowStartupLocation="CenterScreen"
@@ -25,26 +26,26 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" x:Name="StatusPort" Foreground="#DCDCDC" FontSize="13"
-                           Text="Порт: …" Margin="0,0,24,0" VerticalAlignment="Center" />
+                           Text="{local:Tr Status.Port.Pending}" Margin="0,0,24,0" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="1" x:Name="StatusGdb" Foreground="#DCDCDC" FontSize="13"
-                           Text="gdb: …" Margin="0,0,24,0" VerticalAlignment="Center" />
+                           Text="{local:Tr Status.Gdb.Pending}" Margin="0,0,24,0" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="2" x:Name="StatusCatalog" Foreground="#DCDCDC" FontSize="13"
-                           Text="Каталог: …" Margin="0,0,24,0" VerticalAlignment="Center"
+                           Text="{local:Tr Status.Catalog.Pending}" Margin="0,0,24,0" VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
                 <TextBlock Grid.Column="3" x:Name="StatusCloud" Foreground="#DCDCDC" FontSize="13"
-                           Text="Хмара: …" Margin="0,0,18,0" VerticalAlignment="Center" />
+                           Text="{local:Tr Status.Cloud.Pending}" Margin="0,0,18,0" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="4" x:Name="StatusSave" Foreground="#9CDC9C" FontSize="13"
                            Text="" Margin="0,0,12,0" VerticalAlignment="Center" />
-                <Button Grid.Column="5" x:Name="ProbeRefreshButton" Content="Оновити BMP"
+                <Button Grid.Column="5" x:Name="ProbeRefreshButton" Content="{local:Tr Probe.Refresh}"
                         Padding="8,2" Click="ProbeRefresh_Click"
-                        ToolTip="Повторно знайти підключений Black Magic Probe" />
+                        ToolTip="{local:Tr Probe.Refresh.Tooltip}" />
             </Grid>
         </Border>
 
         <TabControl Grid.Row="1" x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0">
 
             <!-- ============================ FLASH TAB ============================ -->
-            <TabItem x:Name="FlashTab" Header="Прошивка" FontSize="14">
+            <TabItem x:Name="FlashTab" Header="{local:Tr Tab.Flash}" FontSize="14">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -69,15 +70,15 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Оператор:" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Flash.Operator}" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
                         <TextBox   Grid.Row="0" Grid.Column="1" x:Name="OperatorBox" FontSize="16" Padding="6,4" Margin="0,0,0,8"
                                    TextChanged="OperatorBox_TextChanged" />
-                        <TextBlock Grid.Row="0" Grid.Column="3" x:Name="BatchLabel" Text="Партія:" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
+                        <TextBlock Grid.Row="0" Grid.Column="3" x:Name="BatchLabel" Text="{local:Tr Flash.Batch}" VerticalAlignment="Center" FontSize="15" Margin="0,0,0,8" />
                         <TextBox   Grid.Row="0" Grid.Column="4" x:Name="BatchBox" FontSize="16" Padding="6,4" Margin="0,0,0,8" TextChanged="BatchBox_TextChanged" />
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Продукт:" VerticalAlignment="Center" FontSize="15" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Flash.Product}" VerticalAlignment="Center" FontSize="15" />
                         <ComboBox  Grid.Row="1" Grid.Column="1" x:Name="ProductCombo" FontSize="16" Padding="6,4" SelectionChanged="ProductCombo_SelectionChanged" />
-                        <TextBlock Grid.Row="1" Grid.Column="3" Text="Версія:" VerticalAlignment="Center" FontSize="15" />
+                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{local:Tr Flash.Version}" VerticalAlignment="Center" FontSize="15" />
                         <ComboBox  Grid.Row="1" Grid.Column="4" x:Name="VersionCombo" FontSize="16" Padding="6,4"
                                    DisplayMemberPath="Version"
                                    SelectionChanged="VersionCombo_SelectionChanged" />
@@ -89,8 +90,10 @@
 
                     <Border Grid.Row="1" x:Name="ResultBanner" Margin="20,8,20,8" CornerRadius="10" Background="#E8E8E8">
                         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                            <TextBlock x:Name="ResultText" Text="ГОТОВО ДО ПРОШИВКИ" FontSize="64" FontWeight="Bold" HorizontalAlignment="Center" Foreground="#444" />
-                            <TextBlock x:Name="ResultDetail" Text="Натисніть кнопку нижче, щоб прошити плату" FontSize="20" HorizontalAlignment="Center" Margin="0,16,0,0" Foreground="#444" />
+                            <TextBlock x:Name="ResultText" Text="{local:Tr Flash.Ready.Title}" FontSize="56" FontWeight="Bold"
+                                       HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Foreground="#444" />
+                            <TextBlock x:Name="ResultDetail" Text="{local:Tr Flash.Ready.Detail}" FontSize="20"
+                                       HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,16,0,0" Foreground="#444" />
                         </StackPanel>
                     </Border>
 
@@ -104,8 +107,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" x:Name="AuthHintText" VerticalAlignment="Center"
                                        FontSize="14" Foreground="#6B5A0E" TextWrapping="Wrap"
-                                       Text="Цей продукт потребує авторизації GitHub для завантаження прошивки." />
-                            <Button    Grid.Column="1" x:Name="AuthHintLoginButton" Content="Увійти"
+                                       Text="{local:Tr Flash.Auth.Required}" />
+                            <Button    Grid.Column="1" x:Name="AuthHintLoginButton" Content="{local:Tr Action.SignIn}"
                                        Padding="14,6" Margin="12,0,0,0" Click="AuthHintLogin_Click" />
                         </Grid>
                     </Border>
@@ -116,13 +119,13 @@
                             IsEnabled="False">
                         <Button.ToolTip>
                             <TextBlock x:Name="FlashButtonTooltipText"
-                                       Text="Запустити прошивку поточної плати"
+                                       Text="{local:Tr Flash.Tooltip}"
                                        FontSize="13" />
                         </Button.ToolTip>
                         <StackPanel>
-                            <TextBlock Text="ПРОШИТИ ПЛАТУ" FontSize="26" FontWeight="Bold"
+                            <TextBlock Text="{local:Tr Flash.Button}" FontSize="26" FontWeight="Bold"
                                        HorizontalAlignment="Center" />
-                            <TextBlock x:Name="FlashHotkeyHint" Text="(або натисніть Enter)"
+                            <TextBlock x:Name="FlashHotkeyHint" Text="{local:Tr Flash.Hotkey.Default}"
                                        FontSize="12" Opacity="0.85"
                                        HorizontalAlignment="Center" Margin="0,2,0,0" />
                         </StackPanel>
@@ -133,7 +136,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Text="Деталі gdb:" FontSize="13" Foreground="#666" Margin="0,0,0,4" />
+                        <TextBlock Grid.Row="0" Text="{local:Tr Flash.GdbDetails}" FontSize="13" Foreground="#666" Margin="0,0,0,4" />
                         <TextBox Grid.Row="1" x:Name="GdbOutput"
                                  FontFamily="Cascadia Mono, Consolas, Courier New" FontSize="11"
                                  IsReadOnly="True" VerticalScrollBarVisibility="Auto"
@@ -144,7 +147,7 @@
             </TabItem>
 
             <!-- ============================ HISTORY TAB ============================ -->
-            <TabItem Header="Історія" FontSize="14">
+            <TabItem Header="{local:Tr Tab.History}" FontSize="14">
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -156,11 +159,11 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" x:Name="BatchSummary" FontSize="15" Text="Завантаження..." VerticalAlignment="Center" TextWrapping="Wrap" />
+                        <TextBlock Grid.Column="0" x:Name="BatchSummary" FontSize="15" Text="{local:Tr History.Loading}" VerticalAlignment="Center" TextWrapping="Wrap" />
                         <StackPanel Grid.Column="1" Orientation="Horizontal">
-                            <Button x:Name="ExportCsvBatchButton" Content="Експорт CSV (партія)" Padding="12,6" Margin="0,0,6,0" Click="ExportCsvBatch_Click" />
-                            <Button Content="Експорт CSV (все)"    Padding="12,6" Margin="0,0,6,0" Click="ExportCsvAll_Click" />
-                            <Button x:Name="HistoryRefresh" Content="Оновити" Padding="14,6" Click="HistoryRefresh_Click" />
+                            <Button x:Name="ExportCsvBatchButton" Content="{local:Tr History.ExportBatch}" Padding="12,6" Margin="0,0,6,0" Click="ExportCsvBatch_Click" />
+                            <Button Content="{local:Tr History.ExportAll}" Padding="12,6" Margin="0,0,6,0" Click="ExportCsvAll_Click" />
+                            <Button x:Name="HistoryRefresh" Content="{local:Tr Action.Refresh}" Padding="14,6" Click="HistoryRefresh_Click" />
                         </StackPanel>
                     </Grid>
 
@@ -172,24 +175,24 @@
                               AlternatingRowBackground="#F4F4F4"
                               FontSize="13">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Час (UTC)"
+                            <DataGridTextColumn Header="{local:Tr History.TimeUtc}"
                                                 Binding="{Binding TsUtc, StringFormat=yyyy-MM-dd HH:mm:ss}"
                                                 Width="160" />
-                            <DataGridTextColumn Header="Результат" Binding="{Binding Result}" Width="80" />
-                            <DataGridTextColumn Header="Продукт" Binding="{Binding ProductId}" Width="120" />
-                            <DataGridTextColumn Header="Версія" Binding="{Binding FirmwareVersion}" Width="100" />
-                            <DataGridTextColumn Header="Партія" Binding="{Binding BatchId}" Width="120" />
-                            <DataGridTextColumn Header="Оператор" Binding="{Binding Operator}" Width="120" />
-                            <DataGridTextColumn Header="мс" Binding="{Binding DurationMs}" Width="60" />
-                            <DataGridTextColumn Header="Помилка" Binding="{Binding ErrorCode}" Width="170" />
-                            <DataGridTextColumn Header="Ціль (BMP)" Binding="{Binding TargetDetected}" Width="*" />
+                            <DataGridTextColumn Header="{local:Tr History.Result}" Binding="{Binding Result}" Width="90" />
+                            <DataGridTextColumn Header="{local:Tr History.Product}" Binding="{Binding ProductId}" Width="120" />
+                            <DataGridTextColumn Header="{local:Tr History.Version}" Binding="{Binding FirmwareVersion}" Width="100" />
+                            <DataGridTextColumn Header="{local:Tr History.Batch}" Binding="{Binding BatchId}" Width="120" />
+                            <DataGridTextColumn Header="{local:Tr History.Operator}" Binding="{Binding Operator}" Width="120" />
+                            <DataGridTextColumn Header="{local:Tr History.DurationMs}" Binding="{Binding DurationMs}" Width="60" />
+                            <DataGridTextColumn Header="{local:Tr History.Error}" Binding="{Binding ErrorCode}" Width="170" />
+                            <DataGridTextColumn Header="{local:Tr History.Target}" Binding="{Binding TargetDetected}" Width="*" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>
             </TabItem>
 
             <!-- ============================ CATALOG TAB ============================ -->
-            <TabItem Header="Каталог" FontSize="14">
+            <TabItem Header="{local:Tr Tab.Catalog}" FontSize="14">
                 <Grid Margin="16">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -201,8 +204,8 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" x:Name="CatalogHeader" VerticalAlignment="Center" FontSize="15" Text="Каталог не завантажено." />
-                        <Button Grid.Column="1" Content="Перезавантажити" Padding="14,6" Click="CatalogReload_Click" />
+                        <TextBlock Grid.Column="0" x:Name="CatalogHeader" VerticalAlignment="Center" FontSize="15" Text="{local:Tr Catalog.NotLoaded}" />
+                        <Button Grid.Column="1" Content="{local:Tr Catalog.Reload}" Padding="14,6" Click="CatalogReload_Click" />
                     </Grid>
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
@@ -222,7 +225,7 @@
                                                     <ColumnDefinition Width="110" />
                                                     <ColumnDefinition Width="*" />
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0" Text="Ціль:" Foreground="#666" />
+                                                <TextBlock Grid.Column="0" Text="{local:Tr Catalog.Target}" Foreground="#666" />
                                                 <TextBlock Grid.Column="1">
                                                     <Run Text="{Binding Target.BmpMatch}" FontWeight="Bold" />
                                                     <Run Text=" (" />
@@ -234,7 +237,7 @@
                                             </Grid>
 
                                             <TextBlock Margin="0,10,0,4" Foreground="#666">
-                                                <Run Text="Релізи (за замовчуванням: " />
+                                                <Run Text="{local:Tr Catalog.ReleasesDefault}" />
                                                 <Run Text="{Binding DefaultRelease}" FontWeight="Bold" />
                                                 <Run Text="):" />
                                             </TextBlock>
@@ -249,7 +252,7 @@
                                                                     <Run Text="{Binding Version}" FontWeight="Bold" />
                                                                 </TextBlock>
                                                                 <TextBlock FontSize="12" Foreground="#444">
-                                                                    <Run Text="Тип: " />
+                                                                    <Run Text="{local:Tr Catalog.Type}" />
                                                                     <Run Text="{Binding FirmwareKind}" FontWeight="Bold" />
                                                                 </TextBlock>
                                                                 <TextBlock Text="{Binding ElfFilename}" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="#444" />
@@ -258,7 +261,7 @@
                                                                     <Run Text="{Binding ElfSha256}" />
                                                                 </TextBlock>
                                                                 <TextBlock FontSize="11" Foreground="#888">
-                                                                    <Run Text="Дата: " />
+                                                                    <Run Text="{local:Tr Catalog.Date}" />
                                                                     <Run Text="{Binding ReleasedAt, StringFormat=yyyy-MM-dd}" />
                                                                 </TextBlock>
                                                             </StackPanel>
@@ -276,12 +279,12 @@
             </TabItem>
 
             <!-- ============================ SETTINGS TAB ============================ -->
-            <TabItem x:Name="SettingsTab" Header="Налаштування" FontSize="14">
+            <TabItem x:Name="SettingsTab" Header="{local:Tr Tab.Settings}" FontSize="14">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="20" MaxWidth="780" HorizontalAlignment="Left">
 
                         <!-- Catalog -->
-                        <TextBlock Text="Каталог прошивок" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <TextBlock Text="{local:Tr Settings.Section.Catalog}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
@@ -293,17 +296,17 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="catalog.json / sideload:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Settings.CatalogPath}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="0" Grid.Column="1" x:Name="SettingsCatalogPath" Margin="0,4,8,4" />
                             <Button    Grid.Row="0" Grid.Column="2" Content="..." Width="40" Margin="0,4,0,4" Click="PickCatalogPath_Click" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Обовʼязковий підпис:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Settings.SignatureRequired}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <CheckBox  Grid.Row="1" Grid.Column="1" x:Name="SettingsRequireSigned" Margin="0,8,0,4"
-                                       Content="Відмовляти у роботі, якщо catalog.json не підписано Ed25519 (вимикати лише в лабораторії)" />
+                                       Content="{local:Tr Settings.SignatureRequired.Content}" />
                         </Grid>
 
                         <!-- Auto-update catalog from iskra-catalog repo (Sprint 3.5) -->
-                        <TextBlock Text="Каталог GitHub (авто-оновлення)" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <TextBlock Text="{local:Tr Settings.Section.CatalogUpdate}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
@@ -316,29 +319,29 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Авто-оновлення:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Settings.AutoUpdate}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <CheckBox  Grid.Row="0" Grid.Column="1" x:Name="SettingsCatalogAutoUpdate" Margin="0,8,0,4"
-                                       Content="Завантажувати свіжий каталог з iskra-catalog при запуску" />
+                                       Content="{local:Tr Settings.AutoUpdate.Content}" />
 
                             <!-- Sprint 6: catalog source is hard-locked to CatalogTrust.OfficialCatalogSource.
                                  Settings.json values that disagree are clamped back on load. The official source
                                  is displayed read-only here so the operator can see what the station trusts. -->
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Джерело (заблоковано):" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Settings.LockedSource}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBlock Grid.Row="1" Grid.Column="1" x:Name="SettingsCatalogSourceLocked"
                                        VerticalAlignment="Center" Margin="0,4,8,4" FontFamily="Cascadia Mono, Consolas"
                                        Foreground="#444" Text="…"
-                                       ToolTip="Джерело каталогу зашите у застосунок (CatalogTrust.AllowedCatalogSources). Змінюється лише новою збіркою." />
+                                       ToolTip="{local:Tr Settings.LockedSource.Tooltip}" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Поточна версія:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="{local:Tr Settings.CurrentVersion}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBlock Grid.Row="2" Grid.Column="1" x:Name="CatalogCacheStatus"
                                        VerticalAlignment="Center" Margin="0,4,8,4" Text="…" TextWrapping="Wrap" />
                             <Button    Grid.Row="2" Grid.Column="2" x:Name="CatalogUpdateButton"
-                                       Content="Перевірити оновлення" Padding="14,4" Margin="0,4,0,4"
+                                       Content="{local:Tr Action.CheckUpdates}" Padding="14,4" Margin="0,4,0,4"
                                        Click="CatalogUpdate_Click" />
                         </Grid>
 
                         <!-- App update check -->
-                        <TextBlock Text="Оновлення застосунку Iskra" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <TextBlock Text="{local:Tr Settings.Section.AppUpdate}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
@@ -351,31 +354,31 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Поточна версія:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Settings.CurrentVersion}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBlock Grid.Row="0" Grid.Column="1" x:Name="AppUpdateCurrentVersion"
                                        VerticalAlignment="Center" Margin="0,4,8,4" FontFamily="Cascadia Mono, Consolas"
                                        Text="…" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Релізи:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Settings.Releases}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBlock Grid.Row="1" Grid.Column="1" x:Name="AppUpdateSourceLocked"
                                        VerticalAlignment="Center" Margin="0,4,8,4" FontFamily="Cascadia Mono, Consolas"
                                        Foreground="#444" Text="…" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Стан:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="{local:Tr Settings.Status}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBlock Grid.Row="2" Grid.Column="1" x:Name="AppUpdateStatusLabel"
                                        VerticalAlignment="Center" Margin="0,4,8,4" Text="…" TextWrapping="Wrap" />
                             <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="0,4,0,4">
                                 <Button x:Name="AppUpdateCheckButton"
-                                        Content="Перевірити" Padding="14,4" Margin="0,0,8,0"
+                                        Content="{local:Tr Action.Check}" Padding="14,4" Margin="0,0,8,0"
                                         Click="AppUpdateCheck_Click" />
                                 <Button x:Name="AppUpdateOpenButton"
-                                        Content="Відкрити реліз" Padding="14,4"
+                                        Content="{local:Tr Action.OpenRelease}" Padding="14,4"
                                         Click="AppUpdateOpen_Click" />
                             </StackPanel>
                         </Grid>
 
                         <!-- GitHub auth -->
-                        <TextBlock Text="Авторизація GitHub" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <TextBlock Text="{local:Tr Settings.Section.GitHubAuth}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
@@ -387,21 +390,21 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Стан:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Settings.Status}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBlock Grid.Row="0" Grid.Column="1" x:Name="AuthStatusLabel"
                                        VerticalAlignment="Center" Margin="0,4,8,4" Text="…" TextWrapping="Wrap" />
                             <Button    Grid.Row="0" Grid.Column="2" x:Name="AuthRefreshButton"
-                                       Content="Оновити" Padding="10,4" Margin="0,4,0,4"
+                                       Content="{local:Tr Action.Refresh}" Padding="10,4" Margin="0,4,0,4"
                                        Click="AuthRefresh_Click" />
 
                             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,8,0,4">
-                                <Button x:Name="AuthLoginButton"  Content="Увійти" Padding="14,6" Margin="0,0,8,0" Click="AuthLogin_Click" />
-                                <Button x:Name="AuthLogoutButton" Content="Вийти"  Padding="14,6" Click="AuthLogout_Click" />
+                                <Button x:Name="AuthLoginButton"  Content="{local:Tr Action.SignIn}" Padding="14,6" Margin="0,0,8,0" Click="AuthLogin_Click" />
+                                <Button x:Name="AuthLogoutButton" Content="{local:Tr Action.SignOut}" Padding="14,6" Click="AuthLogout_Click" />
                             </StackPanel>
                         </Grid>
 
                         <!-- Debugger / BMP -->
-                        <TextBlock Text="Відлагоджувач (Black Magic Probe)" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <TextBlock Text="{local:Tr Settings.Section.Debugger}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
@@ -416,30 +419,30 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Шлях до arm-none-eabi-gdb:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Settings.GdbPath}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="0" Grid.Column="1" x:Name="SettingsGdbPath" Margin="0,4,8,4"
-                                       ToolTip="Залиште порожнім для авто-визначення" />
+                                       ToolTip="{local:Tr Settings.AutoDetect.Tooltip}" />
                             <Button    Grid.Row="0" Grid.Column="2" Content="..." Width="40" Margin="0,4,0,4" Click="PickGdbPath_Click" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Частота SWD, Hz:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Settings.SwdFrequency}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="1" Grid.Column="1" x:Name="SettingsBmpFreq" Margin="0,4,8,4" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Живлення:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="{local:Tr Settings.Power}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,4,0,4">
-                                <RadioButton x:Name="SettingsPowerExternal" Content="Зовнішнє" GroupName="Power" Margin="0,0,16,0" />
-                                <RadioButton x:Name="SettingsPowerProbe"    Content="Від BMP (tpwr)" GroupName="Power" />
+                                <RadioButton x:Name="SettingsPowerExternal" Content="{local:Tr Settings.Power.External}" GroupName="Power" Margin="0,0,16,0" />
+                                <RadioButton x:Name="SettingsPowerProbe" Content="{local:Tr Settings.Power.Probe}" GroupName="Power" />
                             </StackPanel>
 
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Connect-under-reset:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="{local:Tr Settings.ConnectReset}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <CheckBox  Grid.Row="3" Grid.Column="1" x:Name="SettingsConnectReset" Margin="0,8,0,4"
-                                       Content="Утримувати NRST при підключенні (для чипів зі сплячим SWD)" />
+                                       Content="{local:Tr Settings.ConnectReset.Content}" />
 
-                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Тайм-аут, сек:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="{local:Tr Settings.Timeout}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="4" Grid.Column="1" x:Name="SettingsTimeout" Margin="0,4,8,4" />
                         </Grid>
 
                         <!-- Logging / Station -->
-                        <TextBlock Text="Журнал і станція" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <TextBlock Text="{local:Tr Settings.Section.LogStation}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
@@ -451,17 +454,17 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Файл журналу (.db):" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Settings.LogFile}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="0" Grid.Column="1" x:Name="SettingsDbPath" Margin="0,4,8,4"
-                                       ToolTip="Залиште порожнім для %LOCALAPPDATA%\Iskra\flash_log.db" />
+                                       ToolTip="{local:Tr Settings.LogFile.Tooltip}" />
                             <Button    Grid.Row="0" Grid.Column="2" Content="..." Width="40" Margin="0,4,0,4" Click="PickDbPath_Click" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="ID станції:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Settings.StationId}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="1" Grid.Column="1" x:Name="SettingsStationId" Margin="0,4,8,4" />
                         </Grid>
 
                         <!-- Operator-configurable flash hotkey -->
-                        <TextBlock Text="Інтерфейс оператора" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <TextBlock Text="{local:Tr Settings.Section.OperatorUi}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
@@ -469,23 +472,34 @@
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Гаряча клавіша прошивки:"
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Settings.Language}"
                                        VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="SettingsFlashHotkey"
+                            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="SettingsLanguage"
                                       Margin="0,4,8,4" Padding="6,3"
-                                      ToolTip="Клавіша, що натискає кнопку «Прошити плату». Enter зручно поєднується зі сканером штрих-кодів.">
-                                <ComboBoxItem Content="(вимкнено)" Tag="None" />
+                                      ToolTip="{local:Tr Settings.Language.Tooltip}">
+                                <ComboBoxItem Content="Українська" Tag="uk" />
+                                <ComboBoxItem Content="English" Tag="en" />
+                                <ComboBoxItem Content="Deutsch" Tag="de" />
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Settings.Hotkey}"
+                                       VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <ComboBox Grid.Row="1" Grid.Column="1" x:Name="SettingsFlashHotkey"
+                                      Margin="0,4,8,4" Padding="6,3"
+                                      ToolTip="{local:Tr Settings.Hotkey.Tooltip}">
+                                <ComboBoxItem Content="{local:Tr Hotkey.Disabled}" Tag="None" />
                                 <ComboBoxItem Content="Enter"      Tag="Enter" />
-                                <ComboBoxItem Content="Пробіл"     Tag="Space" />
+                                <ComboBoxItem Content="{local:Tr Hotkey.Space}" Tag="Space" />
                                 <ComboBoxItem Content="F2"         Tag="F2" />
                                 <ComboBoxItem Content="F5"         Tag="F5" />
                             </ComboBox>
                         </Grid>
 
                         <!-- Sprint 5: cloud log mirror -->
-                        <TextBlock Text="Хмарний журнал (iskra-logs)" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
+                        <TextBlock Text="{local:Tr Settings.Section.CloudLog}" FontSize="18" FontWeight="Bold" Margin="0,0,0,8" />
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="180" />
@@ -502,40 +516,40 @@
                             </Grid.RowDefinitions>
 
                             <CheckBox  Grid.Row="0" Grid.Column="1" x:Name="SettingsLogShippingEnabled" Margin="0,4,0,4"
-                                       Content="Авто-вивантажувати журнал у GitHub" />
+                                       Content="{local:Tr Settings.Cloud.AutoUpload}" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Інтервал (хв):" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Settings.Cloud.Interval}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="1" Grid.Column="1" x:Name="SettingsLogShipInterval" Margin="0,4,8,4"
-                                       ToolTip="Як часто фонова черга підштовхує несинхронізовані рядки" />
+                                       ToolTip="{local:Tr Settings.Cloud.Interval.Tooltip}" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Приватний ключ (.pem):" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="{local:Tr Settings.Cloud.PrivateKey}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBox   Grid.Row="2" Grid.Column="1" x:Name="SettingsLogShipperKey" Margin="0,4,8,4"
-                                       ToolTip="Файл приватного ключа GitHub App (за замовчанням %PROGRAMDATA%\Iskra\station-app.pem)" />
+                                       ToolTip="{local:Tr Settings.Cloud.PrivateKey.Tooltip}" />
                             <Button    Grid.Row="2" Grid.Column="2" Content="..." Width="40" Margin="0,4,0,4" Click="PickLogKeyPath_Click" />
 
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Партії:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="{local:Tr Settings.Batches}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <CheckBox Grid.Row="3" Grid.Column="1" x:Name="SettingsBatchesEnabled" Margin="0,6,0,4"
-                                      Content="Увімкнути поле партії та локальне блокування прошивки"
-                                      ToolTip="За замовчуванням вимкнено. Увімкніть лише коли потрібно групувати та блокувати прошивку за ID партії." />
+                                      Content="{local:Tr Settings.Batches.Content}"
+                                      ToolTip="{local:Tr Settings.Batches.Tooltip}" />
 
-                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Репозиторій:" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="{local:Tr Settings.Repository}" VerticalAlignment="Center" Margin="0,4,8,4" />
                             <TextBlock Grid.Row="4" Grid.Column="1" x:Name="SettingsLogsSourceLocked"
                                        FontStyle="Italic" Foreground="#555" Margin="0,4,8,4" VerticalAlignment="Center" />
 
                             <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,8,0,0">
-                                <Button x:Name="LogShipNowButton" Content="Вивантажити зараз"
+                                <Button x:Name="LogShipNowButton" Content="{local:Tr Action.UploadNow}"
                                         Padding="14,6" Margin="0,0,8,0" Click="LogShipNow_Click" />
                                 <TextBlock x:Name="LogShipStatus" VerticalAlignment="Center" Margin="4,0,0,0" />
                             </StackPanel>
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                            <Button Content="Зберегти"      Padding="20,8" Margin="0,0,8,0" FontWeight="Bold" Background="#0078D7" Foreground="White" BorderThickness="0" Click="SettingsSave_Click" />
-                            <Button Content="Скинути до замовчень" Padding="14,8" Margin="0,0,8,0" Click="SettingsReset_Click" />
+                            <Button Content="{local:Tr Action.Save}" Padding="20,8" Margin="0,0,8,0" FontWeight="Bold" Background="#0078D7" Foreground="White" BorderThickness="0" Click="SettingsSave_Click" />
+                            <Button Content="{local:Tr Action.ResetDefaults}" Padding="14,8" Margin="0,0,8,0" Click="SettingsReset_Click" />
                             <TextBlock x:Name="SettingsStatus" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#1B8A1B" />
                         </StackPanel>
                         <TextBlock Margin="0,8,0,0" Foreground="#666" FontSize="12" TextWrapping="Wrap"
-                                   Text="Зміни також зберігаються автоматично при переході з цієї вкладки та перед закриттям Iskra." />
+                                   Text="{local:Tr Settings.AutoSave.Note}" />
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

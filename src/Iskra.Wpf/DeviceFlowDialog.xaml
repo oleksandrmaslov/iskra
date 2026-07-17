@@ -1,8 +1,9 @@
 <Window x:Class="Iskra.Wpf.DeviceFlowDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="GitHub: вхід"
-        Height="380" Width="520"
+        xmlns:local="clr-namespace:Iskra.Wpf"
+        Title="{local:Tr Device.Title}"
+        Height="420" Width="620"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
@@ -18,27 +19,27 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="Авторизація GitHub Device Flow"
+        <TextBlock Grid.Row="0" Text="{local:Tr Device.Heading}"
                    FontSize="18" FontWeight="Bold" Margin="0,0,0,14" />
 
-        <TextBlock Grid.Row="1" Text="1. Відкрийте у браузері:" Margin="0,0,0,4" />
+        <TextBlock Grid.Row="1" Text="{local:Tr Device.Step1}" Margin="0,0,0,4" />
         <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,12">
             <TextBlock x:Name="VerificationUrl" Text="..." FontSize="14"
                        Foreground="#0078D7" FontFamily="Cascadia Mono, Consolas"
                        VerticalAlignment="Center" Margin="0,0,12,0" />
-            <Button x:Name="OpenBrowserButton" Content="Відкрити" Padding="10,4"
+            <Button x:Name="OpenBrowserButton" Content="{local:Tr Action.Open}" Padding="10,4"
                     Click="OpenBrowser_Click" />
         </StackPanel>
 
         <StackPanel Grid.Row="3" Margin="0,0,0,12">
-            <TextBlock Text="2. Введіть код:" Margin="0,0,0,4" />
+            <TextBlock Text="{local:Tr Device.Step2}" Margin="0,0,0,4" />
             <Border Background="White" BorderBrush="#DDD" BorderThickness="1"
                     CornerRadius="4" Padding="16,10">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock x:Name="UserCode" Text="…" FontSize="32"
                                FontFamily="Cascadia Mono, Consolas" FontWeight="Bold"
                                VerticalAlignment="Center" />
-                    <Button Content="Копіювати код" Padding="10,4" Margin="16,0,0,0"
+                    <Button Content="{local:Tr Device.CopyCode}" Padding="10,4" Margin="16,0,0,0"
                             VerticalAlignment="Center" Click="CopyCode_Click" />
                 </StackPanel>
             </Border>
@@ -46,11 +47,11 @@
 
         <Border Grid.Row="4" VerticalAlignment="Center" Background="#F4F4F4"
                 CornerRadius="4" Padding="14,10">
-            <TextBlock x:Name="StatusText" Text="Очікування авторизації…"
+            <TextBlock x:Name="StatusText" Text="{local:Tr Device.Waiting}"
                        FontSize="13" TextWrapping="Wrap" />
         </Border>
 
-        <Button Grid.Row="5" Content="Скасувати" Padding="20,8"
+        <Button Grid.Row="5" Content="{local:Tr Action.Cancel}" Padding="20,8"
                 HorizontalAlignment="Right" Margin="0,16,0,0"
                 Click="Cancel_Click" />
     </Grid>

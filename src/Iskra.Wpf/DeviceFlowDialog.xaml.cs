@@ -45,8 +45,8 @@ public partial class DeviceFlowDialog : Window
         {
             ErrorMessage = ex.ErrorCode switch
             {
-                "access_denied" => "Авторизацію відхилено в браузері.",
-                "expired_token" => "Код пристрою застарів. Спробуйте ще раз.",
+                "access_denied" => UiText.Get("Device.AccessDenied"),
+                "expired_token" => UiText.Get("Device.CodeExpired"),
                 _               => ex.Message,
             };
             StatusText.Text = $"✗ {ErrorMessage}";
@@ -56,7 +56,7 @@ public partial class DeviceFlowDialog : Window
         catch (Exception ex)
         {
             ErrorMessage = ex.Message;
-            StatusText.Text = $"✗ Помилка: {ex.Message}";
+            StatusText.Text = UiText.Get("Device.Error", ex.Message);
             await Task.Delay(2000, CancellationToken.None);
             DialogResult = false;
         }
@@ -74,7 +74,7 @@ public partial class DeviceFlowDialog : Window
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Не вдалося відкрити браузер: {ex.Message}";
+            StatusText.Text = UiText.Get("Device.BrowserFailed", ex.Message);
         }
     }
 
@@ -83,11 +83,11 @@ public partial class DeviceFlowDialog : Window
         try
         {
             Clipboard.SetText(_code.UserCode);
-            StatusText.Text = "✓ Код скопійовано. Очікування авторизації…";
+            StatusText.Text = UiText.Get("Device.CodeCopied");
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Помилка копіювання: {ex.Message}";
+            StatusText.Text = UiText.Get("Device.CopyFailed", ex.Message);
         }
     }
 

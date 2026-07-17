@@ -1,8 +1,18 @@
 using System.Net.Http;
 using System.Text;
+using Iskra.Application.Localization;
 using Iskra.Core;
 
 Console.OutputEncoding = Encoding.UTF8;
+
+var language = CliLanguage.Resolve(args, AppSettingsStore.Load().LanguageCode);
+System.Globalization.CultureInfo.CurrentUICulture = IskraLanguages.CultureFor(language.LanguageCode);
+if (!language.Ok)
+{
+    Console.Error.WriteLine(CliText.Get("Language.Invalid"));
+    return 2;
+}
+args = language.Args;
 
 if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
 {
@@ -44,8 +54,7 @@ bool allowManualFlash = args.Contains("--allow-manual-flash");
 bool labMode = CatalogTrust.IsUnsignedLabModeEnabled();
 if ((allowUnsigned || allowManualFlash) && !labMode)
 {
-    Console.Error.WriteLine(
-        $"Помилка: лабораторний режим заблоковано. Лише на лабораторній станції задайте {CatalogTrust.UnsignedLabModeEnvironmentVariable}=1.");
+    Console.Error.WriteLine(CliText.Get("Lab.Locked", CatalogTrust.UnsignedLabModeEnvironmentVariable));
     return 2;
 }
 bool requireSigned = !allowUnsigned;
@@ -53,10 +62,7 @@ var hasCatalog = args.Contains("--catalog");
 var hasSideload = args.Contains("--sideload-dir");
 if (!hasCatalog && !hasSideload && !allowManualFlash)
 {
-    Console.Error.WriteLine(
-        "Помилка: операторський режим вимагає підписаний --catalog. " +
-        "Для ручної лабораторної прошивки потрібні --allow-manual-flash і " +
-        $"{CatalogTrust.UnsignedLabModeEnvironmentVariable}=1.");
+    Console.Error.WriteLine(CliText.Get("Catalog.Required", CatalogTrust.UnsignedLabModeEnvironmentVariable));
     return 2;
 }
 args = args.Where(a => a is not "--require-signed-catalog"
@@ -65,7 +71,7 @@ args = args.Where(a => a is not "--require-signed-catalog"
 
 if (hasSideload && requireSigned)
 {
-    Console.Error.WriteLine("Помилка: sideload-каталог не підписано. Для лабораторної перевірки явно додайте --allow-unsigned-catalog.");
+    Console.Error.WriteLine(CliText.Get("Catalog.SideloadUnsigned"));
     return 2;
 }
 
@@ -77,22 +83,22 @@ if (catIdx >= 0 && catIdx + 1 < args.Length)
     switch (trust)
     {
         case CatalogTrustResult.Verified:
-            Console.WriteLine("Підпис каталогу: ✓ (Ed25519)");
+            Console.WriteLine(CliText.Get("Catalog.SignatureVerified"));
             break;
         case CatalogTrustResult.UnsignedAllowed:
-            Console.WriteLine("Підпис каталогу: відсутній (лабораторний режим --allow-unsigned-catalog)");
+            Console.WriteLine(CliText.Get("Catalog.SignatureMissingLab"));
             break;
         case CatalogTrustResult.UnsignedRejected:
-            Console.Error.WriteLine("Помилка: каталог не підписано; безпечний режим вимагає Ed25519-підпис.");
+            Console.Error.WriteLine(CliText.Get("Catalog.UnsignedRejected"));
             return 2;
         case CatalogTrustResult.BadSignature:
-            Console.Error.WriteLine("Помилка: підпис каталогу не співпадає з ключем у застосунку.");
+            Console.Error.WriteLine(CliText.Get("Catalog.BadSignature"));
             return 2;
         case CatalogTrustResult.NoPublicKeyConfigured:
-            Console.Error.WriteLine("Помилка: каталог підписано, але у застосунку немає публічного ключа.");
+            Console.Error.WriteLine(CliText.Get("Catalog.NoPublicKey"));
             return 2;
         case CatalogTrustResult.IoError:
-            Console.Error.WriteLine("Помилка: не вдалося прочитати файл підпису каталогу.");
+            Console.Error.WriteLine(CliText.Get("Catalog.SignatureReadFailed"));
             return 2;
     }
 }
@@ -100,7 +106,7 @@ if (catIdx >= 0 && catIdx + 1 < args.Length)
 var resolution = CatalogResolver.Resolve(args);
 if (!resolution.Ok)
 {
-    Console.Error.WriteLine($"Помилка каталогу: {resolution.Error}");
+    Console.Error.WriteLine(CliText.Get("Catalog.Error", resolution.Error));
     return 2;
 }
 args = resolution.ResolvedArgs!;
@@ -108,8 +114,8 @@ if (resolution.Product is not null && resolution.Release is not null)
 {
     var p = resolution.Product;
     var r = resolution.Release;
-    Console.WriteLine($"Каталог: {p.ProductId} → v{r.Version} "
-        + $"({p.Target.BmpMatch}, {p.Target.FlashKb} KB, {FirmwarePreflight.DisplayName(r.FirmwareKind)})");
+    Console.WriteLine(CliText.Get("Catalog.Resolved", p.ProductId, r.Version,
+        p.Target.BmpMatch, p.Target.FlashKb, FirmwarePreflight.DisplayName(r.FirmwareKind)));
 }
 
 // Remote release + no explicit --elf → download from GitHub release asset
@@ -122,37 +128,37 @@ if (resolution.Release?.IsRemote == true && !args.Contains("--elf"))
     try
     {
         var localPath = await FetchRemoteFirmwareAsync(src, expectedSha);
-        Console.WriteLine($"  ✓ кеш: {localPath}");
+        Console.WriteLine(CliText.Get("Firmware.CacheHit", localPath));
         args = args.Concat(new[] { "--elf", localPath }).ToArray();
     }
     catch (NotSignedInException)
     {
-        Console.Error.WriteLine("Помилка: потрібна авторизація GitHub. Виконайте: Iskra.Cli --login");
+        Console.Error.WriteLine(CliText.Get("Auth.Required"));
         return 5;
     }
     catch (RefreshTokenExpiredException)
     {
-        Console.Error.WriteLine("Помилка: сесія GitHub застаріла (>6 міс без оновлення). Виконайте: Iskra.Cli --login");
+        Console.Error.WriteLine(CliText.Get("Auth.Expired"));
         return 5;
     }
     catch (GitHubAssetNotFoundException ex)
     {
-        Console.Error.WriteLine($"Помилка: реліз GitHub не містить файл — {ex.Message}");
+        Console.Error.WriteLine(CliText.Get("Firmware.AssetMissing", ex.Message));
         return 5;
     }
     catch (GitHubApiException ex)
     {
-        Console.Error.WriteLine($"Помилка GitHub API ({ex.StatusCode}): {ex.Message}");
+        Console.Error.WriteLine(CliText.Get("GitHub.ApiError", ex.StatusCode, ex.Message));
         return 5;
     }
     catch (FirmwareCacheException ex)
     {
-        Console.Error.WriteLine($"Помилка завантаження прошивки: {ex.Message}");
+        Console.Error.WriteLine(CliText.Get("Firmware.DownloadError", ex.Message));
         return 5;
     }
     catch (PlatformNotSupportedException ex)
     {
-        Console.Error.WriteLine($"Помилка: {ex.Message}");
+        Console.Error.WriteLine(CliText.Get("Common.ErrorDetails", ex.Message));
         return 5;
     }
 }
@@ -169,17 +175,17 @@ if (!args.Contains("--port"))
     switch (probes.Count)
     {
         case 0:
-            Console.Error.WriteLine("Помилка: Black Magic Probe не знайдено.");
-            Console.Error.WriteLine("Підключіть програматор або вкажіть --port COMxx вручну.");
+            Console.Error.WriteLine(CliText.Get("Probe.NotFound"));
+            Console.Error.WriteLine(CliText.Get("Probe.ConnectHint"));
             return 3;
         case 1:
             selectedProbe = probes[0];
-            Console.WriteLine($"Виявлено програматор: {probes[0].PortName}"
-                + (probes[0].FriendlyName is not null ? $" ({probes[0].FriendlyName})" : ""));
+            Console.WriteLine(CliText.Get("Probe.Detected", probes[0].PortName,
+                probes[0].FriendlyName is not null ? $" ({probes[0].FriendlyName})" : ""));
             args = args.Concat(new[] { "--port", probes[0].PortName }).ToArray();
             break;
         default:
-            Console.Error.WriteLine($"Знайдено {probes.Count} програматорів. Вкажіть --port явно:");
+            Console.Error.WriteLine(CliText.Get("Probe.Multiple", probes.Count));
             foreach (var p in probes)
                 Console.Error.WriteLine($"  {p.PortName}  {p.FriendlyName}");
             return 2;
@@ -200,13 +206,13 @@ var firmwareKindName = FirmwarePreflight.DisplayName(opts.FirmwareKind);
 switch (FirmwarePreflight.Check(opts.ElfPath, opts.FirmwareKind))
 {
     case FirmwarePreflight.CheckResult.NotFound:
-        Console.Error.WriteLine($"Помилка: файл прошивки ({firmwareKindName}) не знайдено: {opts.ElfPath}");
+        Console.Error.WriteLine(CliText.Get("Firmware.NotFound", firmwareKindName, opts.ElfPath));
         return 4;
     case FirmwarePreflight.CheckResult.InvalidFormat:
-        Console.Error.WriteLine($"Помилка: файл не є коректним {firmwareKindName}: {opts.ElfPath}");
+        Console.Error.WriteLine(CliText.Get("Firmware.BadFormat", firmwareKindName, opts.ElfPath));
         return 4;
     case FirmwarePreflight.CheckResult.IoError:
-        Console.Error.WriteLine($"Помилка: не вдалося прочитати файл прошивки: {opts.ElfPath}");
+        Console.Error.WriteLine(CliText.Get("Firmware.ReadFailed", opts.ElfPath));
         return 4;
 }
 
@@ -221,27 +227,27 @@ if (hashWasRequired)
 var gdbExe = GdbDiscovery.Find(opts.GdbPath);
 if (gdbExe is null)
 {
-    Console.Error.WriteLine("Помилка: arm-none-eabi-gdb не знайдено.");
-    Console.Error.WriteLine("Вкажіть шлях через --gdb-path або повторно запустіть інсталятор Iskra.");
+    Console.Error.WriteLine(CliText.Get("Gdb.NotFound"));
+    Console.Error.WriteLine(CliText.Get("Gdb.InstallHint"));
     return 3;
 }
 
 if (dryRun)
 {
-    Console.WriteLine("=== DRY RUN — gdb не буде запущено ===");
+    Console.WriteLine(CliText.Get("DryRun.Header"));
     if (hashWasRequired)
     {
         Console.WriteLine($"{firmwareKindName} SHA-256: {computedSha}");
-        Console.WriteLine($"Каталог SHA-256: {opts.FirmwareSha256.ToLowerInvariant()}");
+        Console.WriteLine(CliText.Get("DryRun.CatalogSha", opts.FirmwareSha256.ToLowerInvariant()));
         Console.WriteLine(hashVerified
-            ? "Перевірка цілісності: ✓ співпадає"
-            : "Перевірка цілісності: ✗ НЕ СПІВПАДАЄ — у реальному запуску буде відмова");
+            ? CliText.Get("DryRun.HashMatch")
+            : CliText.Get("DryRun.HashMismatch"));
     }
     else
     {
-        Console.WriteLine("Перевірка цілісності: пропущена (немає очікуваного SHA-256)");
+        Console.WriteLine(CliText.Get("DryRun.HashSkipped"));
     }
-    Console.WriteLine($"Виконуваний файл: {gdbExe}");
+    Console.WriteLine(CliText.Get("DryRun.Executable", gdbExe));
     var processArgs = GdbCommandBuilder.BuildProcessArgs(
         opts.Port, opts.Power, opts.BmpFrequencyHz, opts.ConnectUnderReset, opts.ElfPath);
     foreach (var a in processArgs)
@@ -261,9 +267,9 @@ if (hashWasRequired && !hashVerified)
 
     Console.WriteLine();
     Console.WriteLine("============================================");
-    Console.WriteLine($"  ✗ ПОМИЛКА: {hashFail.ErrorCode}");
-    Console.WriteLine($"  {ErrorHints.For(hashFail.ErrorCode)}");
-    Console.WriteLine($"  Деталі: {hashFail.ErrorMessage}");
+    Console.WriteLine(CliText.Get("Result.Error", hashFail.ErrorCode));
+    Console.WriteLine($"  {OperatorText.ErrorHint(hashFail.ErrorCode)}");
+    Console.WriteLine(CliText.Get("Result.Details", hashFail.ErrorMessage));
     Console.WriteLine("============================================");
 
     var dbPath0 = opts.DbPath ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db");
@@ -294,7 +300,7 @@ if (hashWasRequired && !hashVerified)
     }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"  УВАГА: не вдалося записати в журнал: {ex.Message}");
+        Console.Error.WriteLine(CliText.Get("Result.LogWarning", ex.Message));
     }
     return 1;
 }
@@ -319,8 +325,8 @@ try
         var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion} "
             + $"sha256={ShortSha(locked.FirmwareSha256)}, attempted "
             + $"{opts.Product} v{opts.FirmwareVersion} sha256={ShortSha(computedSha)}";
-        Console.Error.WriteLine($"Помилка: E_BATCH_LOCKED — {msg}");
-        Console.Error.WriteLine(ErrorHints.For("E_BATCH_LOCKED"));
+        Console.Error.WriteLine(CliText.Get("Result.ErrorRaw", "E_BATCH_LOCKED", msg));
+        Console.Error.WriteLine(OperatorText.ErrorHint("E_BATCH_LOCKED"));
         lockStore.Append(new FlashAttemptRecord(
             TsUtc:           DateTime.UtcNow,
             Operator:        opts.Operator,
@@ -347,14 +353,14 @@ try
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"Помилка: E_BATCH_LOCK_CHECK_FAILED — {ex.Message}");
-    Console.Error.WriteLine(ErrorHints.For("E_BATCH_LOCK_CHECK_FAILED"));
+    Console.Error.WriteLine(CliText.Get("Result.ErrorRaw", "E_BATCH_LOCK_CHECK_FAILED", ex.Message));
+    Console.Error.WriteLine(OperatorText.ErrorHint("E_BATCH_LOCK_CHECK_FAILED"));
     return 1;
 }
 
-Console.WriteLine($"Прошивка: {opts.Product} v{opts.FirmwareVersion} → {opts.TargetBmpMatch} ({opts.Port})");
-Console.WriteLine($"Оператор: {opts.Operator} | Партія: {opts.Batch} | Станція: {opts.StationId}");
-Console.WriteLine("Виконується...");
+Console.WriteLine(CliText.Get("Flash.Summary", opts.Product, opts.FirmwareVersion, opts.TargetBmpMatch, opts.Port));
+Console.WriteLine(CliText.Get("Flash.Operator", opts.Operator, opts.Batch, opts.StationId));
+Console.WriteLine(CliText.Get("Flash.Running"));
 Console.WriteLine();
 
 var gdb = new GdbProcess(gdbExe);
@@ -372,17 +378,17 @@ Console.WriteLine();
 if (outcome.IsPass)
 {
     Console.WriteLine("============================================");
-    Console.WriteLine($"  ✓ ПРОШИВКА УСПІШНА  ({outcome.Duration.TotalMilliseconds:F0} мс)");
-    Console.WriteLine($"  Ціль: {outcome.DetectedTarget}");
+    Console.WriteLine(CliText.Get("Flash.Success", outcome.Duration.TotalMilliseconds));
+    Console.WriteLine(CliText.Get("Flash.Target", outcome.DetectedTarget));
     Console.WriteLine("============================================");
 }
 else
 {
     Console.WriteLine("============================================");
-    Console.WriteLine($"  ✗ ПОМИЛКА: {outcome.ErrorCode}");
-    Console.WriteLine($"  {ErrorHints.For(outcome.ErrorCode)}");
+    Console.WriteLine(CliText.Get("Result.Error", outcome.ErrorCode));
+    Console.WriteLine($"  {OperatorText.ErrorHint(outcome.ErrorCode)}");
     if (!string.IsNullOrEmpty(outcome.ErrorMessage))
-        Console.WriteLine($"  Деталі: {outcome.ErrorMessage}");
+        Console.WriteLine(CliText.Get("Result.Details", outcome.ErrorMessage));
     Console.WriteLine("============================================");
 }
 
@@ -410,11 +416,11 @@ try
         ErrorMessage:    outcome.ErrorMessage,
         DurationMs:      (long)outcome.Duration.TotalMilliseconds,
         GdbTail:         outcome.GdbTail));
-    Console.WriteLine($"  (записано в журнал: id={rowId}, {dbPath})");
+    Console.WriteLine(CliText.Get("Flash.Logged", rowId, dbPath));
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"  УВАГА: не вдалося записати в журнал: {ex.Message}");
+    Console.Error.WriteLine(CliText.Get("Result.LogWarning", ex.Message));
 }
 
 return outcome.IsPass ? 0 : 1;
@@ -603,66 +609,64 @@ static async Task<int> LoginAsync()
 {
     if (!OperatingSystem.IsWindows())
     {
-        Console.Error.WriteLine(
-            "Помилка: захищене сховище GitHub-токенів для цієї ОС ще не реалізовано. " +
-            "Не використовуйте незашифрований файл токенів.");
+        Console.Error.WriteLine(CliText.Get("Auth.StoreUnsupported"));
         return 5;
     }
 
     if (!GitHubAppConfig.IsConfigured)
     {
-        Console.Error.WriteLine("Помилка: GitHub App Client ID не налаштовано (зверніться до розробника).");
+        Console.Error.WriteLine(CliText.Get("Auth.ClientMissing"));
         return 2;
     }
 
     using var http = new HttpClient();
     var flow = new GitHubDeviceFlow(http, GitHubAppConfig.ClientId);
 
-    Console.WriteLine("Запит коду пристрою GitHub...");
+    Console.WriteLine(CliText.Get("Auth.RequestCode"));
     DeviceCodeResponse code;
     try { code = await flow.RequestDeviceCodeAsync(); }
-    catch (Exception ex) { Console.Error.WriteLine($"Помилка: {ex.Message}"); return 5; }
+    catch (Exception ex) { Console.Error.WriteLine(CliText.Get("Common.ErrorDetails", ex.Message)); return 5; }
 
     Console.WriteLine();
     Console.WriteLine("============================================");
-    Console.WriteLine($"  Відкрийте у браузері: {code.VerificationUri}");
-    Console.WriteLine($"  Введіть код:          {code.UserCode}");
+    Console.WriteLine(CliText.Get("Auth.OpenBrowser", code.VerificationUri));
+    Console.WriteLine(CliText.Get("Auth.EnterCode", code.UserCode));
     Console.WriteLine("============================================");
     Console.WriteLine();
-    Console.WriteLine($"Очікування авторизації... (таймаут ~{code.ExpiresIn / 60} хв, Ctrl+C для скасування)");
+    Console.WriteLine(CliText.Get("Auth.Waiting", code.ExpiresIn / 60));
 
     TokenResponse token;
     try { token = await flow.PollForTokenAsync(code); }
     catch (GitHubAuthException ex) when (ex.ErrorCode == "access_denied")
     {
-        Console.Error.WriteLine("Авторизацію відхилено користувачем."); return 5;
+        Console.Error.WriteLine(CliText.Get("Auth.Denied")); return 5;
     }
     catch (GitHubAuthException ex) when (ex.ErrorCode == "expired_token")
     {
-        Console.Error.WriteLine("Код пристрою застарів. Запустіть --login знову."); return 5;
+        Console.Error.WriteLine(CliText.Get("Auth.CodeExpired")); return 5;
     }
     catch (GitHubAuthException ex)
     {
-        Console.Error.WriteLine($"Помилка GitHub: {ex.Message}"); return 5;
+        Console.Error.WriteLine(CliText.Get("Auth.GitHubError", ex.Message)); return 5;
     }
     catch (OperationCanceledException)
     {
-        Console.Error.WriteLine("Скасовано."); return 5;
+        Console.Error.WriteLine(CliText.Get("Common.Cancelled")); return 5;
     }
 
     var store = new TokenStore();
     try { store.Save(StoredTokens.From(token, DateTime.UtcNow)); }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"Помилка збереження токенів у {store.Path}: {ex.Message}");
-        Console.Error.WriteLine("Запустіть від імені адміністратора, якщо проблема в правах доступу до %PROGRAMDATA%.");
+        Console.Error.WriteLine(CliText.Get("Auth.SaveFailed", store.Path, ex.Message));
+        Console.Error.WriteLine(CliText.Get("Auth.AdminHint"));
         return 5;
     }
 
     Console.WriteLine();
-    Console.WriteLine($"✓ Авторизовано. Токени збережено: {store.Path}");
-    Console.WriteLine($"  Access token дійсний ~{token.ExpiresIn / 3600} год.");
-    Console.WriteLine($"  Refresh token дійсний ~{token.RefreshTokenExpiresIn / 86400} дн.");
+    Console.WriteLine(CliText.Get("Auth.Success", store.Path));
+    Console.WriteLine(CliText.Get("Auth.AccessHours", token.ExpiresIn / 3600));
+    Console.WriteLine(CliText.Get("Auth.RefreshDays", token.RefreshTokenExpiresIn / 86400));
     return 0;
 }
 
@@ -670,23 +674,23 @@ static int Logout()
 {
     if (!OperatingSystem.IsWindows())
     {
-        Console.Error.WriteLine("GitHub-токени на цій ОС не зберігаються; захищене сховище ще не реалізовано.");
+        Console.Error.WriteLine(CliText.Get("Auth.StoreUnavailable"));
         return 5;
     }
 
     var store = new TokenStore();
     if (!store.Exists())
     {
-        Console.WriteLine("Токени не знайдено — вже не авторизовано.");
+        Console.WriteLine(CliText.Get("Auth.AlreadyLoggedOut"));
         return 0;
     }
     try { store.Delete(); }
     catch (Exception ex)
     {
-        Console.Error.WriteLine($"Помилка видалення {store.Path}: {ex.Message}");
+        Console.Error.WriteLine(CliText.Get("Auth.DeleteFailed", store.Path, ex.Message));
         return 5;
     }
-    Console.WriteLine($"Токени видалено: {store.Path}");
+    Console.WriteLine(CliText.Get("Auth.Deleted", store.Path));
     return 0;
 }
 
@@ -694,7 +698,7 @@ static async Task<int> WhoamiAsync()
 {
     if (!OperatingSystem.IsWindows())
     {
-        Console.Error.WriteLine("Захищене сховище GitHub-токенів для цієї ОС ще не реалізовано.");
+        Console.Error.WriteLine(CliText.Get("Auth.StoreUnavailable"));
         return 5;
     }
 
@@ -703,25 +707,25 @@ static async Task<int> WhoamiAsync()
     try { stored = store.Load(); }
     catch (TokenStoreException ex)
     {
-        Console.Error.WriteLine($"Файл токенів пошкоджено: {ex.Message}");
-        Console.Error.WriteLine("Видаліть і авторизуйтеся знову: Iskra.Cli --logout && Iskra.Cli --login");
+        Console.Error.WriteLine(CliText.Get("Auth.StoreCorrupt", ex.Message));
+        Console.Error.WriteLine(CliText.Get("Auth.Reauthenticate"));
         return 5;
     }
 
     if (stored is null)
     {
-        Console.WriteLine("Не авторизовано. Виконайте: Iskra.Cli --login");
+        Console.WriteLine(CliText.Get("Auth.NotSignedIn"));
         return 5;
     }
 
     var now = DateTime.UtcNow;
-    Console.WriteLine($"Файл:              {store.Path}");
-    Console.WriteLine($"Access token до:   {stored.AccessTokenExpiresAtUtc:yyyy-MM-dd HH:mm} UTC ({FormatFutureDuration(stored.AccessTokenExpiresAtUtc - now)})");
-    Console.WriteLine($"Refresh token до:  {stored.RefreshTokenExpiresAtUtc:yyyy-MM-dd HH:mm} UTC ({FormatFutureDuration(stored.RefreshTokenExpiresAtUtc - now)})");
+    Console.WriteLine(CliText.Get("Auth.File", store.Path));
+    Console.WriteLine(CliText.Get("Auth.AccessUntil", stored.AccessTokenExpiresAtUtc, FormatFutureDuration(stored.AccessTokenExpiresAtUtc - now)));
+    Console.WriteLine(CliText.Get("Auth.RefreshUntil", stored.RefreshTokenExpiresAtUtc, FormatFutureDuration(stored.RefreshTokenExpiresAtUtc - now)));
 
     if (!GitHubAppConfig.IsConfigured)
     {
-        Console.WriteLine("(пропускаю перевірку через GitHub — Client ID не налаштовано)");
+        Console.WriteLine(CliText.Get("Auth.CheckSkipped"));
         return 0;
     }
 
@@ -731,9 +735,9 @@ static async Task<int> WhoamiAsync()
     var provider = new AccessTokenProvider(store, flow);
     string accessToken;
     try { accessToken = await provider.GetFreshAccessTokenAsync(); }
-    catch (NotSignedInException)        { Console.Error.WriteLine("(не авторизовано)");                return 5; }
-    catch (RefreshTokenExpiredException) { Console.Error.WriteLine("Refresh token застарів — --login"); return 5; }
-    catch (Exception ex)                 { Console.Error.WriteLine($"Не вдалося оновити токен: {ex.Message}"); return 5; }
+    catch (NotSignedInException)        { Console.Error.WriteLine(CliText.Get("Auth.ParentheticalNotSignedIn")); return 5; }
+    catch (RefreshTokenExpiredException) { Console.Error.WriteLine(CliText.Get("Auth.RefreshExpired")); return 5; }
+    catch (Exception ex)                 { Console.Error.WriteLine(CliText.Get("Auth.RefreshFailed", ex.Message)); return 5; }
 
     using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
     req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
@@ -749,7 +753,7 @@ static async Task<int> WhoamiAsync()
     var body = await resp.Content.ReadAsStringAsync();
     using var doc = System.Text.Json.JsonDocument.Parse(body);
     if (doc.RootElement.TryGetProperty("login", out var login))
-        Console.WriteLine($"GitHub користувач: {login.GetString()}");
+        Console.WriteLine(CliText.Get("Auth.GitHubUser", login.GetString()));
     return 0;
 }
 
@@ -758,22 +762,22 @@ static async Task<int> ShipLogsNowAsync(string[] args)
     var settings = AppSettingsStore.Load();
     if (!settings.LogShippingEnabled)
     {
-        Console.WriteLine("Вивантаження журналу вимкнено в налаштуваннях (LogShippingEnabled = false).");
+        Console.WriteLine(CliText.Get("Logs.Disabled"));
         return 0;
     }
 
     if (!GitHubAppConfig.IsLogShipperConfigured)
     {
-        Console.Error.WriteLine("Помилка: GitHub App для журналу не налаштовано (зверніться до розробника).");
-        Console.Error.WriteLine("(LogShipperAppId / LogShipperInstallationId порожні у GitHubAppConfig)");
+        Console.Error.WriteLine(CliText.Get("Logs.AppMissing"));
+        Console.Error.WriteLine(CliText.Get("Logs.ConfigMissing"));
         return 5;
     }
 
     var keyPath = ArgValue(args, "--key") ?? settings.LogShipperPrivateKeyPath;
     if (!File.Exists(keyPath))
     {
-        Console.Error.WriteLine($"Помилка: приватний ключ GitHub App не знайдено: {keyPath}");
-        Console.Error.WriteLine("Перевстановіть Iskra або вкажіть шлях через --key <path>.");
+        Console.Error.WriteLine(CliText.Get("Logs.KeyMissing", keyPath));
+        Console.Error.WriteLine(CliText.Get("Logs.KeyHint"));
         return 5;
     }
 
@@ -782,7 +786,7 @@ static async Task<int> ShipLogsNowAsync(string[] args)
         ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db");
     if (!File.Exists(dbPath))
     {
-        Console.WriteLine($"Журнал ще порожній ({dbPath}). Нічого вивантажувати.");
+        Console.WriteLine(CliText.Get("Logs.Empty", dbPath));
         return 0;
     }
 
@@ -790,10 +794,10 @@ static async Task<int> ShipLogsNowAsync(string[] args)
     int pending = store.CountUnsynced();
     if (pending == 0)
     {
-        Console.WriteLine("Всі рядки вже вивантажено.");
+        Console.WriteLine(CliText.Get("Logs.AllShipped"));
         return 0;
     }
-    Console.WriteLine($"Знайдено {pending} рядк(ів) для вивантаження. Журнал: {dbPath}");
+    Console.WriteLine(CliText.Get("Logs.Pending", pending, dbPath));
 
     using var http = new HttpClient();
     var tokens = new GitHubAppInstallationTokenProvider(
@@ -813,28 +817,25 @@ static async Task<int> ShipLogsNowAsync(string[] args)
     }
     catch (GitHubAppAuthException ex)
     {
-        Console.Error.WriteLine($"Помилка авторизації GitHub App: {ex.Message}");
+        Console.Error.WriteLine(CliText.Get("Logs.AuthError", ex.Message));
         return 5;
     }
     catch (LogShipperException ex)
     {
-        Console.Error.WriteLine($"Помилка вивантаження: {ex.Message}");
+        Console.Error.WriteLine(CliText.Get("Logs.UploadError", ex.Message));
         return 5;
     }
 
-    Console.WriteLine($"✓ Вивантажено: {report.RowsPushed} рядк(ів) → "
-        + $"{report.FilesCreated} нових файл(ів) + {report.FilesUpdated} оновлено.");
+    Console.WriteLine(CliText.Get("Logs.Uploaded", report.RowsPushed, report.FilesCreated, report.FilesUpdated));
     if (report.RowsLeftover > 0)
-        Console.WriteLine($"  ({report.RowsLeftover} рядк(ів) залишилось — запустіть знову, щоб дослати.)");
+        Console.WriteLine(CliText.Get("Logs.Leftover", report.RowsLeftover));
     return 0;
 }
 
 static async Task<string> FetchRemoteFirmwareAsync(GitHubReleaseRef src, string expectedSha)
 {
     if (!OperatingSystem.IsWindows())
-        throw new PlatformNotSupportedException(
-            "завантаження приватної прошивки потребує Keychain/libsecret; " +
-            "поки що використайте підписаний локальний каталог або sideload у лабораторії");
+        throw new PlatformNotSupportedException(CliText.Get("Firmware.PrivateUnsupported"));
 
     using var http = new HttpClient();
     var flow = new GitHubDeviceFlow(http, GitHubAppConfig.ClientId);
@@ -847,11 +848,11 @@ static async Task<string> FetchRemoteFirmwareAsync(GitHubReleaseRef src, string 
 
 static string FormatFutureDuration(TimeSpan d)
 {
-    if (d.TotalSeconds <= 0) return "застарів";
-    if (d.TotalDays >= 30)   return $"через ~{(int)(d.TotalDays / 30)} міс";
-    if (d.TotalDays >= 1)    return $"через {d.Days} дн {d.Hours} год";
-    if (d.TotalHours >= 1)   return $"через {d.Hours} год {d.Minutes} хв";
-    return $"через {d.Minutes} хв";
+    if (d.TotalSeconds <= 0) return CliText.Get("Duration.Expired");
+    if (d.TotalDays >= 30)   return CliText.Get("Duration.Months", (int)(d.TotalDays / 30));
+    if (d.TotalDays >= 1)    return CliText.Get("Duration.Days", d.Days, d.Hours);
+    if (d.TotalHours >= 1)   return CliText.Get("Duration.Hours", d.Hours, d.Minutes);
+    return CliText.Get("Duration.Minutes", d.Minutes);
 }
 
 static int ListProbes()
@@ -859,11 +860,11 @@ static int ListProbes()
     var all = ProbeDiscovery.FindAll();
     if (all.Count == 0)
     {
-        Console.WriteLine("Програматори не знайдено.");
-        Console.WriteLine("(шукали USB-пристрої VID 0x1D50 PID 0x6018 — Black Magic Probe)");
+        Console.WriteLine(CliText.Get("Probe.None"));
+        Console.WriteLine(CliText.Get("Probe.SearchDetail"));
         return 0;
     }
-    Console.WriteLine($"Знайдено {all.Count} інтерфейс(ів):");
+    Console.WriteLine(CliText.Get("Probe.Interfaces", all.Count));
     foreach (var p in all)
     {
         var role = p.Interface switch
@@ -878,7 +879,7 @@ static int ListProbes()
     Console.WriteLine();
     var gdb = ProbeDiscovery.FindGdbPorts();
     if (gdb.Count == 1)
-        Console.WriteLine($"Стандартний GDB-порт: {gdb[0].PortName}");
+        Console.WriteLine(CliText.Get("Probe.DefaultPort", gdb[0].PortName));
     return 0;
 }
 
@@ -902,10 +903,10 @@ static int Doctor(string[] args)
         WriteDoctorLine("FAIL", name, detail);
     }
 
-    Console.WriteLine("Перевірка станції Iskra");
+    Console.WriteLine(CliText.Get("Doctor.Title"));
     Console.WriteLine("====================");
 
-    Pass("Операційна система", System.Runtime.InteropServices.RuntimeInformation.OSDescription);
+    Pass(CliText.Get("Doctor.OperatingSystem"), System.Runtime.InteropServices.RuntimeInformation.OSDescription);
 
     var appDir = AppContext.BaseDirectory;
     var appFileName = OperatingSystem.IsWindows() ? "Iskra.exe" : "Iskra";
@@ -916,16 +917,16 @@ static int Doctor(string[] args)
     if (File.Exists(cliExe))
         Pass(cliFileName, cliExe);
     else
-        Warn(cliFileName, "не вдалося підтвердити шлях поточного executable");
+        Warn(cliFileName, CliText.Get("Doctor.CliPathUnknown"));
 
     if (File.Exists(appExe))
         Pass(appFileName, appExe);
     else
-        Warn(appFileName, "графічний застосунок не знайдено поруч із CLI");
+        Warn(appFileName, CliText.Get("Doctor.GuiMissing"));
 
     var gdbPath = GdbDiscovery.Find(ArgValue(args, "--gdb-path"));
     if (gdbPath is null)
-        Fail("Arm GNU Toolchain", "arm-none-eabi-gdb не знайдено у PATH або за --gdb-path");
+        Fail("Arm GNU Toolchain", CliText.Get("Doctor.GdbMissing"));
     else
         Pass("Arm GNU Toolchain", gdbPath);
 
@@ -933,13 +934,13 @@ static int Doctor(string[] args)
     switch (probes.Count)
     {
         case 0:
-            Fail("Black Magic Probe", "GDB endpoint не знайдено; перевірте USB/udev або вкажіть --port");
+            Fail("Black Magic Probe", CliText.Get("Doctor.ProbeMissing"));
             break;
         case 1:
             Pass("Black Magic Probe", $"{probes[0].PortName} {probes[0].FriendlyName}");
             break;
         default:
-            Warn("Black Magic Probe", $"знайдено {probes.Count} GDB endpoints; виберіть --port явно");
+            Warn("Black Magic Probe", CliText.Get("Doctor.ProbeMultiple", probes.Count));
             foreach (var p in probes)
                 Console.WriteLine($"       {p.PortName} {p.FriendlyName}");
             break;
@@ -948,20 +949,20 @@ static int Doctor(string[] args)
     var catalogPath = ArgValue(args, "--catalog") ?? FindDefaultCatalogPath();
     if (catalogPath is null)
     {
-        Warn("Catalog", "вкажіть --catalog <path> або встановіть вбудований examples/catalog.json");
+        Warn("Catalog", CliText.Get("Doctor.CatalogHint"));
     }
     else
     {
         if (!File.Exists(catalogPath))
         {
-            Fail("Catalog", $"не знайдено: {catalogPath}");
+            Fail("Catalog", CliText.Get("Doctor.NotFound", catalogPath));
         }
         else
         {
             try
             {
                 var catalog = CatalogJson.ParseFile(catalogPath);
-                Pass("Catalog JSON", $"{catalog.Products.Count} продукт(ів): {catalogPath}");
+                Pass("Catalog JSON", CliText.Get("Doctor.Products", catalog.Products.Count, catalogPath));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CatalogParseException)
             {
@@ -975,19 +976,19 @@ static int Doctor(string[] args)
                     Pass("Catalog signature", CatalogTrust.SignaturePathFor(catalogPath));
                     break;
                 case CatalogTrustResult.UnsignedRejected:
-                    Fail("Catalog signature", "немає .sig файлу");
+                    Fail("Catalog signature", CliText.Get("Doctor.NoSignature"));
                     break;
                 case CatalogTrustResult.BadSignature:
-                    Fail("Catalog signature", "підпис не збігається з вбудованим ключем");
+                    Fail("Catalog signature", CliText.Get("Doctor.BadSignature"));
                     break;
                 case CatalogTrustResult.NoPublicKeyConfigured:
-                    Fail("Catalog signature", "немає вбудованого публічного ключа");
+                    Fail("Catalog signature", CliText.Get("Doctor.NoPublicKey"));
                     break;
                 case CatalogTrustResult.IoError:
-                    Fail("Catalog signature", "не вдалося прочитати catalog або .sig файл");
+                    Fail("Catalog signature", CliText.Get("Doctor.CatalogReadFailed"));
                     break;
                 case CatalogTrustResult.UnsignedAllowed:
-                    Fail("Catalog signature", "неочікуваний непідписаний catalog");
+                    Fail("Catalog signature", CliText.Get("Doctor.UnexpectedUnsigned"));
                     break;
             }
         }
@@ -997,17 +998,17 @@ static int Doctor(string[] args)
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Iskra");
     if (CanWriteDirectory(localAppData, out var localError))
-        Pass("%LOCALAPPDATA%\\Iskra", "доступний для запису");
+        Pass("%LOCALAPPDATA%\\Iskra", CliText.Get("Doctor.Writable"));
     else
-        Fail("%LOCALAPPDATA%\\Iskra", localError ?? "немає доступу на запис");
+        Fail("%LOCALAPPDATA%\\Iskra", localError ?? CliText.Get("Doctor.NotWritable"));
 
     var programData = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "Iskra");
     if (CanWriteDirectory(programData, out var programDataError))
-        Pass("%PROGRAMDATA%\\Iskra", "доступний для запису");
+        Pass("%PROGRAMDATA%\\Iskra", CliText.Get("Doctor.Writable"));
     else
-        Fail("%PROGRAMDATA%\\Iskra", programDataError ?? "немає доступу на запис");
+        Fail("%PROGRAMDATA%\\Iskra", programDataError ?? CliText.Get("Doctor.NotWritable"));
 
     if (OperatingSystem.IsWindows())
     {
@@ -1016,9 +1017,9 @@ static int Doctor(string[] args)
         {
             var tokens = tokenStore.Load();
             if (tokens is null)
-                Warn("GitHub auth", "немає входу; виконайте Iskra.Cli --login перед завантаженням приватних прошивок");
+                Warn("GitHub auth", CliText.Get("Doctor.NotSignedIn"));
             else if (tokens.RefreshTokenIsExpired(DateTime.UtcNow))
-                Fail("GitHub auth", "refresh token застарів; виконайте Iskra.Cli --login");
+                Fail("GitHub auth", CliText.Get("Doctor.RefreshExpired"));
             else
                 Pass("GitHub auth", tokenStore.Path);
         }
@@ -1029,17 +1030,17 @@ static int Doctor(string[] args)
     }
     else
     {
-        Warn("GitHub auth", "Keychain/libsecret adapter ще не реалізовано; приватні релізи недоступні");
+        Warn("GitHub auth", CliText.Get("Doctor.SecureStoreMissing"));
     }
 
     Console.WriteLine();
     if (failures == 0)
     {
-        Console.WriteLine($"Результат: PASS, попереджень: {warnings}.");
+        Console.WriteLine(CliText.Get("Doctor.Pass", warnings));
         return 0;
     }
 
-    Console.WriteLine($"Результат: FAIL, помилок: {failures}, попереджень: {warnings}.");
+    Console.WriteLine(CliText.Get("Doctor.Fail", failures, warnings));
     return 1;
 }
 
@@ -1088,84 +1089,5 @@ static bool CanWriteDirectory(string dir, out string? error)
 
 static void PrintUsage()
 {
-    Console.WriteLine("""
-        Iskra.Cli — масова прошивка через Black Magic Probe
-
-        Usage (caталог-driven, рекомендований режим для операторів):
-          Iskra.Cli --catalog <path> --product <id>
-                            --operator <name> --batch <id>
-                            [--firmware-version <ver>]   (інакше default release)
-                            [--port <endpoint>]           (авто якщо один BMP)
-                            [...]
-
-        Usage (sideload для лабораторних ELF/HEX без підписаного каталогу):
-          Iskra.Cli --allow-unsigned-catalog
-                    --sideload-dir <folder> --product <id>
-                            --operator <name> --batch <id>
-                            [--firmware-version <ver>] [--dry-run]
-
-        Usage (повний ручний режим — для розробки / без каталогу):
-          Iskra.Cli --allow-manual-flash --elf <path>
-                            --product <id> --target <bmp-match> --flash-kb <N>
-                            --operator <name> --batch <id>
-                            [--port <endpoint>]
-                            [--station-id <id>]
-                            [--firmware-version <ver>] [--firmware-sha256 <hex>]
-                            [--firmware-kind {elf|hex}]
-                            [--power {probe|external}] [--freq <hz>]
-                            [--connect-reset] [--timeout <sec>]
-                            [--gdb-path <path>] [--db-path <path>]
-                            [--dry-run]
-
-          Iskra.Cli --list-probes    показати підключені програматори
-          Iskra.Cli --doctor         перевірити готовність станції
-          Iskra.Cli --help           ця довідка
-
-        Авторизація GitHub (Sprint 3):
-          Iskra.Cli --login          OAuth Device Flow: відкрити URL,
-                                     ввести код, дочекатися підтвердження.
-                                     На Windows токени зберігаються через DPAPI
-                                     в %PROGRAMDATA%\Iskra\auth.bin; для інших
-                                     ОС secure-store adapter ще не реалізовано.
-          Iskra.Cli --logout         видалити збережені токени.
-          Iskra.Cli --whoami         показати GitHub-користувача та строки дії.
-
-        Хмарний журнал (Sprint 5):
-          Iskra.Cli --ship-logs-now [--key <pem>] [--db-path <db>]
-                                     одноразово виштовхнути всі несинхронізовані
-                                     рядки журналу до iskra-logs (GitHub).
-                                     Журнал та ключ беруться з налаштувань.
-
-        Підпис каталогу (Sprint 2):
-          Ed25519-підпис .sig поруч із catalog.json обовʼязковий за замовчуванням.
-          [--allow-unsigned-catalog]   НЕБЕЗПЕЧНИЙ лабораторний override для
-                                       локального sideload; також вимагає
-                                       ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1.
-          [--allow-manual-flash]       Дозволяє ручний --elf без каталогу;
-                                       також лише з цією змінною лабораторії.
-
-        Каталог підставляє --target / --flash-kb / --firmware-version /
-        --firmware-sha256 / --firmware-kind / --elf і, якщо задано в target,
-        --freq / --power / --connect-reset / --timeout. Шлях до локального
-        файлу прошивки будується відносно директорії catalog-файлу.
-
-        Required без каталогу:
-          --elf            Шлях до файлу прошивки (ELF або HEX)
-          --product        ID продукту (наприклад ci-clop)
-          --target         Сімейство BMP (наприклад PY32Fxxx)
-          --flash-kb       Розмір flash цільового MCU в KB
-          --operator       Імʼя оператора
-          --batch          ID партії
-
-        Defaults:
-          --power external, --freq 1000000, --connect-reset off,
-          --firmware-kind elf, --timeout 15,
-          --station-id <hostname>, --gdb-path <auto-detect>,
-          --db-path ./flash_log.db
-
-        Exit codes:
-          0 = PASS, 1 = FAIL, 2 = bad args / ambiguous probe / catalog error,
-          3 = no probe / gdb not found, 4 = bad firmware file,
-          5 = GitHub auth / firmware download error.
-        """);
+    Console.WriteLine(CliText.Get("Help"));
 }

@@ -102,14 +102,18 @@ until secure-store adapters exist.
 
 ### 8.2 — Avalonia operator UI redesign
 
-**Preview started:** `src/Iskra.Desktop` provides the Ukrainian four-tab shell
+**Preview started:** `src/Iskra.Desktop` provides the localized four-tab shell
 and shared read-only readiness checks. Flashing and settings mutation are
 intentionally disabled. No Windows/Linux/macOS visual, packaging, or HIL parity
 is claimed by this slice.
 
 - Continue `src/Iskra.Desktop` beside `src/Iskra.Wpf` using MVVM/commands.
 - Port the four operator tabs and Device Flow dialog without weakening the
-  single-action factory flow, giant PASS/FAIL state, hotkey safety, or Ukrainian UI.
+  single-action factory flow, giant PASS/FAIL state, hotkey safety, or complete
+  Ukrainian/English/German presentation.
+- ✅ Add persisted Ukrainian/English/German selection across WPF and Avalonia,
+  plus invocation-level `--lang uk|en|de` for CLI. Keep Ukrainian as the
+  compatibility default and keep logs/protocol values language-neutral.
 - Centralize color, spacing, typography, focus, high-contrast, and semantic
   status resources. Add Avalonia headless UI tests.
 - Retire WPF only after Windows behavior parity, packaged-app acceptance, and HIL.

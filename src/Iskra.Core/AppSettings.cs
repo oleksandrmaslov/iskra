@@ -20,13 +20,67 @@ public enum FlashHotkey
 }
 
 /// <summary>
+/// Supported operator-interface languages. Settings persist the normalized
+/// two-letter code so a future/unknown value can be clamped without making the
+/// whole settings document fail to deserialize.
+/// </summary>
+public static class IskraLanguages
+{
+    public const string Ukrainian = "uk";
+    public const string English = "en";
+    public const string German = "de";
+
+    public static string NormalizeOrDefault(string? value)
+        => TryNormalize(value, out var normalized) ? normalized : Ukrainian;
+
+    public static bool TryNormalize(string? value, out string normalized)
+    {
+        normalized = Ukrainian;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+
+        switch (value.Trim().Replace('_', '-').ToLowerInvariant())
+        {
+            case "uk":
+            case "uk-ua":
+                normalized = Ukrainian;
+                return true;
+            case "en":
+            case "en-us":
+            case "en-gb":
+                normalized = English;
+                return true;
+            case "de":
+            case "de-de":
+            case "de-at":
+            case "de-ch":
+                normalized = German;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    public static System.Globalization.CultureInfo CultureFor(string? languageCode)
+        => System.Globalization.CultureInfo.GetCultureInfo(
+            NormalizeOrDefault(languageCode) switch
+            {
+                English => "en-US",
+                German => "de-DE",
+                _ => "uk-UA",
+            });
+}
+
+/// <summary>
 /// User-facing app settings: catalog source, debugger/BMP knobs, log location.
-/// Persisted as JSON in the per-user appdata directory. Used by the WPF UI;
-/// the CLI continues to take everything via flags, but can read defaults from
-/// the same file in the future.
+/// Persisted as JSON in the per-user appdata directory. Desktop clients use
+/// these values directly; the CLI reads the shared language and log-shipping
+/// settings while keeping flashing options explicit through command-line flags.
 /// </summary>
 public sealed class AppSettings
 {
+    // Operator language. Ukrainian remains the safe compatibility default.
+    public string LanguageCode { get; set; } = IskraLanguages.Ukrainian;
+
     // Catalog
     public string? CatalogPath { get; set; }
     // Fail closed on fresh installs. Turning this off is an explicit lab-only
@@ -86,6 +140,7 @@ public sealed class AppSettings
 
     public AppSettings Clone() => new()
     {
+        LanguageCode             = LanguageCode,
         CatalogPath              = CatalogPath,
         RequireSignedCatalog     = RequireSignedCatalog,
         CatalogAutoUpdate        = CatalogAutoUpdate,
@@ -154,6 +209,7 @@ public static class AppSettingsStore
         // switch in the process environment.
         if (!CatalogTrust.IsUnsignedLabModeEnabled())
             settings.RequireSignedCatalog = true;
+        settings.LanguageCode = IskraLanguages.NormalizeOrDefault(settings.LanguageCode);
         return settings;
     }
 

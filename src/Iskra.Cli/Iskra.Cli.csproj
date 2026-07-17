@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <ProjectReference Include="..\Iskra.Application\Iskra.Application.csproj" />
     <ProjectReference Include="..\Iskra.Core\Iskra.Core.csproj" />
   </ItemGroup>
 

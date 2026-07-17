@@ -14,9 +14,10 @@ repos; each release carries the target stack metadata (BMP target match
 string + flash size + display part number) so the app can verify the right
 firmware is paired with the right hardware. Every attempt is logged to SQLite.
 
-**UI language: Ukrainian only** (operator-facing strings in WPF and CLI).
-Log payloads, error codes (`E_*`), and developer-only diagnostics stay
-ASCII / English.
+**Operator languages:** Ukrainian (`uk`, compatibility default), English
+(`en`), and German (`de`) in WPF, Avalonia, and CLI. Language selection affects
+presentation only. Log payloads, error codes (`E_*`), CLI flags, raw GDB output,
+and developer-only diagnostics stay ASCII / English.
 
 The full architecture proposal lives in the firmware repo's prior session
 transcript. This file is the *condensed* working copy of those decisions.
@@ -50,7 +51,7 @@ production blockers, and the final Sprint 9 security acceptance gate.
 - `src/Iskra.Application/` now owns fail-closed catalog-session selection,
   exactly-one-BMP station readiness, and optional batch policy without taking a
   dependency on WPF or Avalonia.
-- `src/Iskra.Desktop/` is a Ukrainian four-tab Avalonia 12.1.0 preview on
+- `src/Iskra.Desktop/` is a localized four-tab Avalonia 12.1.0 preview on
   `net10.0`. It reads existing settings and performs safe, read-only readiness
   checks; flashing and settings mutation are deliberately disabled until
   workflow-test and hardware-in-the-loop parity are demonstrated.
@@ -63,6 +64,9 @@ production blockers, and the final Sprint 9 security acceptance gate.
   digest-based lock.
 - The approved runtime migration is complete: SDK 10.0.301 is installed and
   pinned, the solution targets .NET 10, and Avalonia is pinned to 12.1.0.
+- Operator presentation now supports Ukrainian, English, and German. Ukrainian
+  remains the default for existing/fresh settings; WPF and Avalonia expose a
+  persisted selector, and CLI supports `--lang uk|en|de`.
 - WPF remains the shipping Windows UI. This slice does not claim Linux/macOS UI,
   packaging, or HIL validation.
 
@@ -533,9 +537,10 @@ Open Sprint 5 items:
     sanity check against the elf section sizes.
   - `part_number` — display string shown to operators (`"PY32F002Ax5"`).
     NOT used for verification — BMP can't tell variants apart within a family.
-- **UI language:** Ukrainian only. No i18n framework; strings hardcoded in
-  WPF, Avalonia, and CLI. Error codes (`E_*`) stay English / ASCII; each UI
-  maps them to a Ukrainian hint line.
+- **Operator languages:** Ukrainian, English, and German. Ukrainian remains the
+  compatibility default. Error codes (`E_*`), logs, flags, hashes, catalog data,
+  raw GDB output, and developer diagnostics stay English / ASCII; only operator
+  presentation and hints are localized.
 - **MVP bench target:** `ci-clop` product, PY32F002Ax5 board. This is
   the *acceptance test* for Sprint 1, NOT a hardcoded assumption in code.
 - **Operator identity:** free-text dropdown at app start, stored per-station.
@@ -620,9 +625,8 @@ CREATE TABLE flash_attempts (
 
 `E_PROBE_NOT_FOUND`, `E_PROBE_BUSY`, `E_SCAN_NO_TARGET`, `E_TARGET_MISMATCH`,
 `E_ATTACH_FAILED`, `E_LOAD_FAILED`, `E_VERIFY_MISMATCH`, `E_TIMEOUT`,
-`E_GDB_CRASHED`, `E_FW_HASH_MISMATCH`. Each maps to a one-line **Ukrainian**
-operator hint in the UI (table lives in `Iskra.Core/ErrorHints.cs`
-once written).
+`E_GDB_CRASHED`, `E_FW_HASH_MISMATCH`. Each maps to a one-line localized
+operator hint while the durable error code remains unchanged.
 
 ---
 

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows.Input;
@@ -16,23 +17,27 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private readonly AppSettings _settings;
     private readonly StationReadinessService _readinessService;
-    private string _readinessSummary = "Перевірка станції…";
-    private string _readinessDetail = "Очікуйте завершення локальної перевірки.";
+    private DesktopText _text = DesktopLocalization.For(DesktopLocalization.DefaultLanguageCode);
+    private LanguageOption _selectedLanguage = DesktopLocalization.Languages[0];
+    private string _languageSaveStatus = string.Empty;
+    private string _readinessSummary = string.Empty;
+    private string _readinessDetail = string.Empty;
     private IBrush _readinessBrush = AttentionBrush;
-    private string _lastCheckedText = "Ще не перевірено";
-    private string _probeStatusText = "Перевірка…";
-    private string _probeDetailText = "Пошук GDB-інтерфейсу BMP";
-    private string _gdbStatusText = "Перевірка…";
-    private string _gdbDetailText = "Пошук arm-none-eabi-gdb";
-    private string _catalogStatusText = "Перевірка…";
-    private string _catalogDetailText = "Пошук локального підписаного каталогу";
-    private string _catalogOverviewText = "Каталог ще не завантажено.";
-    private string _historyStatusText = "Журнал ще не створено";
+    private string _lastCheckedText = string.Empty;
+    private string _probeStatusText = string.Empty;
+    private string _probeDetailText = string.Empty;
+    private string _gdbStatusText = string.Empty;
+    private string _gdbDetailText = string.Empty;
+    private string _catalogStatusText = string.Empty;
+    private string _catalogDetailText = string.Empty;
+    private string _catalogOverviewText = string.Empty;
+    private string _historyStatusText = string.Empty;
 
     public MainWindowViewModel()
     {
         _settings = AppSettingsStore.Load();
         _readinessService = new StationReadinessService(new CatalogSession());
+        ApplyLanguage(_settings.LanguageCode, persist: false);
         RefreshReadinessCommand = new RelayCommand(RefreshReadiness);
         RefreshReadiness();
     }
@@ -40,6 +45,34 @@ public sealed class MainWindowViewModel : ViewModelBase
     public ICommand RefreshReadinessCommand { get; }
     public ObservableCollection<ProductSummaryViewModel> Products { get; } = [];
     public ObservableCollection<string> ProductNames { get; } = [];
+    public IReadOnlyList<LanguageOption> LanguageOptions => DesktopLocalization.Languages;
+
+    public DesktopText Text
+    {
+        get => _text;
+        private set => SetProperty(ref _text, value);
+    }
+
+    public LanguageOption SelectedLanguage
+    {
+        get => _selectedLanguage;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedLanguage, value))
+            {
+                return;
+            }
+
+            ApplyLanguage(value.Code, persist: true);
+            RefreshReadiness();
+        }
+    }
+
+    public string LanguageSaveStatus
+    {
+        get => _languageSaveStatus;
+        private set => SetProperty(ref _languageSaveStatus, value);
+    }
 
     public string PlatformLabel => $"{RuntimeInformation.OSDescription.Trim()} · {RuntimeInformation.ProcessArchitecture}";
     public string SettingsPath => AppSettingsStore.DefaultPath;
@@ -47,13 +80,12 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string OperatorName => _settings.LastOperator ?? string.Empty;
     public string CatalogSource => $"{CatalogTrust.OfficialCatalogSource.Owner}/{CatalogTrust.OfficialCatalogSource.Repo}";
     public string LogKeyPath => _settings.LogShipperPrivateKeyPath;
-    public string LogShippingStatusText => _settings.LogShippingEnabled ? "Увімкнено в конфігурації" : "Вимкнено в конфігурації";
+    public string LogShippingStatusText => _settings.LogShippingEnabled ? Text.LogShippingEnabled : Text.LogShippingDisabled;
     public string BatchModeStatusText => BatchPolicy.Resolve(_settings, null).BatchesEnabled
-        ? "Увімкнено — ідентифікатор буде обов’язковим"
-        : "Вимкнено — локальне блокування партій не застосовується";
+        ? Text.BatchEnabled
+        : Text.BatchDisabled;
     public string DatabasePath => ResolveDatabasePath();
-    public string MigrationSafetyNotice =>
-        "Це перший безпечний зріз перенесення інтерфейсу. Він уже перевіряє BMP, GDB і каталог через Iskra.Core, але навмисно не запускає прошивання, доки кросплатформний процес не матиме тестового та апаратного паритету з WPF.";
+    public string MigrationSafetyNotice => Text.MigrationSafetyNotice;
 
     public string ReadinessSummary { get => _readinessSummary; private set => SetProperty(ref _readinessSummary, value); }
     public string ReadinessDetail { get => _readinessDetail; private set => SetProperty(ref _readinessDetail, value); }
@@ -78,46 +110,45 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (snapshot.Probe.Status == ProbeReadinessStatus.Ready)
         {
             var probe = snapshot.Probe.Selected!;
-            ProbeStatusText = "Підключено";
+            ProbeStatusText = Text.Connected;
             ProbeDetailText = string.IsNullOrWhiteSpace(probe.SerialNumber)
                 ? probe.PortName
-                : $"{probe.PortName} · серійний № {probe.SerialNumber}";
+                : Text.SerialNumber(probe.PortName, probe.SerialNumber);
         }
         else if (snapshot.Probe.Status == ProbeReadinessStatus.MultipleFound)
         {
-            ProbeStatusText = $"Заблоковано: {snapshot.Probe.Discovered.Count} зонди";
-            ProbeDetailText = "Залиште підключеним рівно один BMP: " + string.Join(
-                "; ",
-                snapshot.Probe.Discovered.Select(p => string.IsNullOrWhiteSpace(p.SerialNumber)
+            ProbeStatusText = Text.BlockedProbes(snapshot.Probe.Discovered.Count);
+            ProbeDetailText = Text.LeaveOneBmp(string.Join(
+                "; ", snapshot.Probe.Discovered.Select(p => string.IsNullOrWhiteSpace(p.SerialNumber)
                     ? p.PortName
-                    : $"{p.PortName} (серійний № {p.SerialNumber})"));
-            issues.Add("кілька BMP");
+                    : Text.PortWithSerial(p.PortName, p.SerialNumber))));
+            issues.Add(Text.MultipleBmpIssue);
         }
         else
         {
             ProbeStatusText = snapshot.Probe.Status == ProbeReadinessStatus.DiscoveryFailed
-                ? "Помилка пошуку"
-                : "Не знайдено";
+                ? Text.SearchError
+                : Text.NotFound;
             ProbeDetailText = snapshot.Probe.Diagnostic
                 ?? (OperatingSystem.IsMacOS()
-                ? "Автопошук macOS ще мігрує; явний /dev/cu.usbmodem… підтримується Core."
-                : "Підключіть BMP і перевірте USB-кабель та права доступу до порту.");
-            issues.Add("BMP");
+                ? Text.MacAutoDiscovery
+                : Text.BmpHelp);
+            issues.Add(Text.BmpIssue);
         }
 
         if (snapshot.Gdb.IsReady)
         {
-            GdbStatusText = "Знайдено";
+            GdbStatusText = Text.Found;
             GdbDetailText = snapshot.Gdb.Path!;
         }
         else
         {
             GdbStatusText = snapshot.Gdb.Status == GdbReadinessStatus.DiscoveryFailed
-                ? "Помилка пошуку"
-                : "Не знайдено";
+                ? Text.SearchError
+                : Text.NotFound;
             GdbDetailText = snapshot.Gdb.Diagnostic
-                ?? "Встановіть Arm GNU Toolchain або вкажіть чинний шлях у налаштуваннях.";
-            issues.Add("ARM GDB");
+                ?? Text.GdbHelp;
+            issues.Add(Text.GdbIssue);
         }
 
         if (snapshot.Catalog.IsReady)
@@ -125,66 +156,106 @@ public sealed class MainWindowViewModel : ViewModelBase
             var catalog = snapshot.Catalog.Catalog!;
             foreach (var product in catalog.Products)
             {
-                Products.Add(new ProductSummaryViewModel(product));
+                Products.Add(new ProductSummaryViewModel(product, Text));
                 ProductNames.Add(product.DisplayName);
             }
 
             CatalogStatusText = snapshot.Catalog.TrustResult == CatalogTrustResult.Verified
-                ? "Підпис перевірено"
-                : "Лабораторний режим";
-            CatalogDetailText = $"{catalog.Products.Count} виробів · {snapshot.Catalog.SourcePath}";
-            CatalogOverviewText = $"Каталог згенеровано {catalog.GeneratedAt.ToLocalTime():g}; виробів: {catalog.Products.Count}; відкликань: {catalog.Revoked?.Count ?? 0}.";
+                ? Text.SignatureVerified
+                : Text.LabMode;
+            CatalogDetailText = Text.CatalogProductDetail(catalog.Products.Count, snapshot.Catalog.SourcePath!);
+            CatalogOverviewText = Text.CatalogOverview(
+                catalog.GeneratedAt.ToLocalTime().ToString("g", Text.Culture),
+                catalog.Products.Count,
+                catalog.Revoked?.Count ?? 0);
         }
         else
         {
-            issues.Add("каталог");
+            issues.Add(Text.CatalogIssue);
             CatalogStatusText = snapshot.Catalog.Status switch
             {
-                CatalogSessionStatus.NotFound or CatalogSessionStatus.ExplicitPathMissing => "Не знайдено",
-                CatalogSessionStatus.TrustRejected or CatalogSessionStatus.SideloadRequiresLabMode => "Відхилено",
-                _ => "Помилка каталогу",
+                CatalogSessionStatus.NotFound or CatalogSessionStatus.ExplicitPathMissing => Text.NotFound,
+                CatalogSessionStatus.TrustRejected or CatalogSessionStatus.SideloadRequiresLabMode => Text.CatalogRejected,
+                _ => Text.CatalogError,
             };
-            CatalogDetailText = snapshot.Catalog.Diagnostic ?? "Каталог не готовий.";
+            CatalogDetailText = snapshot.Catalog.Diagnostic ?? Text.CatalogNotReady;
             CatalogOverviewText = CatalogDetailText;
         }
 
         var databasePath = ResolveDatabasePath();
         HistoryStatusText = File.Exists(databasePath)
-            ? $"Знайдено · {FormatBytes(new FileInfo(databasePath).Length)}"
-            : "Файл буде створено після першої спроби прошивання";
+            ? Text.FileFound(FormatBytes(new FileInfo(databasePath).Length))
+            : Text.FileCreateLater;
 
         var readyChecks = (snapshot.Probe.IsReady ? 1 : 0)
             + (snapshot.Gdb.IsReady ? 1 : 0)
             + (snapshot.Catalog.IsReady ? 1 : 0);
         var allReady = snapshot.IsReady;
-        ReadinessSummary = allReady ? "Станція готова за базовими перевірками" : $"Готовність станції: {readyChecks}/3";
+        ReadinessSummary = allReady ? Text.StationReady : Text.StationPartial(readyChecks);
         ReadinessDetail = allReady
-            ? "BMP, ARM GDB і підписаний каталог доступні. Саме прошивання в Avalonia залишено заблокованим до HIL-паритету."
-            : $"Потрібна увага: {string.Join(", ", issues)}.";
+            ? Text.StationReadyDetail
+            : Text.Attention(string.Join(", ", issues));
         ReadinessBrush = allReady ? ReadyBrush : AttentionBrush;
-        LastCheckedText = $"Перевірено {DateTime.Now:HH:mm:ss}";
+        LastCheckedText = Text.CheckedAt(DateTime.Now);
+    }
+
+    private void ApplyLanguage(string? code, bool persist)
+    {
+        var normalized = DesktopLocalization.Normalize(code);
+        var text = DesktopLocalization.For(normalized);
+        CultureInfo.CurrentUICulture = text.Culture;
+        Text = text;
+        _selectedLanguage = DesktopLocalization.Languages.First(option => option.Code == normalized);
+        OnPropertyChanged(nameof(SelectedLanguage));
+        OnPropertyChanged(nameof(LogShippingStatusText));
+        OnPropertyChanged(nameof(BatchModeStatusText));
+        OnPropertyChanged(nameof(MigrationSafetyNotice));
+
+        if (!persist)
+        {
+            return;
+        }
+
+        _settings.LanguageCode = normalized;
+        try
+        {
+            AppSettingsStore.Save(_settings);
+            LanguageSaveStatus = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            LanguageSaveStatus = $"{Text.LanguageSaveFailed}: {ex.Message}";
+        }
     }
 
     private string ResolveDatabasePath() => string.IsNullOrWhiteSpace(_settings.DbPath)
         ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Iskra", "flash_log.db")
         : Path.GetFullPath(_settings.DbPath);
 
-    private static string FormatBytes(long bytes) => bytes switch
+    private string FormatBytes(long bytes) => bytes switch
     {
-        >= 1024 * 1024 => $"{bytes / 1024d / 1024d:F1} МБ",
-        >= 1024 => $"{bytes / 1024d:F1} КБ",
-        _ => $"{bytes} Б",
+        >= 1024 * 1024 => Text.Megabytes(bytes / 1024d / 1024d),
+        >= 1024 => Text.Kilobytes(bytes / 1024d),
+        _ => Text.Bytes(bytes),
     };
 }
 
-public sealed record ProductSummaryViewModel(string ProductId, string DisplayName, string TargetText, string ReleaseText)
+public sealed record ProductSummaryViewModel(
+    string ProductId,
+    string DisplayName,
+    string TargetLabel,
+    string TargetText,
+    string ReleaseLabel,
+    string ReleaseText)
 {
-    public ProductSummaryViewModel(Product product)
+    public ProductSummaryViewModel(Product product, DesktopText text)
         : this(
             product.ProductId,
             product.DisplayName,
-            $"{product.Target.PartNumber} · {product.Target.FlashKb} КБ",
-            $"v{product.DefaultRelease} · {product.Releases.Count} релізів")
+            text.Target,
+            text.TargetSummary(product.Target.PartNumber, product.Target.FlashKb),
+            text.DefaultRelease,
+            text.ReleaseSummary(product.DefaultRelease, product.Releases.Count))
     {
     }
 }
@@ -200,6 +271,9 @@ public abstract class ViewModelBase : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         return true;
     }
+
+    protected void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 internal sealed class RelayCommand(Action execute) : ICommand
