@@ -398,8 +398,12 @@
         </Grid>
       </TabItem>
 
-      <!-- ======================= SETTINGS ======================= -->
-      <TabItem Header="{Binding Text.TabSettings}">
+      <!-- ======================= SETTINGS =======================
+           Locked while a flash is in flight, exactly as WPF does. The workflow
+           already snapshots settings per attempt, but leaving the tab editable
+           would let a save fire RefreshReadiness() and mutate the live probe,
+           catalog, and product selection mid-transaction. -->
+      <TabItem Header="{Binding Text.TabSettings}" IsEnabled="{Binding IsIdle}">
         <Grid RowDefinitions="*,Auto">
           <ScrollViewer Grid.Row="0">
             <StackPanel Margin="4,14,18,14" MaxWidth="880" HorizontalAlignment="Left">
