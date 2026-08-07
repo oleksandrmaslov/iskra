@@ -57,11 +57,18 @@ production blockers, and the final Sprint 9 security acceptance gate.
 - `HistoryWorkflow`, `SettingsWorkflow`, and shared database-path policy now
   centralize read-only history/export and settings validation/persistence. WPF
   consumes them without losing its dialogs, localization, or dirty-state UX.
-- `src/Iskra.Desktop/` is a localized four-tab Avalonia 12.1.0 preview on
-  `net10.0`. It is explicitly identified as alpha/read-only, shows real recent
-  history, and uses a narrow reload-before-save language update. Flashing and
-  all other settings mutation remain disabled until workflow-test and
-  hardware-in-the-loop parity are demonstrated.
+- `src/Iskra.Desktop/` is a localized four-tab Avalonia 12.1.0 frontend on
+  `net10.0`. As of 2.0.0 (2026-08-07) it is functionally on par with WPF: the
+  Flash tab executes the real shared `FlashWorkflow` (giant PASS/FAIL band in
+  the WPF palette, full-width FLASH button honoring `AppSettings.FlashHotkey`,
+  live dark gdb console), Settings are fully editable through `SettingsWorkflow`
+  with auto-save on tab change and window close, and it has a GitHub Device Flow
+  window, catalog/app update checks, cloud-log upload, and CSV export. Readiness
+  gating, probe rediscovery, batch locking, and SQLite logging all come from
+  `Iskra.Application`. Remote firmware fails closed on Linux/macOS (Windows
+  DPAPI is the only encrypted token store), it ships in the standalone zip only
+  — not the MSI — and hardware-in-the-loop acceptance of this frontend is still
+  outstanding.
 - WPF now auto-saves settings when leaving the Settings tab or closing the
   window and shows dirty, saved, and save-error state. BMP discovery has an
   explicit refresh action; zero or multiple probes block flashing.
@@ -482,7 +489,7 @@ Open Sprint 5 items:
 | 6.5 | Conditional cross-station production batch lock — not a blocker while the current workflow keeps batches disabled. If batches are enabled for production, current `E_BATCH_LOCKED` is local SQLite only and a shared lock becomes mandatory. It must bind batch, product/version/digest/target/station and use an explicit offline policy (`fail closed` for production, or audited supervisor recovery). |
 | 7 | Auto-pick product by board ID — needs firmware cooperation (write a board-ID byte to a known flash offset OR use chip UID + a per-product mapping table). Reads via `monitor read_mem`; matches against catalog before flashing |
 | 8 | 🚧 Started: UI-neutral Application policies and the safe Avalonia preview exist. Remaining work is portable workflow orchestration, secure OS adapters, feature parity, Windows/Linux/macOS packaging, and HIL. See `ROADMAP.md`. |
-| 8.4 | Integrate only the replacement, owner-approved brand pack described in `docs/BRANDING_ASSET_REQUIREMENTS.md`. |
+| 8.4 | Integrate only the replacement, owner-approved brand pack described in `docs/BRANDING_ASSET_REQUIREMENTS.md`. Windows installer branding is done: `installer/assets/{banner,dialog}.bmp` + `iskra.ico` + `logo.png` wired into `Product.wxs`/`Bundle.wxs`. |
 | 9 | Final production security and release acceptance. Current audit classification: lab-ready, not factory-ready. |
 
 ### Polish backlog (fold in opportunistically)

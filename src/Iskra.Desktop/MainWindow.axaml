@@ -1,4 +1,4 @@
-<Window
+﻿<Window
     x:Class="Iskra.Desktop.MainWindow"
     x:DataType="vm:MainWindowViewModel"
     xmlns="https://github.com/avaloniaui"
@@ -6,11 +6,11 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:vm="using:Iskra.Desktop"
-    Title="{Binding AlphaWindowTitle}"
+    Title="{Binding WindowTitle}"
     Width="1120"
-    Height="760"
-    MinWidth="900"
-    MinHeight="620"
+    Height="820"
+    MinWidth="960"
+    MinHeight="700"
     WindowStartupLocation="CenterScreen"
     mc:Ignorable="d">
 
@@ -37,148 +37,334 @@
       <Setter Property="Foreground" Value="#FF5F6B7A" />
       <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
+    <Style Selector="TextBlock.chip">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Foreground" Value="#FFDCDCDC" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
     <Style Selector="Button.primary">
       <Setter Property="Background" Value="#FF1B5FCC" />
       <Setter Property="Foreground" Value="White" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Padding" Value="18,10" />
     </Style>
+    <!-- Giant operator action. Fluent's default hover/pressed brushes would
+         wash out the blue, so every visual state is pinned explicitly. -->
+    <Style Selector="Button.flash">
+      <Setter Property="Background" Value="#FF0078D7" />
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Height" Value="80" />
+    </Style>
+    <Style Selector="Button.flash:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF1A88E8" />
+      <Setter Property="TextElement.Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.flash:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF005FA8" />
+      <Setter Property="TextElement.Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.flash:disabled /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF9AA7B4" />
+      <Setter Property="TextElement.Foreground" Value="#FFEFEFEF" />
+    </Style>
+    <!-- The Fluent TextBox theme paints PART_BorderElement from its own
+         resources, so a local Background alone leaves the console white. -->
+    <Style Selector="TextBox.console /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#FF1E1E1E" />
+      <Setter Property="BorderBrush" Value="#FF3C3C3C" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="TextBox.console:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#FF1E1E1E" />
+      <Setter Property="BorderBrush" Value="#FF505050" />
+    </Style>
+    <Style Selector="TextBox.console:focus /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#FF1E1E1E" />
+      <Setter Property="BorderBrush" Value="#FF505050" />
+    </Style>
+    <Style Selector="TextBox.console /template/ TextBlock#PART_Watermark">
+      <Setter Property="Foreground" Value="#FFA8A8A8" />
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="TextBox.console">
+      <Setter Property="SelectionBrush" Value="#FF264F78" />
+    </Style>
+    <Style Selector="TextBlock.setting-section">
+      <Setter Property="FontSize" Value="17" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="Foreground" Value="#FF162033" />
+      <Setter Property="Margin" Value="0,14,0,6" />
+    </Style>
+    <Style Selector="TextBlock.setting-label">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Foreground" Value="#FF5F6B7A" />
+      <Setter Property="Margin" Value="0,5,10,5" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.setting-value">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="0,5,10,5" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBox.setting-input">
+      <Setter Property="Margin" Value="0,4,8,4" />
+    </Style>
+    <Style Selector="CheckBox.setting-input">
+      <Setter Property="Margin" Value="0,4,8,4" />
+    </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,*" Background="#FFF4F6F9">
-    <Border Grid.Row="0" Background="#FF162033" Padding="24,16">
-      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
-        <StackPanel Grid.Column="0" Spacing="3">
-          <TextBlock FontSize="25" FontWeight="Bold" Foreground="White" Text="ISKRA" />
-          <Border HorizontalAlignment="Left"
-                  Background="#FFD97706"
-                  CornerRadius="4"
-                  Padding="8,3"
-                  Margin="0,2,0,2">
-            <TextBlock FontSize="11" FontWeight="Bold" Foreground="White" Text="{Binding AlphaBadge}" />
-          </Border>
-          <TextBlock Foreground="#FFCAD5E6" TextWrapping="Wrap" Text="{Binding Text.Tagline}" />
+  <Grid RowDefinitions="Auto,Auto,*" Background="#FFF4F6F9">
+
+    <!-- Header. Deliberately single-row: every pixel spent here is a pixel the
+         PASS/FAIL band and the gdb console lose on a 1366x768 station screen. -->
+    <Border Grid.Row="0" Background="#FF162033" Padding="20,8">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="12">
+        <TextBlock Grid.Column="0" FontSize="22" FontWeight="Bold" Foreground="White"
+                   VerticalAlignment="Center" Text="ISKRA" />
+        <Border Grid.Column="1" Background="#FFD97706" CornerRadius="4" Padding="8,3"
+                VerticalAlignment="Center">
+          <TextBlock FontSize="10" FontWeight="Bold" Foreground="White" Text="{Binding PreviewBadge}" />
+        </Border>
+        <TextBlock Grid.Column="2" Classes="chip" Margin="6,0,0,0" Text="{Binding Text.Tagline}" />
+        <StackPanel Grid.Column="3" VerticalAlignment="Center" Spacing="1">
+          <TextBlock HorizontalAlignment="Right" FontSize="12" Foreground="White" Text="{Binding PlatformLabel}" />
+          <TextBlock HorizontalAlignment="Right" FontSize="12" Foreground="#FFCAD5E6" Text="{Binding LastCheckedText}" />
         </StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="18">
-          <StackPanel VerticalAlignment="Center" Spacing="2">
-            <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Foreground="White" Text="{Binding PlatformLabel}" />
-            <TextBlock HorizontalAlignment="Right" Foreground="#FFCAD5E6" Text="{Binding LastCheckedText}" />
-          </StackPanel>
-          <StackPanel Width="150" Spacing="3">
-            <TextBlock Classes="label" Foreground="#FFCAD5E6" Text="{Binding Text.Language}" />
-            <ComboBox ItemsSource="{Binding LanguageOptions}"
-                      SelectedItem="{Binding SelectedLanguage, Mode=TwoWay}">
-              <ComboBox.ItemTemplate>
-                <DataTemplate x:DataType="vm:LanguageOption">
-                  <TextBlock Text="{Binding DisplayName}" />
-                </DataTemplate>
-              </ComboBox.ItemTemplate>
-            </ComboBox>
-          </StackPanel>
-        </StackPanel>
+        <ComboBox Grid.Column="4" Width="132" VerticalAlignment="Center"
+                  ItemsSource="{Binding LanguageOptions}"
+                  SelectedItem="{Binding SelectedLanguage, Mode=TwoWay}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:LanguageOption">
+              <TextBlock Text="{Binding DisplayName}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
       </Grid>
     </Border>
 
-    <TabControl Grid.Row="1" Margin="20">
+    <!-- Status strip: same signals the WPF station shows above the tabs. -->
+    <Border Grid.Row="1" Background="#FF2D2D30" Padding="18,6">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="24">
+        <TextBlock Grid.Column="0" Classes="chip">
+          <Run Text="BMP:" /><Run Text=" " /><Run Text="{Binding ProbeDetailText}" />
+        </TextBlock>
+        <TextBlock Grid.Column="1" Classes="chip">
+          <Run Text="gdb:" /><Run Text=" " /><Run Text="{Binding GdbStatusText}" />
+        </TextBlock>
+        <TextBlock Grid.Column="2" Classes="chip" Text="{Binding CatalogDetailText}" />
+        <TextBlock Grid.Column="3" Classes="chip" Margin="0,0,16,0">
+          <Run Text="☁" /><Run Text=" " /><Run Text="{Binding CloudStatusText}" />
+        </TextBlock>
+        <Button Grid.Column="4"
+                Padding="10,2"
+                Command="{Binding RefreshReadinessCommand}"
+                Content="{Binding Text.Refresh}" />
+      </Grid>
+    </Border>
+
+    <TabControl Grid.Row="2" x:Name="MainTabs" Margin="20,12,20,20">
+
+      <!-- ======================= FLASH ======================= -->
       <TabItem Header="{Binding Text.TabFlash}">
-        <ScrollViewer>
-          <StackPanel Margin="4,18" Spacing="16">
-            <Border Classes="card" BorderBrush="{Binding ReadinessBrush}" BorderThickness="2">
-              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="20">
-                <StackPanel Grid.Column="0" Spacing="5">
-                  <TextBlock Classes="section-title" Text="{Binding ReadinessSummary}" />
-                  <TextBlock Classes="muted" Text="{Binding ReadinessDetail}" />
-                </StackPanel>
-                <Button Grid.Column="1"
-                        Command="{Binding RefreshReadinessCommand}"
-                        Content="{Binding Text.Refresh}"
-                        VerticalAlignment="Center" />
-              </Grid>
-            </Border>
+        <!-- Star rows with MinHeight let the band and the console share every
+             spare pixel and shrink together. ClipToBounds guarantees that an
+             extremely short window degrades by cropping, never by painting one
+             section over another. -->
+        <Grid Margin="0,12,0,0" RowSpacing="10" ClipToBounds="True">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="3*" MinHeight="128" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="2*" MinHeight="110" />
+          </Grid.RowDefinitions>
 
-            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="14">
-              <Border Grid.Column="0" Classes="card">
-                <StackPanel Spacing="7">
-                  <TextBlock Classes="label" Text="BLACK MAGIC PROBE" />
-                  <TextBlock FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" Text="{Binding ProbeStatusText}" />
-                  <TextBlock Classes="muted" Text="{Binding ProbeDetailText}" />
-                </StackPanel>
-              </Border>
-              <Border Grid.Column="1" Classes="card">
-                <StackPanel Spacing="7">
-                  <TextBlock Classes="label" Text="ARM GDB" />
-                  <TextBlock FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" Text="{Binding GdbStatusText}" />
-                  <TextBlock Classes="muted" Text="{Binding GdbDetailText}" />
-                </StackPanel>
-              </Border>
-              <Border Grid.Column="2" Classes="card">
-                <StackPanel Spacing="7">
-                  <TextBlock Classes="label" Text="{Binding Text.SignedCatalog}" />
-                  <TextBlock FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" Text="{Binding CatalogStatusText}" />
-                  <TextBlock Classes="muted" Text="{Binding CatalogDetailText}" />
-                </StackPanel>
-              </Border>
-            </Grid>
+          <!-- One compact field row. The batch block sits in an Auto column so
+               it collapses to zero width when batch mode is off. -->
+          <Grid Grid.Row="0" ColumnDefinitions="*,*,160,Auto" ColumnSpacing="12">
+            <StackPanel Grid.Column="0" Spacing="3">
+              <TextBlock Classes="label" Text="{Binding Text.Operator}" />
+              <TextBox FontSize="16"
+                       IsEnabled="{Binding IsIdle}"
+                       Text="{Binding OperatorName, Mode=TwoWay}"
+                       PlaceholderText="{Binding Text.OperatorPlaceholder}" />
+            </StackPanel>
 
-            <Border Classes="card">
-              <Grid ColumnDefinitions="2*,3*" ColumnSpacing="24">
-                <StackPanel Grid.Column="0" Spacing="10">
-                  <TextBlock Classes="section-title" Text="{Binding Text.OperatorChange}" />
-                  <TextBlock Classes="muted" Text="{Binding Text.OperatorMigration}" />
-                  <TextBlock Classes="label" Margin="0,8,0,0" Text="{Binding Text.Operator}" />
-                  <TextBox IsEnabled="False" Text="{Binding OperatorName}" PlaceholderText="{Binding Text.OperatorPlaceholder}" />
-                  <TextBlock Classes="label" Margin="0,6,0,0" Text="{Binding Text.Product}" />
-                  <ComboBox IsEnabled="False" ItemsSource="{Binding ProductNames}" SelectedIndex="0" />
-                </StackPanel>
-                <StackPanel Grid.Column="1" Spacing="10" VerticalAlignment="Center">
-                  <Border Background="#FFFFF4CE" BorderBrush="#FFE6B800" BorderThickness="1" CornerRadius="8" Padding="14">
-                    <TextBlock Foreground="#FF5A4300" TextWrapping="Wrap" Text="{Binding MigrationSafetyNotice}" />
-                  </Border>
-                  <Button Classes="primary"
-                          IsEnabled="False"
-                          HorizontalContentAlignment="Center"
-                          FontSize="20"
-                          Content="{Binding Text.FlashAction}" />
-                  <TextBlock Classes="muted" HorizontalAlignment="Center" TextAlignment="Center" Text="{Binding Text.FlashDisabledUntilParity}" />
-                </StackPanel>
-              </Grid>
+            <StackPanel Grid.Column="1" Spacing="3">
+              <TextBlock Classes="label" Text="{Binding Text.Product}" />
+              <ComboBox FontSize="16" HorizontalAlignment="Stretch"
+                        IsEnabled="{Binding IsIdle}"
+                        ItemsSource="{Binding ProductOptions}"
+                        SelectedItem="{Binding SelectedProduct, Mode=TwoWay}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ProductOption">
+                    <TextBlock Text="{Binding Label}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Spacing="3">
+              <TextBlock Classes="label" Text="{Binding Text.Version}" />
+              <ComboBox FontSize="16" HorizontalAlignment="Stretch"
+                        IsEnabled="{Binding IsIdle}"
+                        ItemsSource="{Binding ReleaseOptions}"
+                        SelectedItem="{Binding SelectedRelease, Mode=TwoWay}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ReleaseOption">
+                    <TextBlock Text="{Binding Label}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+            </StackPanel>
+
+            <StackPanel Grid.Column="3" Width="190" Spacing="3"
+                        IsVisible="{Binding BatchesEnabled}">
+              <TextBlock Classes="label" Text="{Binding Text.Batch}" />
+              <TextBox FontSize="16"
+                       IsEnabled="{Binding IsIdle}"
+                       Text="{Binding BatchId, Mode=TwoWay}"
+                       PlaceholderText="{Binding Text.BatchPlaceholder}" />
+            </StackPanel>
+          </Grid>
+
+          <!-- Contextual notices. Both collapse when they have nothing to say. -->
+          <StackPanel Grid.Row="1" Spacing="6">
+            <TextBlock FontSize="13" Foreground="#FF1B8A1B" TextWrapping="Wrap"
+                       IsVisible="{Binding HasBatchLockText}"
+                       Text="{Binding BatchLockText}" />
+            <Border Background="#FFFFF3CD" BorderBrush="#FFFFEAA7" BorderThickness="1"
+                    CornerRadius="6" Padding="12,8"
+                    IsVisible="{Binding ShowAuthHint}">
+              <TextBlock FontSize="13" Foreground="#FF6B5A0E" TextWrapping="Wrap"
+                         Text="{Binding Text.AuthHintRemote}" />
             </Border>
           </StackPanel>
-        </ScrollViewer>
-      </TabItem>
 
-      <TabItem Header="{Binding Text.TabHistory}">
-        <ScrollViewer>
-          <StackPanel Margin="4,18" Spacing="16">
-            <TextBlock Classes="section-title" Text="{Binding Text.LocalLog}" />
-            <TextBlock Classes="muted" Text="{Binding HistoryAlphaNotice}" />
-            <Border Classes="card">
-              <StackPanel Spacing="8">
-                <TextBlock Classes="label" Text="{Binding Text.FileStatus}" />
-                <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding HistoryStatusText}" />
-                <TextBlock Classes="muted" Text="{Binding DatabasePath}" />
-                <TextBlock FontWeight="SemiBold" Margin="0,6,0,0" Text="{Binding HistorySummaryText}" />
+          <!-- Giant PASS / FAIL band -->
+          <Border Grid.Row="2" CornerRadius="10" ClipToBounds="True"
+                  Background="{Binding BannerBackground}">
+            <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="24,16">
+              <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock FontWeight="Bold"
+                           FontSize="{Binding BannerTitleSize}"
+                           HorizontalAlignment="Center" TextAlignment="Center"
+                           Foreground="{Binding BannerTitleBrush}"
+                           Text="{Binding BannerTitle}" />
+                <TextBlock FontSize="20" Margin="0,14,0,0"
+                           HorizontalAlignment="Center" TextAlignment="Center"
+                           Foreground="{Binding BannerDetailBrush}"
+                           Text="{Binding BannerDetail}" />
               </StackPanel>
-            </Border>
-            <ItemsControl ItemsSource="{Binding HistoryRows}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:HistoryRowViewModel">
-                  <Border Classes="card" Padding="12" Margin="0,0,0,8">
-                    <Grid ColumnDefinitions="145,90,*,*,120" ColumnSpacing="12">
-                      <TextBlock Grid.Column="0" Classes="muted" Text="{Binding TimestampText}" />
-                      <TextBlock Grid.Column="1" FontWeight="Bold" Text="{Binding Result}" />
-                      <TextBlock Grid.Column="2" Text="{Binding ProductVersion}" />
-                      <TextBlock Grid.Column="3" Classes="muted" Text="{Binding OperatorBatch}" />
-                      <TextBlock Grid.Column="4" Foreground="#FFB42318" Text="{Binding Error}" />
-                    </Grid>
-                  </Border>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </StackPanel>
-        </ScrollViewer>
+            </Viewbox>
+          </Border>
+
+          <Button Grid.Row="3" Classes="flash"
+                  Command="{Binding FlashCommand}"
+                  ToolTip.Tip="{Binding FlashTooltipText}">
+            <StackPanel>
+              <TextBlock FontSize="26" FontWeight="Bold" HorizontalAlignment="Center"
+                         Text="{Binding Text.FlashAction}" />
+              <TextBlock FontSize="12" Opacity="0.85" HorizontalAlignment="Center" Margin="0,2,0,0"
+                         Text="{Binding HotkeyHintText}" />
+            </StackPanel>
+          </Button>
+
+          <!-- gdb console -->
+          <Grid Grid.Row="4" RowDefinitions="Auto,*">
+            <TextBlock Grid.Row="0" FontSize="12" Foreground="#FF5F6B7A" Margin="0,0,0,4"
+                       Text="{Binding Text.GdbDetails}" />
+            <TextBox Grid.Row="1" x:Name="GdbLogBox" Classes="console"
+                     FontFamily="Cascadia Mono,Consolas,DejaVu Sans Mono,monospace"
+                     FontSize="11"
+                     IsReadOnly="True"
+                     AcceptsReturn="True"
+                     TextWrapping="NoWrap"
+                     Foreground="#FFDCDCDC"
+                     CaretBrush="#FFDCDCDC"
+                     Padding="8,6"
+                     PlaceholderText="{Binding Text.GdbLogEmpty}"
+                     Text="{Binding GdbLogText}" />
+          </Grid>
+        </Grid>
       </TabItem>
 
+      <!-- ======================= HISTORY ======================= -->
+      <TabItem Header="{Binding Text.TabHistory}">
+        <Grid RowDefinitions="Auto,Auto,Auto,*" Margin="4,16" RowSpacing="10">
+          <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <StackPanel Grid.Column="0" Spacing="3" VerticalAlignment="Center">
+              <TextBlock Classes="section-title" Text="{Binding Text.LocalLog}" />
+              <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="{Binding HistoryBatchSummaryText}" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+              <Button Padding="12,6" Command="{Binding ExportBatchCommand}"
+                      IsVisible="{Binding BatchesEnabled}"
+                      Content="{Binding Text.HistoryExportBatch}" />
+              <Button Padding="12,6" Command="{Binding ExportAllCommand}"
+                      Content="{Binding Text.HistoryExportAll}" />
+              <Button Padding="14,6" Command="{Binding RefreshHistoryCommand}"
+                      Content="{Binding Text.ActionRefresh}" />
+            </StackPanel>
+          </Grid>
+
+          <TextBlock Grid.Row="1" TextWrapping="Wrap"
+                     IsVisible="{Binding !!ExportStatusText}"
+                     Foreground="{Binding ExportStatusBrush}"
+                     Text="{Binding ExportStatusText}" />
+
+          <Border Grid.Row="2" Classes="card" Padding="14">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+              <StackPanel Grid.Column="0" Spacing="3">
+                <TextBlock Classes="label" Text="{Binding Text.FileStatus}" />
+                <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding HistoryStatusText}" />
+                <TextBlock Classes="muted" Text="{Binding DatabasePath}" />
+              </StackPanel>
+              <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center"
+                         Text="{Binding HistorySummaryText}" />
+            </Grid>
+          </Border>
+
+          <Border Grid.Row="3" Classes="card" Padding="0">
+            <Grid RowDefinitions="Auto,*">
+              <Border Grid.Row="0" Background="#FFEFF3F8" Padding="14,8"
+                      CornerRadius="12,12,0,0">
+                <Grid ColumnDefinitions="145,90,*,*,120" ColumnSpacing="12">
+                  <TextBlock Grid.Column="0" Classes="label" Text="UTC" />
+                  <TextBlock Grid.Column="1" Classes="label" Text="PASS/FAIL" />
+                  <TextBlock Grid.Column="2" Classes="label" Text="{Binding Text.Product}" />
+                  <TextBlock Grid.Column="3" Classes="label" Text="{Binding Text.Operator}" />
+                  <TextBlock Grid.Column="4" Classes="label" Text="E_*" />
+                </Grid>
+              </Border>
+              <ScrollViewer Grid.Row="1">
+                <ItemsControl ItemsSource="{Binding HistoryRows}" Margin="0,4">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:HistoryRowViewModel">
+                      <Grid ColumnDefinitions="145,90,*,*,120" ColumnSpacing="12" Margin="14,5">
+                        <TextBlock Grid.Column="0" Classes="muted" Text="{Binding TimestampText}" />
+                        <TextBlock Grid.Column="1" FontWeight="Bold" Text="{Binding Result}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ProductVersion}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="3" Classes="muted" Text="{Binding OperatorBatch}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="4" Foreground="#FFB42318" Text="{Binding Error}" TextTrimming="CharacterEllipsis" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Grid>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <!-- ======================= CATALOG ======================= -->
       <TabItem Header="{Binding Text.TabCatalog}">
         <Grid RowDefinitions="Auto,*" Margin="4,18">
           <StackPanel Grid.Row="0" Spacing="5" Margin="0,0,0,14">
@@ -212,37 +398,193 @@
         </Grid>
       </TabItem>
 
+      <!-- ======================= SETTINGS ======================= -->
       <TabItem Header="{Binding Text.TabSettings}">
-        <ScrollViewer>
-          <StackPanel Margin="4,18" Spacing="16">
-            <TextBlock Classes="section-title" Text="{Binding Text.CurrentConfiguration}" />
-            <TextBlock Classes="muted" Text="{Binding Text.SettingsMigration}" />
-            <Grid ColumnDefinitions="*,*" ColumnSpacing="14">
-              <Border Grid.Column="0" Classes="card">
-                <StackPanel Spacing="9">
-                  <TextBlock Classes="label" Text="{Binding Text.Station}" />
-                  <TextBlock FontSize="17" FontWeight="SemiBold" Text="{Binding StationId}" />
-                  <TextBlock Classes="label" Margin="0,8,0,0" Text="{Binding Text.SettingsFile}" />
-                  <TextBlock Classes="muted" Text="{Binding SettingsPath}" />
-                  <TextBlock Classes="label" Margin="0,8,0,0" Text="{Binding Text.OfficialCatalog}" />
-                  <TextBlock Text="{Binding CatalogSource}" />
+        <Grid RowDefinitions="*,Auto">
+          <ScrollViewer Grid.Row="0">
+            <StackPanel Margin="4,14,18,14" MaxWidth="880" HorizontalAlignment="Left">
+
+              <TextBlock Classes="section-title" Text="{Binding Text.CurrentConfiguration}" />
+              <TextBlock Classes="muted" Margin="0,2,0,0" Text="{Binding SettingsPath}" />
+
+              <!-- Catalog -->
+              <TextBlock Classes="setting-section" Text="{Binding Text.SettingsSectionCatalog}" />
+              <Grid ColumnDefinitions="190,*,Auto" RowDefinitions="Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsCatalogPath}" />
+                <TextBox Grid.Row="0" Grid.Column="1" Classes="setting-input" Text="{Binding CatalogPathInput, Mode=TwoWay}" />
+                <Button Grid.Row="0" Grid.Column="2" Margin="0,4" Padding="12,5"
+                        Command="{Binding PickCatalogPathCommand}" Content="{Binding Text.ActionBrowse}" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsSignatureRequired}" />
+                <CheckBox Grid.Row="1" Grid.Column="1" Classes="setting-input"
+                          IsEnabled="{Binding CanEditRequireSignedCatalog}"
+                          IsChecked="{Binding RequireSignedCatalogInput, Mode=TwoWay}"
+                          Content="{Binding Text.SettingsSignatureRequiredContent}"
+                          ToolTip.Tip="{Binding Text.SettingsSignatureMandatory}" />
+              </Grid>
+
+              <!-- Catalog auto-update -->
+              <TextBlock Classes="setting-section" Text="{Binding Text.SettingsSectionCatalogUpdate}" />
+              <Grid ColumnDefinitions="190,*,Auto" RowDefinitions="Auto,Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsAutoUpdate}" />
+                <CheckBox Grid.Row="0" Grid.Column="1" Classes="setting-input"
+                          IsChecked="{Binding CatalogAutoUpdateInput, Mode=TwoWay}"
+                          Content="{Binding Text.SettingsAutoUpdateContent}" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsLockedSource}" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Classes="setting-value"
+                           FontFamily="Cascadia Mono,Consolas,monospace"
+                           Text="{Binding LockedCatalogSourceText}" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsStatus}" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Classes="setting-value"
+                           Foreground="{Binding CatalogUpdateStatusBrush}"
+                           Text="{Binding CatalogUpdateStatusText}" />
+                <Button Grid.Row="2" Grid.Column="2" Margin="0,4" Padding="12,5"
+                        Command="{Binding CheckCatalogUpdateCommand}" Content="{Binding Text.ActionCheckUpdates}" />
+              </Grid>
+
+              <!-- App update -->
+              <TextBlock Classes="setting-section" Text="{Binding Text.SettingsSectionAppUpdate}" />
+              <Grid ColumnDefinitions="190,*,Auto" RowDefinitions="Auto,Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsCurrentVersion}" />
+                <TextBlock Grid.Row="0" Grid.Column="1" Classes="setting-value"
+                           FontFamily="Cascadia Mono,Consolas,monospace" Text="{Binding AppVersionText}" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsReleases}" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Classes="setting-value"
+                           FontFamily="Cascadia Mono,Consolas,monospace" Text="{Binding LockedAppUpdateSourceText}" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsStatus}" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Classes="setting-value"
+                           Foreground="{Binding AppUpdateStatusBrush}" Text="{Binding AppUpdateStatusText}" />
+                <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Spacing="8" Margin="0,4">
+                  <Button Padding="12,5" Command="{Binding CheckAppUpdateCommand}" Content="{Binding Text.ActionCheck}" />
+                  <Button Padding="12,5" Command="{Binding OpenReleasePageCommand}" Content="{Binding Text.ActionOpenRelease}" />
                 </StackPanel>
-              </Border>
-              <Border Grid.Column="1" Classes="card">
-                <StackPanel Spacing="9">
-                  <TextBlock Classes="label" Text="{Binding Text.CloudLog}" />
-                  <TextBlock FontSize="17" FontWeight="SemiBold" Text="{Binding LogShippingStatusText}" />
-                  <TextBlock Classes="label" Margin="0,8,0,0" Text="{Binding Text.PrivateStationKey}" />
-                  <TextBlock Classes="muted" Text="{Binding LogKeyPath}" />
-                  <TextBlock Classes="label" Margin="0,8,0,0" Text="{Binding Text.BatchMode}" />
-                  <TextBlock Classes="muted" Text="{Binding BatchModeStatusText}" />
-                  <TextBlock Classes="muted" Margin="0,8,0,0" Text="{Binding Text.SettingsGroupingMigration}" />
-                  <TextBlock Classes="muted" Foreground="#FFB42318" IsVisible="{Binding !!LanguageSaveStatus}" Text="{Binding LanguageSaveStatus}" />
+              </Grid>
+
+              <!-- GitHub auth -->
+              <TextBlock Classes="setting-section" Text="{Binding Text.SettingsSectionGitHubAuth}" />
+              <Grid ColumnDefinitions="190,*,Auto" RowDefinitions="Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsStatus}" />
+                <TextBlock Grid.Row="0" Grid.Column="1" Classes="setting-value"
+                           Foreground="{Binding AuthStatusBrush}" Text="{Binding AuthStatusText}" />
+                <Button Grid.Row="0" Grid.Column="2" Margin="0,4" Padding="12,5"
+                        Command="{Binding RefreshAuthCommand}" Content="{Binding Text.ActionRefresh}" />
+
+                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,6,0,4">
+                  <Button Padding="16,6" Command="{Binding SignInCommand}" Content="{Binding Text.AuthSignIn}" />
+                  <Button Padding="16,6" Command="{Binding SignOutCommand}" Content="{Binding Text.ActionSignOut}" />
                 </StackPanel>
-              </Border>
+              </Grid>
+
+              <!-- Probe / gdb -->
+              <TextBlock Classes="setting-section" Text="{Binding Text.SettingsSectionDebugger}" />
+              <Grid ColumnDefinitions="190,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsGdbPath}" />
+                <TextBox Grid.Row="0" Grid.Column="1" Classes="setting-input" Text="{Binding GdbPathInput, Mode=TwoWay}" />
+                <Button Grid.Row="0" Grid.Column="2" Margin="0,4" Padding="12,5"
+                        Command="{Binding PickGdbPathCommand}" Content="{Binding Text.ActionBrowse}" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsSwdFrequency}" />
+                <TextBox Grid.Row="1" Grid.Column="1" Classes="setting-input" Text="{Binding BmpFrequencyInput, Mode=TwoWay}" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsPower}" />
+                <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="18" Margin="0,4">
+                  <RadioButton GroupName="Power" IsChecked="{Binding PowerIsExternal, Mode=TwoWay}"
+                               Content="{Binding Text.SettingsPowerExternal}" />
+                  <RadioButton GroupName="Power" IsChecked="{Binding PowerIsProbe, Mode=TwoWay}"
+                               Content="{Binding Text.SettingsPowerProbe}" />
+                </StackPanel>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsConnectReset}" />
+                <CheckBox Grid.Row="3" Grid.Column="1" Classes="setting-input"
+                          IsChecked="{Binding ConnectUnderResetInput, Mode=TwoWay}"
+                          Content="{Binding Text.SettingsConnectResetContent}" />
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsTimeout}" />
+                <TextBox Grid.Row="4" Grid.Column="1" Classes="setting-input" Text="{Binding TimeoutInput, Mode=TwoWay}" />
+              </Grid>
+
+              <!-- Log / station -->
+              <TextBlock Classes="setting-section" Text="{Binding Text.SettingsSectionLogStation}" />
+              <Grid ColumnDefinitions="190,*,Auto" RowDefinitions="Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsLogFile}" />
+                <TextBox Grid.Row="0" Grid.Column="1" Classes="setting-input" Text="{Binding DbPathInput, Mode=TwoWay}" />
+                <Button Grid.Row="0" Grid.Column="2" Margin="0,4" Padding="12,5"
+                        Command="{Binding PickDbPathCommand}" Content="{Binding Text.ActionBrowse}" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsStationId}" />
+                <TextBox Grid.Row="1" Grid.Column="1" Classes="setting-input" Text="{Binding StationIdInput, Mode=TwoWay}" />
+              </Grid>
+
+              <!-- Operator UI -->
+              <TextBlock Classes="setting-section" Text="{Binding Text.SettingsSectionOperatorUi}" />
+              <Grid ColumnDefinitions="190,*" RowDefinitions="Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsHotkey}" />
+                <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,4,8,4" HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding HotkeyOptions}"
+                          SelectedItem="{Binding SelectedHotkey, Mode=TwoWay}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:HotkeyOption">
+                      <TextBlock Text="{Binding Label}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+              </Grid>
+
+              <!-- Cloud log -->
+              <TextBlock Classes="setting-section" Text="{Binding Text.SettingsSectionCloudLog}" />
+              <Grid ColumnDefinitions="190,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                <CheckBox Grid.Row="0" Grid.Column="1" Classes="setting-input"
+                          IsChecked="{Binding LogShippingEnabledInput, Mode=TwoWay}"
+                          Content="{Binding Text.SettingsCloudAutoUpload}" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsCloudInterval}" />
+                <TextBox Grid.Row="1" Grid.Column="1" Classes="setting-input" Text="{Binding LogShipIntervalInput, Mode=TwoWay}" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsCloudPrivateKey}" />
+                <TextBox Grid.Row="2" Grid.Column="1" Classes="setting-input" Text="{Binding LogShipperKeyInput, Mode=TwoWay}" />
+                <Button Grid.Row="2" Grid.Column="2" Margin="0,4" Padding="12,5"
+                        Command="{Binding PickLogKeyPathCommand}" Content="{Binding Text.ActionBrowse}" />
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsBatches}" />
+                <CheckBox Grid.Row="3" Grid.Column="1" Classes="setting-input"
+                          IsChecked="{Binding BatchesEnabledInput, Mode=TwoWay}"
+                          Content="{Binding Text.SettingsBatchesContent}" />
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsRepository}" />
+                <TextBlock Grid.Row="4" Grid.Column="1" Classes="setting-value"
+                           FontFamily="Cascadia Mono,Consolas,monospace" Text="{Binding LockedLogsSourceText}" />
+
+                <TextBlock Grid.Row="5" Grid.Column="0" Classes="setting-label" Text="{Binding Text.SettingsStatus}" />
+                <TextBlock Grid.Row="5" Grid.Column="1" Classes="setting-value"
+                           Foreground="{Binding CloudDetailBrush}" Text="{Binding CloudDetailText}" />
+                <Button Grid.Row="5" Grid.Column="2" Margin="0,4" Padding="12,5"
+                        Command="{Binding ShipLogsNowCommand}" Content="{Binding Text.ActionUploadNow}" />
+              </Grid>
+
+              <TextBlock Classes="muted" Margin="0,18,0,0" FontSize="12"
+                         Text="{Binding Text.SettingsAutoSaveNote}" />
+              <TextBlock Classes="muted" Foreground="#FFB42318" Margin="0,4,0,0"
+                         IsVisible="{Binding !!LanguageSaveStatus}" Text="{Binding LanguageSaveStatus}" />
+            </StackPanel>
+          </ScrollViewer>
+
+          <!-- Save bar stays pinned so the operator never has to scroll to it. -->
+          <Border Grid.Row="1" Background="#FFEFF3F8" BorderBrush="#FFD7DEE8"
+                  BorderThickness="0,1,0,0" Padding="14,10">
+            <Grid ColumnDefinitions="Auto,Auto,*">
+              <Button Grid.Column="0" Classes="primary" Margin="0,0,8,0"
+                      Command="{Binding SaveSettingsCommand}" Content="{Binding Text.ActionSave}" />
+              <Button Grid.Column="1" Padding="14,10" Margin="0,0,12,0"
+                      Command="{Binding ResetSettingsCommand}" Content="{Binding Text.ActionReset}" />
+              <TextBlock Grid.Column="2" VerticalAlignment="Center" TextWrapping="Wrap"
+                         Foreground="{Binding SettingsStatusBrush}" Text="{Binding SettingsStatusText}" />
             </Grid>
-          </StackPanel>
-        </ScrollViewer>
+          </Border>
+        </Grid>
       </TabItem>
     </TabControl>
   </Grid>

@@ -8,11 +8,15 @@
           Version="$(var.AppVersion)"
           UpgradeCode="72C2B704-48BD-4F11-A49C-D0805D9EB4E4"
           Compressed="yes"
+          IconSourceFile="$(var.SolutionDir)\installer\assets\iskra.ico"
           DisableModify="button">
 
     <BootstrapperApplication>
+      <!-- Burn renders its own theme, not the MSI dialog set. It takes the
+           square mark only; banner.bmp / dialog.bmp belong to the MSI UI. -->
       <bal:WixStandardBootstrapperApplication
           Theme="hyperlinkLicense"
+          LogoFile="$(var.SolutionDir)\installer\assets\logo.png"
           LicenseUrl=""
           ShowVersion="yes"
           SuppressOptionsUI="yes" />

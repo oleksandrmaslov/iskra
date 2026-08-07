@@ -10,6 +10,8 @@ catalog metadata, and logs every flash attempt to SQLite.
 > remains lab-ready rather than factory-production-ready until the gates in
 > [`ROADMAP.md`](ROADMAP.md) are closed.
 
+Release history and upgrade notes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Repository layout
 
 ```text

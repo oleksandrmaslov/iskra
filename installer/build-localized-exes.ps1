@@ -1,7 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
     [string] $Version,
-    [string] $AvaloniaVersion = "",
     [string] $Runtime = "win-x64",
     [string] $Configuration = "Release",
     [string] $OutputDirectory = ""
@@ -14,10 +13,6 @@ Set-Location $repoRoot
 $dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
 if (-not (Test-Path -LiteralPath $dotnet)) {
     throw "The repository SDK host was not found at $dotnet"
-}
-
-if ([string]::IsNullOrWhiteSpace($AvaloniaVersion)) {
-    $AvaloniaVersion = "$Version-alpha.1"
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
@@ -95,13 +90,13 @@ Publish-SingleFile `
     "Iskra.Cli.exe" `
     "Iskra.Cli.exe"
 
-Write-Host "Publishing read-only Avalonia alpha $AvaloniaVersion..." -ForegroundColor Cyan
+Write-Host "Publishing Avalonia $Version..." -ForegroundColor Cyan
 Publish-SingleFile `
     "src/Iskra.Desktop/Iskra.Desktop.csproj" `
-    $AvaloniaVersion `
+    $Version `
     "avalonia" `
     "Iskra.Desktop.exe" `
-    "Iskra.Avalonia.Alpha.exe"
+    "Iskra.Avalonia.exe"
 
 Remove-Item -LiteralPath $staging -Recurse -Force
 
@@ -119,11 +114,16 @@ Iskra Windows executable bundle
 
 WPF:       Iskra.exe $Version (supported Windows variant)
 CLI:       Iskra.Cli.exe $Version
-Avalonia:  Iskra.Avalonia.Alpha.exe $AvaloniaVersion (alpha, read-only; flashing disabled)
+Avalonia:  Iskra.Avalonia.exe $Version (cross-platform frontend; flashing enabled,
+           hardware-in-the-loop acceptance still outstanding)
 Runtime:   $Runtime, self-contained, single-file
 .NET SDK:  $sdkVersion
 Commit:    $gitCommit ($gitState working tree)
 Built UTC: $builtAt
+
+The Windows MSI and setup EXE deliberately install only Iskra.exe and
+Iskra.Cli.exe. Iskra.Avalonia.exe ships in this zip only, until it has a bench
+HIL pass on every target platform.
 
 This is a local unsigned engineering release bundle. It is not an
 Authenticode-signed factory release and does not claim Sprint 9 acceptance.
@@ -136,7 +136,7 @@ Authenticode-signed factory release and does not claim Sprint 9 acceptance.
 $checksumFiles = @(
     "Iskra.exe",
     "Iskra.Cli.exe",
-    "Iskra.Avalonia.Alpha.exe",
+    "Iskra.Avalonia.exe",
     "examples\catalog.json",
     "examples\catalog.json.sig",
     "BUNDLE-MANIFEST.txt"

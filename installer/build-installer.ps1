@@ -220,6 +220,7 @@ wix build `
     -d "AppVersion=$Version" `
     -d "IskraMsi=$msiPath" `
     -d "ArmToolchainMsi=$armToolchainMsi" `
+    -d "SolutionDir=$repoRoot" `
     -ext WixToolset.BootstrapperApplications.wixext `
     -ext WixToolset.Util.wixext `
     -arch x64 `

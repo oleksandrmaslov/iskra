@@ -5,7 +5,7 @@ namespace Iskra.Desktop;
 
 public sealed record LanguageOption(string Code, string DisplayName);
 
-public static class DesktopLocalization
+public static partial class DesktopLocalization
 {
     public const string DefaultLanguageCode = IskraLanguages.Ukrainian;
 
@@ -16,13 +16,22 @@ public static class DesktopLocalization
         new(IskraLanguages.German, "Deutsch"),
     ];
 
-    private static readonly Lazy<IReadOnlyDictionary<string, DesktopText>> Catalogs = new(() =>
+    // Built lazily and from two parts per language: the operator-facing core in
+    // this file, plus the Settings/auth/maintenance strings in the sibling
+    // partial. Lazy construction also guarantees both static arrays are
+    // initialized regardless of which partial the compiler emits first.
+    private static readonly Lazy<IReadOnlyDictionary<string, DesktopText>> Catalogs = new(BuildCatalogs);
+
+    private static IReadOnlyDictionary<string, DesktopText> BuildCatalogs() =>
         new Dictionary<string, DesktopText>(StringComparer.OrdinalIgnoreCase)
         {
-            [IskraLanguages.Ukrainian] = new(IskraLanguages.Ukrainian, Ukrainian!),
-            [IskraLanguages.English] = new(IskraLanguages.English, English!),
-            [IskraLanguages.German] = new(IskraLanguages.German, German!),
-        });
+            [IskraLanguages.Ukrainian] =
+                new(IskraLanguages.Ukrainian, CreateCatalog([.. UkrainianCore, .. UkrainianExtended])),
+            [IskraLanguages.English] =
+                new(IskraLanguages.English, CreateCatalog([.. EnglishCore, .. EnglishExtended])),
+            [IskraLanguages.German] =
+                new(IskraLanguages.German, CreateCatalog([.. GermanCore, .. GermanExtended])),
+        };
 
     public static string Normalize(string? code) => IskraLanguages.NormalizeOrDefault(code);
 
@@ -30,7 +39,7 @@ public static class DesktopLocalization
 
     public static CultureInfo CultureFor(string? code) => IskraLanguages.CultureFor(code);
 
-    private static readonly IReadOnlyDictionary<DesktopTextKey, string> Ukrainian = CreateCatalog(
+    private static readonly (DesktopTextKey Key, string Value)[] UkrainianCore =
     [
         (DesktopTextKey.WindowTitle, "Iskra — станція прошивання"),
         (DesktopTextKey.Tagline, "Безпечне прошивання та перевірка пристроїв"),
@@ -38,15 +47,42 @@ public static class DesktopLocalization
         (DesktopTextKey.Refresh, "Перевірити ще раз"),
         (DesktopTextKey.SignedCatalog, "ПІДПИСАНИЙ КАТАЛОГ"),
         (DesktopTextKey.OperatorChange, "Зміна оператора"),
-        (DesktopTextKey.OperatorMigration, "Оператор і виріб будуть підключені до спільного процесу в наступному етапі міграції."),
         (DesktopTextKey.Operator, "ОПЕРАТОР"),
         (DesktopTextKey.OperatorPlaceholder, "Ім’я оператора"),
         (DesktopTextKey.Product, "ВИРІБ"),
+        (DesktopTextKey.Batch, "ПАРТІЯ"),
+        (DesktopTextKey.BatchPlaceholder, "ID партії"),
+        (DesktopTextKey.Version, "ВЕРСІЯ"),
         (DesktopTextKey.FlashAction, "ПРОШИТИ"),
-        (DesktopTextKey.FlashDisabledUntilParity, "Кнопка активується після перенесення повного процесу прошивання та HIL-перевірки."),
+        (DesktopTextKey.GdbDetails, "Деталі gdb"),
+        (DesktopTextKey.GdbLogEmpty, "Вивід gdb з’явиться тут після запуску прошивання."),
+        (DesktopTextKey.FlashReady, "Готово до прошивання"),
+        (DesktopTextKey.FlashReadyBatchOn, "Натисніть ПРОШИТИ. Партію буде зафіксовано за першою спробою."),
+        (DesktopTextKey.FlashReadyBatchOff, "Натисніть ПРОШИТИ. Режим партій вимкнено."),
+        (DesktopTextKey.FlashDownloading, "Завантаження прошивки…"),
+        (DesktopTextKey.FlashRunning, "Прошивання…"),
+        (DesktopTextKey.FlashPass, "✓ УСПІШНО"),
+        (DesktopTextKey.FlashDuration, "Виконано за {0} мс"),
+        (DesktopTextKey.ErrorDetails, "деталі помилки"),
+        (DesktopTextKey.ReadyProbe, "Підключіть Black Magic Probe"),
+        (DesktopTextKey.ReadyProbeDetail, "Потрібен рівно один програматор. Перевірте USB-кабель і натисніть «Оновити»."),
+        (DesktopTextKey.ReadyGdb, "arm-none-eabi-gdb не знайдено"),
+        (DesktopTextKey.ReadyGdbDetail, "Встановіть Arm GNU Toolchain або вкажіть шлях у налаштуваннях."),
+        (DesktopTextKey.ReadyCatalog, "Каталог не завантажено"),
+        (DesktopTextKey.ReadyCatalogDetail, "Перевірте шлях до каталогу та його підпис у налаштуваннях."),
+        (DesktopTextKey.ReadyOperator, "Введіть ім’я оператора"),
+        (DesktopTextKey.ReadyOperatorDetail, "Ім’я потрапляє в журнал кожної спроби."),
+        (DesktopTextKey.ReadyBatch, "Введіть ID партії"),
+        (DesktopTextKey.ReadyBatchDetail, "Режим партій увімкнено в налаштуваннях."),
+        (DesktopTextKey.ReadySelection, "Виберіть виріб і версію"),
+        (DesktopTextKey.BatchLocked, "Партію зафіксовано: {0} v{1} · sha256 {2}"),
+        (DesktopTextKey.AuthHintRemote, "Ця версія завантажується з GitHub. Увійдіть на станції через WPF-застосунок або «Iskra.Cli --login»."),
+        (DesktopTextKey.HotkeyHint, "Гаряча клавіша: {0}"),
+        (DesktopTextKey.HotkeyTooltip, "Запускає прошивання. Гаряча клавіша: {0}"),
+        (DesktopTextKey.HotkeySpace, "Пробіл"),
         (DesktopTextKey.TabHistory, "Історія"),
         (DesktopTextKey.LocalLog, "Локальний журнал"),
-        (DesktopTextKey.HistoryMigration, "SQLite залишається локальним джерелом істини. У цьому першому зрізі Avalonia журнал відкривається лише для перевірки готовності; таблиця та експорт мігрують далі."),
+        (DesktopTextKey.HistoryMigration, "SQLite залишається локальним джерелом істини. Спроби прошивання з цього інтерфейсу пишуться в ту саму базу, що й у WPF; експорт CSV мігрує далі."),
         (DesktopTextKey.FileStatus, "СТАН ФАЙЛУ"),
         (DesktopTextKey.TabCatalog, "Каталог"),
         (DesktopTextKey.AvailableProducts, "Доступні вироби"),
@@ -77,7 +113,6 @@ public static class DesktopLocalization
         (DesktopTextKey.LogShippingDisabled, "Вимкнено в конфігурації"),
         (DesktopTextKey.BatchEnabled, "Увімкнено — ідентифікатор буде обов’язковим"),
         (DesktopTextKey.BatchDisabled, "Вимкнено — локальне блокування партій не застосовується"),
-        (DesktopTextKey.MigrationSafetyNotice, "Це перший безпечний зріз перенесення інтерфейсу. Він уже перевіряє BMP, GDB і каталог через Iskra.Core, але навмисно не запускає прошивання, доки кросплатформний процес не матиме тестового та апаратного паритету з WPF."),
         (DesktopTextKey.Connected, "Підключено"),
         (DesktopTextKey.SerialNumber, "{0} · серійний № {1}"),
         (DesktopTextKey.BlockedProbes, "Заблоковано: зондів — {0}"),
@@ -104,7 +139,7 @@ public static class DesktopLocalization
         (DesktopTextKey.FileCreateLater, "Файл буде створено після першої спроби прошивання"),
         (DesktopTextKey.StationReady, "Станція готова за базовими перевірками"),
         (DesktopTextKey.StationPartial, "Готовність станції: {0}/3"),
-        (DesktopTextKey.StationReadyDetail, "BMP, ARM GDB і підписаний каталог доступні. Саме прошивання в Avalonia залишено заблокованим до HIL-паритету."),
+        (DesktopTextKey.StationReadyDetail, "BMP, ARM GDB і підписаний каталог доступні. Апаратну (HIL) приймальну перевірку кросплатформного інтерфейсу ще не завершено."),
         (DesktopTextKey.Attention, "Потрібна увага: {0}."),
         (DesktopTextKey.CheckedAt, "Перевірено {0}"),
         (DesktopTextKey.Megabytes, "{0} МБ"),
@@ -112,9 +147,9 @@ public static class DesktopLocalization
         (DesktopTextKey.Bytes, "{0} Б"),
         (DesktopTextKey.TargetSummary, "{0} · {1} КБ"),
         (DesktopTextKey.ReleaseSummary, "v{0} · релізів: {1}"),
-    ]);
+    ];
 
-    private static readonly IReadOnlyDictionary<DesktopTextKey, string> English = CreateCatalog(
+    private static readonly (DesktopTextKey Key, string Value)[] EnglishCore =
     [
         (DesktopTextKey.WindowTitle, "Iskra — flashing station"),
         (DesktopTextKey.Tagline, "Safe device flashing and verification"),
@@ -122,15 +157,42 @@ public static class DesktopLocalization
         (DesktopTextKey.Refresh, "Check again"),
         (DesktopTextKey.SignedCatalog, "SIGNED CATALOG"),
         (DesktopTextKey.OperatorChange, "Operator change"),
-        (DesktopTextKey.OperatorMigration, "The operator and product will be connected to the shared workflow in the next migration stage."),
         (DesktopTextKey.Operator, "OPERATOR"),
         (DesktopTextKey.OperatorPlaceholder, "Operator name"),
         (DesktopTextKey.Product, "PRODUCT"),
+        (DesktopTextKey.Batch, "BATCH"),
+        (DesktopTextKey.BatchPlaceholder, "Batch ID"),
+        (DesktopTextKey.Version, "VERSION"),
         (DesktopTextKey.FlashAction, "FLASH"),
-        (DesktopTextKey.FlashDisabledUntilParity, "The button will be enabled after the complete flashing workflow has been migrated and HIL-verified."),
+        (DesktopTextKey.GdbDetails, "gdb details"),
+        (DesktopTextKey.GdbLogEmpty, "gdb output appears here once flashing starts."),
+        (DesktopTextKey.FlashReady, "Ready to flash"),
+        (DesktopTextKey.FlashReadyBatchOn, "Press FLASH. The batch locks on the first attempt."),
+        (DesktopTextKey.FlashReadyBatchOff, "Press FLASH. Batch mode is disabled."),
+        (DesktopTextKey.FlashDownloading, "Downloading firmware…"),
+        (DesktopTextKey.FlashRunning, "Flashing…"),
+        (DesktopTextKey.FlashPass, "✓ PASS"),
+        (DesktopTextKey.FlashDuration, "Completed in {0} ms"),
+        (DesktopTextKey.ErrorDetails, "error details"),
+        (DesktopTextKey.ReadyProbe, "Connect the Black Magic Probe"),
+        (DesktopTextKey.ReadyProbeDetail, "Exactly one probe is required. Check the USB cable and press Refresh."),
+        (DesktopTextKey.ReadyGdb, "arm-none-eabi-gdb was not found"),
+        (DesktopTextKey.ReadyGdbDetail, "Install Arm GNU Toolchain or set the path in Settings."),
+        (DesktopTextKey.ReadyCatalog, "The catalog is not loaded"),
+        (DesktopTextKey.ReadyCatalogDetail, "Check the catalog path and its signature in Settings."),
+        (DesktopTextKey.ReadyOperator, "Enter the operator name"),
+        (DesktopTextKey.ReadyOperatorDetail, "The name is written to the log of every attempt."),
+        (DesktopTextKey.ReadyBatch, "Enter the batch ID"),
+        (DesktopTextKey.ReadyBatchDetail, "Batch mode is enabled in Settings."),
+        (DesktopTextKey.ReadySelection, "Select a product and version"),
+        (DesktopTextKey.BatchLocked, "Batch locked to {0} v{1} · sha256 {2}"),
+        (DesktopTextKey.AuthHintRemote, "This release downloads from GitHub. Sign in on this station through the WPF app or with \"Iskra.Cli --login\"."),
+        (DesktopTextKey.HotkeyHint, "Hotkey: {0}"),
+        (DesktopTextKey.HotkeyTooltip, "Starts flashing. Hotkey: {0}"),
+        (DesktopTextKey.HotkeySpace, "Space"),
         (DesktopTextKey.TabHistory, "History"),
         (DesktopTextKey.LocalLog, "Local log"),
-        (DesktopTextKey.HistoryMigration, "SQLite remains the local source of truth. In this first Avalonia slice, the log is opened only for readiness checks; the table and export will migrate next."),
+        (DesktopTextKey.HistoryMigration, "SQLite remains the local source of truth. Attempts made from this frontend are written to the same database as WPF; CSV export migrates next."),
         (DesktopTextKey.FileStatus, "FILE STATUS"),
         (DesktopTextKey.TabCatalog, "Catalog"),
         (DesktopTextKey.AvailableProducts, "Available products"),
@@ -161,7 +223,6 @@ public static class DesktopLocalization
         (DesktopTextKey.LogShippingDisabled, "Disabled in the configuration"),
         (DesktopTextKey.BatchEnabled, "Enabled — an identifier will be required"),
         (DesktopTextKey.BatchDisabled, "Disabled — local batch locking is not applied"),
-        (DesktopTextKey.MigrationSafetyNotice, "This is the first safe interface-migration slice. It already checks BMP, GDB, and the catalog through Iskra.Core, but deliberately does not start flashing until the cross-platform workflow has test and hardware parity with WPF."),
         (DesktopTextKey.Connected, "Connected"),
         (DesktopTextKey.SerialNumber, "{0} · serial no. {1}"),
         (DesktopTextKey.BlockedProbes, "Blocked: {0} probes"),
@@ -188,7 +249,7 @@ public static class DesktopLocalization
         (DesktopTextKey.FileCreateLater, "The file will be created after the first flashing attempt"),
         (DesktopTextKey.StationReady, "Station ready by basic checks"),
         (DesktopTextKey.StationPartial, "Station readiness: {0}/3"),
-        (DesktopTextKey.StationReadyDetail, "BMP, ARM GDB, and the signed catalog are available. Flashing in Avalonia remains blocked until HIL parity is reached."),
+        (DesktopTextKey.StationReadyDetail, "BMP, ARM GDB, and the signed catalog are available. Hardware-in-the-loop acceptance of the cross-platform UI is still outstanding."),
         (DesktopTextKey.Attention, "Needs attention: {0}."),
         (DesktopTextKey.CheckedAt, "Checked {0}"),
         (DesktopTextKey.Megabytes, "{0} MB"),
@@ -196,9 +257,9 @@ public static class DesktopLocalization
         (DesktopTextKey.Bytes, "{0} B"),
         (DesktopTextKey.TargetSummary, "{0} · {1} KB"),
         (DesktopTextKey.ReleaseSummary, "v{0} · releases: {1}"),
-    ]);
+    ];
 
-    private static readonly IReadOnlyDictionary<DesktopTextKey, string> German = CreateCatalog(
+    private static readonly (DesktopTextKey Key, string Value)[] GermanCore =
     [
         (DesktopTextKey.WindowTitle, "Iskra — Flash-Station"),
         (DesktopTextKey.Tagline, "Sicheres Flashen und Prüfen von Geräten"),
@@ -206,15 +267,42 @@ public static class DesktopLocalization
         (DesktopTextKey.Refresh, "Erneut prüfen"),
         (DesktopTextKey.SignedCatalog, "SIGNIERTER KATALOG"),
         (DesktopTextKey.OperatorChange, "Bedienerwechsel"),
-        (DesktopTextKey.OperatorMigration, "Bediener und Produkt werden im nächsten Migrationsschritt mit dem gemeinsamen Ablauf verbunden."),
         (DesktopTextKey.Operator, "BEDIENER"),
         (DesktopTextKey.OperatorPlaceholder, "Name des Bedieners"),
         (DesktopTextKey.Product, "PRODUKT"),
+        (DesktopTextKey.Batch, "CHARGE"),
+        (DesktopTextKey.BatchPlaceholder, "Chargen-ID"),
+        (DesktopTextKey.Version, "VERSION"),
         (DesktopTextKey.FlashAction, "FLASHEN"),
-        (DesktopTextKey.FlashDisabledUntilParity, "Die Schaltfläche wird aktiviert, sobald der vollständige Flash-Ablauf migriert und per HIL geprüft wurde."),
+        (DesktopTextKey.GdbDetails, "gdb-Details"),
+        (DesktopTextKey.GdbLogEmpty, "Die gdb-Ausgabe erscheint hier, sobald das Flashen startet."),
+        (DesktopTextKey.FlashReady, "Bereit zum Flashen"),
+        (DesktopTextKey.FlashReadyBatchOn, "FLASHEN drücken. Die Charge wird beim ersten Versuch festgelegt."),
+        (DesktopTextKey.FlashReadyBatchOff, "FLASHEN drücken. Der Chargenmodus ist deaktiviert."),
+        (DesktopTextKey.FlashDownloading, "Firmware wird geladen…"),
+        (DesktopTextKey.FlashRunning, "Flashen läuft…"),
+        (DesktopTextKey.FlashPass, "✓ BESTANDEN"),
+        (DesktopTextKey.FlashDuration, "Abgeschlossen in {0} ms"),
+        (DesktopTextKey.ErrorDetails, "Fehlerdetails"),
+        (DesktopTextKey.ReadyProbe, "Black Magic Probe anschließen"),
+        (DesktopTextKey.ReadyProbeDetail, "Genau eine Sonde ist erforderlich. USB-Kabel prüfen und «Erneut prüfen» drücken."),
+        (DesktopTextKey.ReadyGdb, "arm-none-eabi-gdb nicht gefunden"),
+        (DesktopTextKey.ReadyGdbDetail, "Arm GNU Toolchain installieren oder den Pfad in den Einstellungen setzen."),
+        (DesktopTextKey.ReadyCatalog, "Katalog nicht geladen"),
+        (DesktopTextKey.ReadyCatalogDetail, "Katalogpfad und Signatur in den Einstellungen prüfen."),
+        (DesktopTextKey.ReadyOperator, "Bedienername eingeben"),
+        (DesktopTextKey.ReadyOperatorDetail, "Der Name wird bei jedem Versuch protokolliert."),
+        (DesktopTextKey.ReadyBatch, "Chargen-ID eingeben"),
+        (DesktopTextKey.ReadyBatchDetail, "Der Chargenmodus ist in den Einstellungen aktiviert."),
+        (DesktopTextKey.ReadySelection, "Produkt und Version wählen"),
+        (DesktopTextKey.BatchLocked, "Charge festgelegt auf {0} v{1} · sha256 {2}"),
+        (DesktopTextKey.AuthHintRemote, "Dieses Release wird von GitHub geladen. Melden Sie sich an dieser Station über die WPF-Anwendung oder mit «Iskra.Cli --login» an."),
+        (DesktopTextKey.HotkeyHint, "Tastenkürzel: {0}"),
+        (DesktopTextKey.HotkeyTooltip, "Startet das Flashen. Tastenkürzel: {0}"),
+        (DesktopTextKey.HotkeySpace, "Leertaste"),
         (DesktopTextKey.TabHistory, "Verlauf"),
         (DesktopTextKey.LocalLog, "Lokales Protokoll"),
-        (DesktopTextKey.HistoryMigration, "SQLite bleibt die lokale Quelle der Wahrheit. In diesem ersten Avalonia-Schritt wird das Protokoll nur zur Bereitschaftsprüfung geöffnet; Tabelle und Export folgen."),
+        (DesktopTextKey.HistoryMigration, "SQLite bleibt die lokale Quelle der Wahrheit. Versuche aus dieser Oberfläche werden in dieselbe Datenbank wie bei WPF geschrieben; der CSV-Export folgt."),
         (DesktopTextKey.FileStatus, "DATEISTATUS"),
         (DesktopTextKey.TabCatalog, "Katalog"),
         (DesktopTextKey.AvailableProducts, "Verfügbare Produkte"),
@@ -245,7 +333,6 @@ public static class DesktopLocalization
         (DesktopTextKey.LogShippingDisabled, "In der Konfiguration deaktiviert"),
         (DesktopTextKey.BatchEnabled, "Aktiviert — eine Kennung ist erforderlich"),
         (DesktopTextKey.BatchDisabled, "Deaktiviert — lokale Chargensperre wird nicht angewendet"),
-        (DesktopTextKey.MigrationSafetyNotice, "Dies ist der erste sichere Schritt der Oberflächenmigration. BMP, GDB und Katalog werden bereits über Iskra.Core geprüft; das Flashen bleibt jedoch absichtlich gesperrt, bis der plattformübergreifende Ablauf Test- und Hardwareparität mit WPF erreicht."),
         (DesktopTextKey.Connected, "Verbunden"),
         (DesktopTextKey.SerialNumber, "{0} · Seriennr. {1}"),
         (DesktopTextKey.BlockedProbes, "Gesperrt: {0} Sonden"),
@@ -272,7 +359,7 @@ public static class DesktopLocalization
         (DesktopTextKey.FileCreateLater, "Die Datei wird nach dem ersten Flash-Versuch erstellt"),
         (DesktopTextKey.StationReady, "Station nach Basisprüfungen bereit"),
         (DesktopTextKey.StationPartial, "Stationsbereitschaft: {0}/3"),
-        (DesktopTextKey.StationReadyDetail, "BMP, ARM GDB und der signierte Katalog sind verfügbar. Das Flashen in Avalonia bleibt bis zur HIL-Parität gesperrt."),
+        (DesktopTextKey.StationReadyDetail, "BMP, ARM GDB und der signierte Katalog sind verfügbar. Die Hardware-in-the-Loop-Abnahme der plattformübergreifenden Oberfläche steht noch aus."),
         (DesktopTextKey.Attention, "Eingriff erforderlich: {0}."),
         (DesktopTextKey.CheckedAt, "Geprüft {0}"),
         (DesktopTextKey.Megabytes, "{0} MB"),
@@ -280,7 +367,7 @@ public static class DesktopLocalization
         (DesktopTextKey.Bytes, "{0} B"),
         (DesktopTextKey.TargetSummary, "{0} · {1} KB"),
         (DesktopTextKey.ReleaseSummary, "v{0} · Releases: {1}"),
-    ]);
+    ];
 
     private static IReadOnlyDictionary<DesktopTextKey, string> CreateCatalog(
         IEnumerable<(DesktopTextKey Key, string Value)> entries)
@@ -316,12 +403,35 @@ public sealed class DesktopText
     public string Refresh => Get(DesktopTextKey.Refresh);
     public string SignedCatalog => Get(DesktopTextKey.SignedCatalog);
     public string OperatorChange => Get(DesktopTextKey.OperatorChange);
-    public string OperatorMigration => Get(DesktopTextKey.OperatorMigration);
     public string Operator => Get(DesktopTextKey.Operator);
     public string OperatorPlaceholder => Get(DesktopTextKey.OperatorPlaceholder);
     public string Product => Get(DesktopTextKey.Product);
+    public string Batch => Get(DesktopTextKey.Batch);
+    public string BatchPlaceholder => Get(DesktopTextKey.BatchPlaceholder);
+    public string Version => Get(DesktopTextKey.Version);
     public string FlashAction => Get(DesktopTextKey.FlashAction);
-    public string FlashDisabledUntilParity => Get(DesktopTextKey.FlashDisabledUntilParity);
+    public string GdbDetails => Get(DesktopTextKey.GdbDetails);
+    public string GdbLogEmpty => Get(DesktopTextKey.GdbLogEmpty);
+    public string FlashReady => Get(DesktopTextKey.FlashReady);
+    public string FlashReadyBatchOn => Get(DesktopTextKey.FlashReadyBatchOn);
+    public string FlashReadyBatchOff => Get(DesktopTextKey.FlashReadyBatchOff);
+    public string FlashDownloading => Get(DesktopTextKey.FlashDownloading);
+    public string FlashRunning => Get(DesktopTextKey.FlashRunning);
+    public string FlashPass => Get(DesktopTextKey.FlashPass);
+    public string ErrorDetails => Get(DesktopTextKey.ErrorDetails);
+    public string ReadyProbe => Get(DesktopTextKey.ReadyProbe);
+    public string ReadyProbeDetail => Get(DesktopTextKey.ReadyProbeDetail);
+    public string ReadyGdb => Get(DesktopTextKey.ReadyGdb);
+    public string ReadyGdbDetail => Get(DesktopTextKey.ReadyGdbDetail);
+    public string ReadyCatalog => Get(DesktopTextKey.ReadyCatalog);
+    public string ReadyCatalogDetail => Get(DesktopTextKey.ReadyCatalogDetail);
+    public string ReadyOperator => Get(DesktopTextKey.ReadyOperator);
+    public string ReadyOperatorDetail => Get(DesktopTextKey.ReadyOperatorDetail);
+    public string ReadyBatch => Get(DesktopTextKey.ReadyBatch);
+    public string ReadyBatchDetail => Get(DesktopTextKey.ReadyBatchDetail);
+    public string ReadySelection => Get(DesktopTextKey.ReadySelection);
+    public string AuthHintRemote => Get(DesktopTextKey.AuthHintRemote);
+    public string HotkeySpace => Get(DesktopTextKey.HotkeySpace);
     public string TabHistory => Get(DesktopTextKey.TabHistory);
     public string LocalLog => Get(DesktopTextKey.LocalLog);
     public string HistoryMigration => Get(DesktopTextKey.HistoryMigration);
@@ -355,7 +465,6 @@ public sealed class DesktopText
     public string LogShippingDisabled => Get(DesktopTextKey.LogShippingDisabled);
     public string BatchEnabled => Get(DesktopTextKey.BatchEnabled);
     public string BatchDisabled => Get(DesktopTextKey.BatchDisabled);
-    public string MigrationSafetyNotice => Get(DesktopTextKey.MigrationSafetyNotice);
     public string Connected => Get(DesktopTextKey.Connected);
     public string MultipleBmpIssue => Get(DesktopTextKey.MultipleBmpIssue);
     public string SearchError => Get(DesktopTextKey.SearchError);
@@ -376,6 +485,12 @@ public sealed class DesktopText
     public string StationReady => Get(DesktopTextKey.StationReady);
     public string StationReadyDetail => Get(DesktopTextKey.StationReadyDetail);
 
+    public string FlashDuration(double milliseconds) =>
+        Format(DesktopTextKey.FlashDuration, milliseconds.ToString("F0", Culture));
+    public string BatchLocked(string productId, string version, string shortSha) =>
+        Format(DesktopTextKey.BatchLocked, productId, version, shortSha);
+    public string HotkeyHint(string key) => Format(DesktopTextKey.HotkeyHint, key);
+    public string HotkeyTooltip(string key) => Format(DesktopTextKey.HotkeyTooltip, key);
     public string SerialNumber(string port, string serial) => Format(DesktopTextKey.SerialNumber, port, serial);
     public string BlockedProbes(int count) => Format(DesktopTextKey.BlockedProbes, count);
     public string LeaveOneBmp(string probeList) => Format(DesktopTextKey.LeaveOneBmp, probeList);
@@ -393,6 +508,140 @@ public sealed class DesktopText
     public string TargetSummary(string partNumber, int flashKb) => Format(DesktopTextKey.TargetSummary, partNumber, flashKb);
     public string ReleaseSummary(string version, int releaseCount) => Format(DesktopTextKey.ReleaseSummary, version, releaseCount);
 
+    // --- extended catalog ---
+    public string Cancel => Get(DesktopTextKey.Cancel);
+    public string ActionRefresh => Get(DesktopTextKey.ActionRefresh);
+    public string ActionSave => Get(DesktopTextKey.ActionSave);
+    public string ActionReset => Get(DesktopTextKey.ActionReset);
+    public string ActionBrowse => Get(DesktopTextKey.ActionBrowse);
+    public string ActionCheck => Get(DesktopTextKey.ActionCheck);
+    public string ActionCheckUpdates => Get(DesktopTextKey.ActionCheckUpdates);
+    public string ActionOpenRelease => Get(DesktopTextKey.ActionOpenRelease);
+    public string ActionUploadNow => Get(DesktopTextKey.ActionUploadNow);
+    public string ActionSignOut => Get(DesktopTextKey.ActionSignOut);
+    public string SettingsSectionCatalog => Get(DesktopTextKey.SettingsSectionCatalog);
+    public string SettingsCatalogPath => Get(DesktopTextKey.SettingsCatalogPath);
+    public string SettingsSignatureRequired => Get(DesktopTextKey.SettingsSignatureRequired);
+    public string SettingsSignatureRequiredContent => Get(DesktopTextKey.SettingsSignatureRequiredContent);
+    public string SettingsSignatureMandatory => Get(DesktopTextKey.SettingsSignatureMandatory);
+    public string SettingsSectionCatalogUpdate => Get(DesktopTextKey.SettingsSectionCatalogUpdate);
+    public string SettingsAutoUpdate => Get(DesktopTextKey.SettingsAutoUpdate);
+    public string SettingsAutoUpdateContent => Get(DesktopTextKey.SettingsAutoUpdateContent);
+    public string SettingsLockedSource => Get(DesktopTextKey.SettingsLockedSource);
+    public string SettingsSectionAppUpdate => Get(DesktopTextKey.SettingsSectionAppUpdate);
+    public string SettingsCurrentVersion => Get(DesktopTextKey.SettingsCurrentVersion);
+    public string SettingsReleases => Get(DesktopTextKey.SettingsReleases);
+    public string SettingsStatus => Get(DesktopTextKey.SettingsStatus);
+    public string SettingsSectionGitHubAuth => Get(DesktopTextKey.SettingsSectionGitHubAuth);
+    public string SettingsSectionDebugger => Get(DesktopTextKey.SettingsSectionDebugger);
+    public string SettingsGdbPath => Get(DesktopTextKey.SettingsGdbPath);
+    public string SettingsSwdFrequency => Get(DesktopTextKey.SettingsSwdFrequency);
+    public string SettingsPower => Get(DesktopTextKey.SettingsPower);
+    public string SettingsPowerExternal => Get(DesktopTextKey.SettingsPowerExternal);
+    public string SettingsPowerProbe => Get(DesktopTextKey.SettingsPowerProbe);
+    public string SettingsConnectReset => Get(DesktopTextKey.SettingsConnectReset);
+    public string SettingsConnectResetContent => Get(DesktopTextKey.SettingsConnectResetContent);
+    public string SettingsTimeout => Get(DesktopTextKey.SettingsTimeout);
+    public string SettingsSectionLogStation => Get(DesktopTextKey.SettingsSectionLogStation);
+    public string SettingsLogFile => Get(DesktopTextKey.SettingsLogFile);
+    public string SettingsStationId => Get(DesktopTextKey.SettingsStationId);
+    public string SettingsSectionOperatorUi => Get(DesktopTextKey.SettingsSectionOperatorUi);
+    public string SettingsHotkey => Get(DesktopTextKey.SettingsHotkey);
+    public string SettingsSectionCloudLog => Get(DesktopTextKey.SettingsSectionCloudLog);
+    public string SettingsCloudAutoUpload => Get(DesktopTextKey.SettingsCloudAutoUpload);
+    public string SettingsCloudInterval => Get(DesktopTextKey.SettingsCloudInterval);
+    public string SettingsCloudPrivateKey => Get(DesktopTextKey.SettingsCloudPrivateKey);
+    public string SettingsBatches => Get(DesktopTextKey.SettingsBatches);
+    public string SettingsBatchesContent => Get(DesktopTextKey.SettingsBatchesContent);
+    public string SettingsRepository => Get(DesktopTextKey.SettingsRepository);
+    public string HotkeyDisabled => Get(DesktopTextKey.HotkeyDisabled);
+    public string SettingsAutoSaveNote => Get(DesktopTextKey.SettingsAutoSaveNote);
+    public string SettingsSaved => Get(DesktopTextKey.SettingsSaved);
+    public string SettingsUnsaved => Get(DesktopTextKey.SettingsUnsaved);
+    public string SettingsNoChanges => Get(DesktopTextKey.SettingsNoChanges);
+    public string SettingsResetNotice => Get(DesktopTextKey.SettingsResetNotice);
+    public string DialogCatalogTitle => Get(DesktopTextKey.DialogCatalogTitle);
+    public string DialogFilterCatalog => Get(DesktopTextKey.DialogFilterCatalog);
+    public string DialogGdbTitle => Get(DesktopTextKey.DialogGdbTitle);
+    public string DialogFilterGdb => Get(DesktopTextKey.DialogFilterGdb);
+    public string DialogLogTitle => Get(DesktopTextKey.DialogLogTitle);
+    public string DialogFilterSqlite => Get(DesktopTextKey.DialogFilterSqlite);
+    public string DialogPemTitle => Get(DesktopTextKey.DialogPemTitle);
+    public string DialogFilterPem => Get(DesktopTextKey.DialogFilterPem);
+    public string DialogExportTitle => Get(DesktopTextKey.DialogExportTitle);
+    public string DialogFilterCsv => Get(DesktopTextKey.DialogFilterCsv);
+    public string DialogUnavailable => Get(DesktopTextKey.DialogUnavailable);
+    public string AuthSignIn => Get(DesktopTextKey.AuthSignIn);
+    public string AuthUnsupportedPlatform => Get(DesktopTextKey.AuthUnsupportedPlatform);
+    public string AuthClientMissing => Get(DesktopTextKey.AuthClientMissing);
+    public string AuthNotSignedIn => Get(DesktopTextKey.AuthNotSignedIn);
+    public string AuthSessionExpired => Get(DesktopTextKey.AuthSessionExpired);
+    public string AuthAccessValid => Get(DesktopTextKey.AuthAccessValid);
+    public string AuthAccessRefresh => Get(DesktopTextKey.AuthAccessRefresh);
+    public string DeviceTitle => Get(DesktopTextKey.DeviceTitle);
+    public string DeviceStep1 => Get(DesktopTextKey.DeviceStep1);
+    public string DeviceStep2 => Get(DesktopTextKey.DeviceStep2);
+    public string DeviceOpenBrowser => Get(DesktopTextKey.DeviceOpenBrowser);
+    public string DeviceCopyCode => Get(DesktopTextKey.DeviceCopyCode);
+    public string DeviceWaiting => Get(DesktopTextKey.DeviceWaiting);
+    public string DeviceCodeCopied => Get(DesktopTextKey.DeviceCodeCopied);
+    public string DeviceAccessDenied => Get(DesktopTextKey.DeviceAccessDenied);
+    public string DeviceCodeExpired => Get(DesktopTextKey.DeviceCodeExpired);
+    public string UpdateChecking => Get(DesktopTextKey.UpdateChecking);
+    public string CatalogNoRelease => Get(DesktopTextKey.CatalogNoRelease);
+    public string CatalogNetworkError => Get(DesktopTextKey.CatalogNetworkError);
+    public string CatalogBadSignature => Get(DesktopTextKey.CatalogBadSignature);
+    public string CatalogAssetsMissing => Get(DesktopTextKey.CatalogAssetsMissing);
+    public string CatalogParseError => Get(DesktopTextKey.CatalogParseError);
+    public string CatalogSourceNotAllowed => Get(DesktopTextKey.CatalogSourceNotAllowed);
+    public string CatalogRollbackRejected => Get(DesktopTextKey.CatalogRollbackRejected);
+    public string AppUpToDate => Get(DesktopTextKey.AppUpToDate);
+    public string AppNoRelease => Get(DesktopTextKey.AppNoRelease);
+    public string AppUpdateParseError => Get(DesktopTextKey.AppUpdateParseError);
+    public string CloudDisabledShort => Get(DesktopTextKey.CloudDisabledShort);
+    public string CloudDisabledDetail => Get(DesktopTextKey.CloudDisabledDetail);
+    public string CloudUnconfiguredShort => Get(DesktopTextKey.CloudUnconfiguredShort);
+    public string CloudUnconfiguredDetail => Get(DesktopTextKey.CloudUnconfiguredDetail);
+    public string CloudEmptyShort => Get(DesktopTextKey.CloudEmptyShort);
+    public string CloudEmptyDetail => Get(DesktopTextKey.CloudEmptyDetail);
+    public string CloudSyncedShort => Get(DesktopTextKey.CloudSyncedShort);
+    public string CloudErrorShort => Get(DesktopTextKey.CloudErrorShort);
+    public string CloudUploadedAll => Get(DesktopTextKey.CloudUploadedAll);
+    public string CloudEnableFirst => Get(DesktopTextKey.CloudEnableFirst);
+    public string CloudUploading => Get(DesktopTextKey.CloudUploading);
+    public string HistoryExportBatch => Get(DesktopTextKey.HistoryExportBatch);
+    public string HistoryExportAll => Get(DesktopTextKey.HistoryExportAll);
+    public string ExportBatchesDisabled => Get(DesktopTextKey.ExportBatchesDisabled);
+    public string ExportBatchRequired => Get(DesktopTextKey.ExportBatchRequired);
+    public string ExportNoDatabase => Get(DesktopTextKey.ExportNoDatabase);
+
+    public string SettingsInvalidField(string field) => Format(DesktopTextKey.SettingsInvalidField, field);
+    public string SettingsSaveFailed(string diagnostic) => Format(DesktopTextKey.SettingsSaveFailed, diagnostic);
+    public string AuthSignedIn(string access, string until) => Format(DesktopTextKey.AuthSignedIn, access, until);
+    public string AuthTokenCorrupt(string message) => Format(DesktopTextKey.AuthTokenCorrupt, message);
+    public string AuthDeviceCodeFailed(string message) => Format(DesktopTextKey.AuthDeviceCodeFailed, message);
+    public string AuthSaveFailed(string message) => Format(DesktopTextKey.AuthSaveFailed, message);
+    public string AuthDeleteFailed(string message) => Format(DesktopTextKey.AuthDeleteFailed, message);
+    public string AuthRefreshFailed(string message) => Format(DesktopTextKey.AuthRefreshFailed, message);
+    public string DeviceCopyFailed(string message) => Format(DesktopTextKey.DeviceCopyFailed, message);
+    public string DeviceBrowserFailed(string message) => Format(DesktopTextKey.DeviceBrowserFailed, message);
+    public string DeviceError(string message) => Format(DesktopTextKey.DeviceError, message);
+    public string CatalogUpdated(string tag) => Format(DesktopTextKey.CatalogUpdated, tag);
+    public string CatalogUpToDate(string tag) => Format(DesktopTextKey.CatalogUpToDate, tag);
+    public string AppUpdateAvailable(string version) => Format(DesktopTextKey.AppUpdateAvailable, version);
+    public string CloudQueuedShort(int pending) => Format(DesktopTextKey.CloudQueuedShort, pending);
+    public string CloudRowsWaiting(int pending) => Format(DesktopTextKey.CloudRowsWaiting, pending);
+    public string CloudKeyMissing(string path) => Format(DesktopTextKey.CloudKeyMissing, path);
+    public string CloudUploadReport(int rows, int created, int updated, int leftover) =>
+        Format(DesktopTextKey.CloudUploadReport, rows, created, updated, leftover);
+    public string RecentAttempts(int count) => Format(DesktopTextKey.RecentAttempts, count);
+    public string HistoryBatchEmpty(string batchId) => Format(DesktopTextKey.HistoryBatchEmpty, batchId);
+    public string HistoryBatchCounts(string batchId, int total, int pass, int fail, double passRate) =>
+        Format(DesktopTextKey.HistoryBatchCounts, batchId, total, pass, fail, passRate.ToString("P1", Culture));
+    public string HistoryNeedBatch(int rows) => Format(DesktopTextKey.HistoryNeedBatch, rows);
+    public string HistoryNoBatches(int rows) => Format(DesktopTextKey.HistoryNoBatches, rows);
+    public string ExportDone(int rows, string path) => Format(DesktopTextKey.ExportDone, rows, path);
+
     private string Get(DesktopTextKey key) => _values[key];
     private string Format(DesktopTextKey key, params object[] arguments) =>
         string.Format(Culture, Get(key), arguments);
@@ -406,12 +655,39 @@ internal enum DesktopTextKey
     Refresh,
     SignedCatalog,
     OperatorChange,
-    OperatorMigration,
     Operator,
     OperatorPlaceholder,
     Product,
+    Batch,
+    BatchPlaceholder,
+    Version,
     FlashAction,
-    FlashDisabledUntilParity,
+    GdbDetails,
+    GdbLogEmpty,
+    FlashReady,
+    FlashReadyBatchOn,
+    FlashReadyBatchOff,
+    FlashDownloading,
+    FlashRunning,
+    FlashPass,
+    FlashDuration,
+    ErrorDetails,
+    ReadyProbe,
+    ReadyProbeDetail,
+    ReadyGdb,
+    ReadyGdbDetail,
+    ReadyCatalog,
+    ReadyCatalogDetail,
+    ReadyOperator,
+    ReadyOperatorDetail,
+    ReadyBatch,
+    ReadyBatchDetail,
+    ReadySelection,
+    BatchLocked,
+    AuthHintRemote,
+    HotkeyHint,
+    HotkeyTooltip,
+    HotkeySpace,
     TabHistory,
     LocalLog,
     HistoryMigration,
@@ -445,7 +721,6 @@ internal enum DesktopTextKey
     LogShippingDisabled,
     BatchEnabled,
     BatchDisabled,
-    MigrationSafetyNotice,
     Connected,
     SerialNumber,
     BlockedProbes,
@@ -480,4 +755,135 @@ internal enum DesktopTextKey
     Bytes,
     TargetSummary,
     ReleaseSummary,
+
+    // --- extended catalog (DesktopLocalization.Extended.cs) ---
+    Cancel,
+    ActionRefresh,
+    ActionSave,
+    ActionReset,
+    ActionBrowse,
+    ActionCheck,
+    ActionCheckUpdates,
+    ActionOpenRelease,
+    ActionUploadNow,
+    ActionSignOut,
+    SettingsSectionCatalog,
+    SettingsCatalogPath,
+    SettingsSignatureRequired,
+    SettingsSignatureRequiredContent,
+    SettingsSignatureMandatory,
+    SettingsSectionCatalogUpdate,
+    SettingsAutoUpdate,
+    SettingsAutoUpdateContent,
+    SettingsLockedSource,
+    SettingsSectionAppUpdate,
+    SettingsCurrentVersion,
+    SettingsReleases,
+    SettingsStatus,
+    SettingsSectionGitHubAuth,
+    SettingsSectionDebugger,
+    SettingsGdbPath,
+    SettingsSwdFrequency,
+    SettingsPower,
+    SettingsPowerExternal,
+    SettingsPowerProbe,
+    SettingsConnectReset,
+    SettingsConnectResetContent,
+    SettingsTimeout,
+    SettingsSectionLogStation,
+    SettingsLogFile,
+    SettingsStationId,
+    SettingsSectionOperatorUi,
+    SettingsHotkey,
+    SettingsSectionCloudLog,
+    SettingsCloudAutoUpload,
+    SettingsCloudInterval,
+    SettingsCloudPrivateKey,
+    SettingsBatches,
+    SettingsBatchesContent,
+    SettingsRepository,
+    HotkeyDisabled,
+    SettingsAutoSaveNote,
+    SettingsSaved,
+    SettingsUnsaved,
+    SettingsNoChanges,
+    SettingsResetNotice,
+    SettingsInvalidField,
+    SettingsSaveFailed,
+    DialogCatalogTitle,
+    DialogFilterCatalog,
+    DialogGdbTitle,
+    DialogFilterGdb,
+    DialogLogTitle,
+    DialogFilterSqlite,
+    DialogPemTitle,
+    DialogFilterPem,
+    DialogExportTitle,
+    DialogFilterCsv,
+    DialogUnavailable,
+    AuthSignIn,
+    AuthUnsupportedPlatform,
+    AuthClientMissing,
+    AuthNotSignedIn,
+    AuthSessionExpired,
+    AuthAccessValid,
+    AuthAccessRefresh,
+    AuthSignedIn,
+    AuthTokenCorrupt,
+    AuthDeviceCodeFailed,
+    AuthSaveFailed,
+    AuthDeleteFailed,
+    AuthRefreshFailed,
+    DeviceTitle,
+    DeviceStep1,
+    DeviceStep2,
+    DeviceOpenBrowser,
+    DeviceCopyCode,
+    DeviceWaiting,
+    DeviceCodeCopied,
+    DeviceCopyFailed,
+    DeviceBrowserFailed,
+    DeviceAccessDenied,
+    DeviceCodeExpired,
+    DeviceError,
+    UpdateChecking,
+    CatalogUpdated,
+    CatalogUpToDate,
+    CatalogNoRelease,
+    CatalogNetworkError,
+    CatalogBadSignature,
+    CatalogAssetsMissing,
+    CatalogParseError,
+    CatalogSourceNotAllowed,
+    CatalogRollbackRejected,
+    AppUpdateAvailable,
+    AppUpToDate,
+    AppNoRelease,
+    AppUpdateParseError,
+    CloudDisabledShort,
+    CloudDisabledDetail,
+    CloudUnconfiguredShort,
+    CloudUnconfiguredDetail,
+    CloudEmptyShort,
+    CloudEmptyDetail,
+    CloudSyncedShort,
+    CloudQueuedShort,
+    CloudErrorShort,
+    CloudUploadedAll,
+    CloudRowsWaiting,
+    CloudEnableFirst,
+    CloudKeyMissing,
+    CloudUploading,
+    CloudUploadReport,
+    HistoryExportBatch,
+    HistoryExportAll,
+    RecentAttempts,
+    HistoryBatchEmpty,
+    HistoryBatchCounts,
+    HistoryNeedBatch,
+    HistoryNoBatches,
+    ExportDone,
+    ExportBatchesDisabled,
+    ExportBatchRequired,
+    ExportNoDatabase,
 }

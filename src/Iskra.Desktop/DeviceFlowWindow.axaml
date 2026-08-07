@@ -1,0 +1,50 @@
+<Window
+    x:Class="Iskra.Desktop.DeviceFlowWindow"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Width="560"
+    Height="430"
+    CanResize="False"
+    WindowStartupLocation="CenterOwner"
+    Background="#FFF4F6F9"
+    mc:Ignorable="d">
+
+  <StackPanel Margin="28,24" Spacing="14">
+    <TextBlock x:Name="TitleText"
+               FontSize="21" FontWeight="SemiBold" Foreground="#FF162033"
+               TextWrapping="Wrap" />
+
+    <TextBlock x:Name="Step1Text" Foreground="#FF5F6B7A" TextWrapping="Wrap" />
+
+    <Border Background="White" BorderBrush="#FFD7DEE8" BorderThickness="1"
+            CornerRadius="8" Padding="14,10">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+        <SelectableTextBlock Grid.Column="0" x:Name="VerificationUrl"
+                             VerticalAlignment="Center" FontSize="15"
+                             Foreground="#FF1B5FCC" TextWrapping="Wrap" />
+        <Button Grid.Column="1" x:Name="OpenBrowserButton" Padding="14,6"
+                Click="OpenBrowser_Click" />
+      </Grid>
+    </Border>
+
+    <TextBlock x:Name="Step2Text" Foreground="#FF5F6B7A" TextWrapping="Wrap" />
+
+    <Border Background="#FF162033" CornerRadius="8" Padding="18,14">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+        <SelectableTextBlock Grid.Column="0" x:Name="UserCode"
+                             FontSize="38" FontWeight="Bold" Foreground="White"
+                             FontFamily="Cascadia Mono,Consolas,DejaVu Sans Mono,monospace"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <Button Grid.Column="1" x:Name="CopyCodeButton" Padding="14,6"
+                VerticalAlignment="Center" Click="CopyCode_Click" />
+      </Grid>
+    </Border>
+
+    <TextBlock x:Name="StatusText" Foreground="#FF5F6B7A" TextWrapping="Wrap" MinHeight="34" />
+
+    <Button x:Name="CancelButton" HorizontalAlignment="Right" Padding="18,7"
+            Click="Cancel_Click" />
+  </StackPanel>
+</Window>

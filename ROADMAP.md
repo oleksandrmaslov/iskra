@@ -126,22 +126,35 @@ until secure-store adapters exist.
 
 ### 8.2 — Avalonia operator UI redesign
 
-**Alpha started:** `src/Iskra.Desktop` provides the localized four-tab shell,
-shared read-only readiness checks, and real recent-history rows. The title and
-header identify it as an alpha with flashing disabled. Its only settings write
-is the shared narrow language update, which reloads the latest file before the
-atomic save. No Windows/Linux/macOS visual, workflow, packaging, or HIL parity
-is claimed by this slice.
+**Functional parity landed (2026-08-07, released as 2.0.0):** `src/Iskra.Desktop`
+executes the same `FlashWorkflow` transaction as WPF — giant PASS/FAIL band in
+the WPF palette, full-width FLASH button with the configured hotkey, and a live
+dark gdb console. Gating, pre-request probe rediscovery, batch locking, and
+durable SQLite logging all come from the shared application layer, so no safety
+policy is duplicated in the frontend. Settings are fully editable through
+`SettingsWorkflow` with auto-save on tab change and window close; GitHub Device
+Flow, catalog/app update checks, cloud-log upload, and CSV export are all
+present. The header badge reads "HIL acceptance pending" — the remaining gap is
+bench acceptance and non-Windows packaging, not features.
 
-- Continue `src/Iskra.Desktop` beside `src/Iskra.Wpf` using MVVM/commands.
-- Port the four operator tabs and Device Flow dialog without weakening the
+- ✅ Continue `src/Iskra.Desktop` beside `src/Iskra.Wpf` using MVVM/commands.
+- ✅ Port the four operator tabs and Device Flow dialog without weakening the
   single-action factory flow, giant PASS/FAIL state, hotkey safety, or complete
-  Ukrainian/English/German presentation.
+  Ukrainian/English/German presentation. Done in 2.0.0: Flash tab, PASS/FAIL
+  band, hotkey, gdb console, Device Flow window, editable settings with
+  auto-save, catalog/app update checks, cloud-log upload, and CSV export. The
+  remaining WPF-only surfaces are the read-only catalog browser detail view and
+  the startup background catalog fetch.
+- Remote firmware on Linux/macOS stays fail-closed until an encrypted
+  `ITokenStore` exists for those platforms; the Device Flow window itself is
+  cross-platform but the credential store is not.
 - ✅ Add persisted Ukrainian/English/German selection across WPF and Avalonia,
   plus invocation-level `--lang uk|en|de` for CLI. Keep Ukrainian as the
   compatibility default and keep logs/protocol values language-neutral.
 - Centralize color, spacing, typography, focus, high-contrast, and semantic
-  status resources. Add Avalonia headless UI tests.
+  status resources. Add Avalonia headless UI tests — `MainWindowViewModel` takes
+  all four workflows by constructor injection, so its gating, banner-state, and
+  batch-lock logic is testable without a display; this is the next gap to close.
 - Keep WPF maintained as a supported Windows variant. Avalonia may become the
   cross-platform/default frontend only after Windows behavior parity,
   packaged-app acceptance, and HIL; it does not delete WPF support.
@@ -160,8 +173,17 @@ is claimed by this slice.
 
 - Integrate only the new owner-approved brand pack; the retired
   `design_assets/` files are intentionally deleted.
-- Apply the design system to Avalonia resources, app/window icons, Windows MSI
-  and Burn, Linux desktop icons, macOS ICNS, README, and GitHub social preview.
+- ✅ **Windows installer branding (2026-08-07).** The owner-supplied
+  `docs/wix-banner.png` (493x58) and `docs/wix-dialog.png` (493x312) are
+  converted to `installer/assets/banner.bmp` and `dialog.bmp` — Windows
+  Installer bitmap controls render DIB/BMP only, never PNG — and bound through
+  `WixUIBannerBmp` / `WixUIDialogBmp`. `docs/favicon.ico` ships as
+  `installer/assets/iskra.ico` for `ARPPRODUCTICON`, the Start Menu shortcut,
+  and the Burn bundle icon; a 64x64 `logo.png` is the bootstrapper `LogoFile`.
+  Verified by an MSI smoke build: the embedded `WixUI_Bmp_Banner` and
+  `WixUI_Bmp_Dialog` streams match the generated files byte-for-byte.
+- Apply the design system to Avalonia resources, app/window icons, Linux desktop
+  icons, macOS ICNS, README, and GitHub social preview.
 - The required handoff is listed in
   [`docs/BRANDING_ASSET_REQUIREMENTS.md`](docs/BRANDING_ASSET_REQUIREMENTS.md).
 - Brand colors never replace accessible semantic PASS/FAIL/warning states.

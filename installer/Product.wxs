@@ -64,6 +64,15 @@
     <Launch Condition="Installed OR ARM_GDB_15_PATH OR ARM_GDB_15_X86_PATH OR ARM_GDB_LEGACY_ARM_15_PATH OR ARM_GDB_LEGACY_ARM_15_X86_PATH OR ARM_GDB_LEGACY_ARM_10_PATH OR ARM_GDB_LEGACY_GNU_10_PATH"
             Message="Arm GNU Toolchain (arm-none-eabi-gdb.exe) не знайдено. Запустіть Iskra setup EXE або встановіть Arm GNU Toolchain перед MSI." />
 
+    <!-- Iskra branding. Windows Installer bitmap controls only render DIB/BMP,
+         so installer/assets holds BMP conversions of the PNG sources in docs/.
+         Sizes are fixed by the WixUI dialog set: banner 493x58, dialog 493x312. -->
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.SolutionDir)\installer\assets\banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.SolutionDir)\installer\assets\dialog.bmp" />
+
+    <Icon Id="IskraIcon.ico" SourceFile="$(var.SolutionDir)\installer\assets\iskra.ico" />
+    <Property Id="ARPPRODUCTICON" Value="IskraIcon.ico" />
+
     <!-- Default Wix UI: progress + EULA-less minimal install -->
     <ui:WixUI Id="WixUI_Minimal" />
 
@@ -86,7 +95,8 @@
                   Name="Iskra"
                   Description="Прошивка через Black Magic Probe"
                   Target="[INSTALLFOLDER]Iskra.exe"
-                  WorkingDirectory="INSTALLFOLDER" />
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="IskraIcon.ico" />
         <RegistryValue Root="HKCU"
                        Key="Software\Iskra"
                        Name="installed"
