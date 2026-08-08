@@ -27,8 +27,7 @@ public static class ProbeDiscovery
     {
         if (OperatingSystem.IsWindows()) return EnumerateWindows();
         if (OperatingSystem.IsLinux()) return FindLinux();
-        // macOS flashing already accepts an explicit /dev/cu.usbmodem* path;
-        // metadata-backed auto-discovery is a separate platform adapter.
+        if (OperatingSystem.IsMacOS()) return FindMacOs();
         return Array.Empty<ProbeInfo>();
     }
 
@@ -100,6 +99,65 @@ public static class ProbeDiscovery
         if (!string.IsNullOrWhiteSpace(parentIdPrefix))
             return parentIdPrefix;
         return null;
+    }
+
+    /// <summary>
+    /// Enumerates candidate probe interfaces on macOS.
+    ///
+    /// <para>macOS names a composite CDC device <c>/dev/cu.usbmodem</c> +
+    /// serial + the USB interface number, so Black Magic Probe surfaces as
+    /// <c>…1</c> (interface 0, GDB) and <c>…3</c> (interface 2, UART). That
+    /// trailing digit is the only classification signal available without
+    /// shelling out to <c>ioreg</c>, so it is what this uses.</para>
+    ///
+    /// <para>Unlike the Windows adapter there is no VID/PID filter, so an
+    /// unrelated USB modem can appear here. That degrades safely rather than
+    /// dangerously: station readiness demands exactly one probe, so a second
+    /// device blocks flashing instead of being flashed, and a non-BMP endpoint
+    /// still fails the scan phase before any write.</para>
+    ///
+    /// <para>The optional root makes this deterministic in tests; production
+    /// uses <c>/dev</c>. Not yet verified against a probe on real macOS
+    /// hardware.</para>
+    /// </summary>
+    public static IReadOnlyList<ProbeInfo> FindMacOs(string devRoot = "/dev")
+    {
+        var results = new List<ProbeInfo>();
+        if (!Directory.Exists(devRoot)) return results;
+
+        IEnumerable<string> entries;
+        try { entries = Directory.EnumerateFiles(devRoot, "cu.usbmodem*").ToArray(); }
+        catch { return results; }
+
+        foreach (var path in entries.OrderBy(p => p, StringComparer.Ordinal))
+        {
+            var name = Path.GetFileName(path);
+            var suffix = name["cu.usbmodem".Length..];
+            if (suffix.Length == 0) continue;
+
+            var interfaceDigit = suffix[^1];
+            var serial = suffix[..^1];
+            var probeInterface = interfaceDigit switch
+            {
+                '1' => ProbeInterface.Gdb,
+                '3' => ProbeInterface.Uart,
+                _ => ProbeInterface.Unknown,
+            };
+
+            results.Add(new ProbeInfo(
+                PortName: path,
+                FriendlyName: probeInterface switch
+                {
+                    ProbeInterface.Gdb => "Black Magic GDB Server",
+                    ProbeInterface.Uart => "Black Magic UART",
+                    _ => name,
+                },
+                DeviceInstanceId: path,
+                Interface: probeInterface,
+                SerialNumber: string.IsNullOrEmpty(serial) ? null : serial));
+        }
+
+        return results;
     }
 
     /// <summary>
