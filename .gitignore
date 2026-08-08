@@ -74,5 +74,7 @@ tools/gdb/
 publish/
 installer/out/
 installer/deps/
+# Collected release artifacts (hardlinks into installer/out and artifacts/)
+release/
 *.msi
 *.wixpdb
