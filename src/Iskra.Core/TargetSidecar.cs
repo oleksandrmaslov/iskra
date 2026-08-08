@@ -30,7 +30,15 @@ public sealed record TargetSidecar(
     int? FrequencyHz = null,
     PowerMode? PowerMode = null,
     bool? ConnectReset = null,
-    [property: JsonPropertyName("timeout_s")] int? TimeoutSeconds = null)
+    [property: JsonPropertyName("timeout_s")] int? TimeoutSeconds = null,
+    // Optional target memory map, copied verbatim into the generated catalog.
+    // Firmware repos that publish it get load-address validation; those that
+    // do not keep the size-only check against flash_kb.
+    [property: JsonConverter(typeof(HexOrNumberUInt64Converter))]
+    ulong? FlashOrigin = null,
+    [property: JsonConverter(typeof(HexOrNumberUInt64Converter))]
+    ulong? RamOrigin = null,
+    int? RamKb = null)
 {
     public static JsonSerializerOptions JsonOpts { get; } = new()
     {

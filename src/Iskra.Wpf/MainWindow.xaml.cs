@@ -358,8 +358,13 @@ public partial class MainWindow : Window
         GdbOutput.Clear();
         try
         {
+            // Progress<T> posts to the dispatcher, so a stage report can still be
+            // queued when the workflow returns. Without this guard a late
+            // "Прошивання…" repaints over the PASS/FAIL verdict the operator needs.
+            var verdictShown = false;
             var progress = new Progress<FlashWorkflowProgress>(update =>
             {
+                if (verdictShown) return;
                 if (update.Stage == FlashWorkflowStage.AcquiringFirmware && release.IsRemote)
                     SetBannerNeutral(T("Flash.Downloading"), warning: false);
                 else if (update.Stage is FlashWorkflowStage.ValidatingFirmware or FlashWorkflowStage.Flashing)
@@ -380,6 +385,7 @@ public partial class MainWindow : Window
                 request,
                 progress,
                 line => Dispatcher.Invoke(() => GdbOutput.AppendText(line.Text + "\n")));
+            verdictShown = true;
 
             if (result.IsBlocked)
             {

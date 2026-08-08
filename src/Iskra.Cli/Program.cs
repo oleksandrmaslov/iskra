@@ -224,6 +224,12 @@ if (hashWasRequired)
     hashVerified = FirmwareIntegrity.HashesMatch(computedSha, opts.FirmwareSha256);
 }
 
+// BMP's swdp_scan only identifies an MCU family, so a build for a larger
+// sibling part or a different memory map reaches this point looking valid.
+// Compare the image's load map against what the catalog declared.
+var rangeResult = FirmwareRangeCheck.Validate(
+    opts.ElfPath, opts.FirmwareKind, opts.ToTargetDescriptor());
+
 var gdbExe = GdbDiscovery.Find(opts.GdbPath);
 if (gdbExe is null)
 {
@@ -247,6 +253,9 @@ if (dryRun)
     {
         Console.WriteLine(CliText.Get("DryRun.HashSkipped"));
     }
+    Console.WriteLine(rangeResult.IsAcceptable
+        ? CliText.Get("DryRun.RangeOk", rangeResult.TotalBytes, opts.TargetFlashKb)
+        : CliText.Get("DryRun.RangeFail", rangeResult.Diagnostic ?? rangeResult.Status.ToString()));
     Console.WriteLine(CliText.Get("DryRun.Executable", gdbExe));
     var processArgs = GdbCommandBuilder.BuildProcessArgs(
         opts.Port, opts.Power, opts.BmpFrequencyHz, opts.ConnectUnderReset, opts.ElfPath);
@@ -255,12 +264,27 @@ if (dryRun)
     return 0;
 }
 
-if (hashWasRequired && !hashVerified)
+// Integrity first: a corrupt download should be reported as a hash mismatch,
+// not as a confusing address-range complaint about garbage bytes.
+var preflightFailure = (hashWasRequired && !hashVerified)
+    ? ("E_FW_HASH_MISMATCH",
+        $"computed {computedSha}, expected {opts.FirmwareSha256.ToLowerInvariant()}")
+    : !rangeResult.IsAcceptable
+        ? (rangeResult.Status switch
+            {
+                FirmwareRangeStatus.TooLargeForFlash => "E_FW_TOO_LARGE",
+                FirmwareRangeStatus.OutsideDeclaredMemory => "E_FW_ADDRESS_RANGE",
+                _ => "E_FW_BAD_FORMAT",
+            },
+            rangeResult.Diagnostic ?? rangeResult.Status.ToString())
+        : default((string, string)?);
+
+if (preflightFailure is { } failure)
 {
     var hashFail = new FlashOutcome(
         Result:        FlashResult.Fail,
-        ErrorCode:     "E_FW_HASH_MISMATCH",
-        ErrorMessage:  $"computed {computedSha}, expected {opts.FirmwareSha256.ToLowerInvariant()}",
+        ErrorCode:     failure.Item1,
+        ErrorMessage:  failure.Item2,
         DetectedTarget: null,
         Duration:      TimeSpan.Zero,
         GdbTail:       string.Empty);

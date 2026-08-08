@@ -113,6 +113,14 @@ public static class CatalogResolver
             resolved.Add("--connect-reset");
         if (product.Target.TimeoutSeconds is { } timeoutSeconds)
             AddIfMissing(resolved, "--timeout", timeoutSeconds.ToString());
+        // Optional memory map. Present only for catalogs that declare it; the
+        // CLI then refuses firmware whose load addresses fall outside it.
+        if (product.Target.FlashOrigin is { } flashOrigin)
+            AddIfMissing(resolved, "--flash-origin", $"0x{flashOrigin:X8}");
+        if (product.Target.RamOrigin is { } ramOrigin)
+            AddIfMissing(resolved, "--ram-origin", $"0x{ramOrigin:X8}");
+        if (product.Target.RamKb is { } ramKb)
+            AddIfMissing(resolved, "--ram-kb", ramKb.ToString());
 
         var explicitElf = FindValue(args, "--elf") is not null;
         if (!explicitElf && !release.IsRemote)

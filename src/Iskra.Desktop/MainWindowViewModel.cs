@@ -313,8 +313,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ClearGdbLog();
         try
         {
+            // Progress<T> posts to the dispatcher, so a stage report can still be
+            // queued when the workflow returns. Without this guard a late
+            // "Flashing…" repaints over the PASS/FAIL verdict the operator needs.
+            var verdictShown = false;
             var progress = new Progress<FlashWorkflowProgress>(update =>
             {
+                if (verdictShown) return;
                 if (update.Stage == FlashWorkflowStage.AcquiringFirmware && isRemote)
                     SetBannerNeutral(Text.FlashDownloading, warning: false);
                 else if (update.Stage is FlashWorkflowStage.ValidatingFirmware or FlashWorkflowStage.Flashing)
@@ -337,6 +342,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 request,
                 progress,
                 line => Dispatcher.UIThread.Post(() => AppendGdbLine(line.Text)));
+            verdictShown = true;
 
             if (result.IsBlocked)
                 ShowBlocked(result);
@@ -806,9 +812,16 @@ public sealed class AsyncRelayCommand(Func<Task> execute, Func<bool>? canExecute
 
     public bool CanExecute(object? parameter) => !_running && (canExecute?.Invoke() ?? true);
 
-    public async void Execute(object? parameter)
+    public async void Execute(object? parameter) => await ExecuteAsync();
+
+    /// <summary>
+    /// Awaitable form of <see cref="Execute"/>. The ICommand entry point has to
+    /// be <c>async void</c>; tests and callers that need to observe completion
+    /// use this instead.
+    /// </summary>
+    public async Task ExecuteAsync()
     {
-        if (!CanExecute(parameter)) return;
+        if (!CanExecute(null)) return;
         _running = true;
         RaiseCanExecuteChanged();
         try

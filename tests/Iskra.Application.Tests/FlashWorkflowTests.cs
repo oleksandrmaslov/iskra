@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using Iskra.Application;
 using Iskra.Core;
@@ -6,11 +7,35 @@ namespace Iskra.Application.Tests;
 
 public sealed class FlashWorkflowTests
 {
-    private static readonly byte[] ValidElf =
-    [
-        0x7F, 0x45, 0x4C, 0x46,
-        0x01, 0x01, 0x01, 0x00,
-    ];
+    // A real minimal ELF32 with one PT_LOAD segment. The workflow now validates
+    // the image's load map against the catalog target, so a magic-bytes-only
+    // stub is no longer accepted as valid firmware.
+    private static readonly byte[] ValidElf = MinimalElf32(loadAddress: 0x08000000, length: 256);
+
+    private static byte[] MinimalElf32(uint loadAddress, uint length)
+    {
+        const int headerSize = 52;
+        const int entrySize = 32;
+        var bytes = new byte[headerSize + entrySize];
+
+        bytes[0] = 0x7F; bytes[1] = (byte)'E'; bytes[2] = (byte)'L'; bytes[3] = (byte)'F';
+        bytes[4] = 1; // ELF32
+        bytes[5] = 1; // little endian
+        bytes[6] = 1; // version
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(16), 2);           // e_type = ET_EXEC
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(18), 40);          // e_machine = ARM
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28), headerSize);  // e_phoff
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(42), entrySize);   // e_phentsize
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(44), 1);           // e_phnum
+
+        var entry = bytes.AsSpan(headerSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(entry, 1);                      // p_type = PT_LOAD
+        BinaryPrimitives.WriteUInt32LittleEndian(entry[8..], loadAddress);       // p_vaddr
+        BinaryPrimitives.WriteUInt32LittleEndian(entry[12..], loadAddress);      // p_paddr
+        BinaryPrimitives.WriteUInt32LittleEndian(entry[16..], length);           // p_filesz
+        BinaryPrimitives.WriteUInt32LittleEndian(entry[20..], length);           // p_memsz
+        return bytes;
+    }
 
     [Fact]
     public async Task Missing_operator_is_blocked_before_firmware_or_gdb()
@@ -108,6 +133,79 @@ public sealed class FlashWorkflowTests
         var row = Assert.Single(store.QueryRecent());
         Assert.Equal("FAIL", row.Result);
         Assert.Equal("E_FW_HASH_MISMATCH", row.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Oversized_firmware_is_logged_and_never_starts_gdb()
+    {
+        using var scope = new TempScope();
+        // 64 KB aimed at the fixture's 32 KB part. The hash is correct, so only
+        // the range check stands between this and a wrong-part flash.
+        var firmware = scope.WriteFirmware(MinimalElf32(0x08000000, 64 * 1024));
+        var gdb = new FakeGdbProcess();
+        var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
+
+        var result = await workflow.ExecuteAsync(scope.Request(firmware));
+
+        Assert.Equal(FlashWorkflowStatus.Failed, result.Status);
+        Assert.Equal("E_FW_TOO_LARGE", result.Outcome.ErrorCode);
+        Assert.True(result.AttemptLogged);
+        Assert.Equal(0, gdb.ScanCalls);
+        Assert.Equal(0, gdb.FlashCalls);
+
+        using var store = new SqliteLogStore(scope.DatabasePath);
+        Assert.Equal("E_FW_TOO_LARGE", Assert.Single(store.QueryRecent()).ErrorCode);
+    }
+
+    [Fact]
+    public async Task Firmware_outside_the_declared_memory_map_is_logged_and_never_starts_gdb()
+    {
+        using var scope = new TempScope();
+        var firmware = scope.WriteFirmware(MinimalElf32(0x08000000, 1024));
+        var gdb = new FakeGdbProcess();
+        var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
+
+        // Same family per bmp_match, but this part's flash lives at 0x00000000.
+        var request = scope.Request(firmware);
+        var product = request.Catalog.Products.Single();
+        request = request with
+        {
+            Catalog = request.Catalog with
+            {
+                Products = [product with { Target = product.Target with { FlashOrigin = 0x00000000 } }],
+            },
+        };
+
+        var result = await workflow.ExecuteAsync(request);
+
+        Assert.Equal(FlashWorkflowStatus.Failed, result.Status);
+        Assert.Equal("E_FW_ADDRESS_RANGE", result.Outcome.ErrorCode);
+        Assert.Equal(0, gdb.ScanCalls);
+        Assert.Equal(0, gdb.FlashCalls);
+    }
+
+    [Fact]
+    public async Task Declared_memory_map_that_matches_the_image_still_flashes()
+    {
+        using var scope = new TempScope();
+        var firmware = scope.WriteFirmware(MinimalElf32(0x08000000, 1024));
+        var gdb = new FakeGdbProcess();
+        var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
+
+        var request = scope.Request(firmware);
+        var product = request.Catalog.Products.Single();
+        request = request with
+        {
+            Catalog = request.Catalog with
+            {
+                Products = [product with { Target = product.Target with { FlashOrigin = 0x08000000 } }],
+            },
+        };
+
+        var result = await workflow.ExecuteAsync(request);
+
+        Assert.Equal(FlashWorkflowStatus.Passed, result.Status);
+        Assert.Equal(1, gdb.FlashCalls);
     }
 
     [Fact]

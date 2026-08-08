@@ -105,6 +105,19 @@ public static class CatalogJson
         if (p.Target.TimeoutSeconds is <= 0)
             throw new CatalogParseException($"{p.ProductId}: target.timeout_s must be > 0");
 
+        // The optional memory map is all-or-nothing per region: a half-declared
+        // RAM window would silently widen or narrow the accepted address space.
+        if (p.Target.RamKb is <= 0)
+            throw new CatalogParseException($"{p.ProductId}: target.ram_kb must be > 0");
+        if (p.Target.RamOrigin is not null && p.Target.RamKb is null)
+            throw new CatalogParseException($"{p.ProductId}: target.ram_origin requires target.ram_kb");
+        if (p.Target.RamKb is not null && p.Target.RamOrigin is null)
+            throw new CatalogParseException($"{p.ProductId}: target.ram_kb requires target.ram_origin");
+        if (p.Target.RamOrigin is not null && p.Target.FlashOrigin is null)
+            throw new CatalogParseException(
+                $"{p.ProductId}: target.ram_origin requires target.flash_origin; "
+                + "declaring RAM alone would leave flash addresses unchecked");
+
         if (p.Releases is null || p.Releases.Count == 0)
             throw new CatalogParseException($"{p.ProductId}: no releases");
 

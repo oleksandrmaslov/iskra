@@ -232,6 +232,24 @@ public sealed class FlashWorkflow
                 "E_FW_HASH_MISMATCH", message, firmwarePath);
         }
 
+        // Integrity proves the file is the one the catalog names. This proves
+        // the named file can physically belong to the target in front of the
+        // operator: BMP's bmp_match only identifies an MCU family, so a build
+        // for a larger sibling part, or for a different memory map entirely,
+        // reaches this point looking perfectly valid.
+        var range = FirmwareRangeCheck.Validate(firmwarePath, release.FirmwareKind, product.Target);
+        if (!range.IsAcceptable)
+        {
+            var code = range.Status switch
+            {
+                FirmwareRangeStatus.TooLargeForFlash => "E_FW_TOO_LARGE",
+                FirmwareRangeStatus.OutsideDeclaredMemory => "E_FW_ADDRESS_RANGE",
+                _ => "E_FW_BAD_FORMAT",
+            };
+            return FailureWithLog(request, product, release, batch,
+                code, range.Diagnostic ?? range.Status.ToString(), firmwarePath);
+        }
+
         var flash = EffectiveFlashSettings(request.Settings, product);
         var options = new FlashOptions(
             ElfPath: firmwarePath,

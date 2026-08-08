@@ -82,7 +82,10 @@ public static class CatalogGenerator
                                     canonical.FrequencyHz,
                                     canonical.PowerMode,
                                     canonical.ConnectReset,
-                                    canonical.TimeoutSeconds),
+                                    canonical.TimeoutSeconds,
+                                    canonical.FlashOrigin,
+                                    canonical.RamOrigin,
+                                    canonical.RamKb),
                 Releases:       releases,
                 DefaultRelease: latest.Version));
         }

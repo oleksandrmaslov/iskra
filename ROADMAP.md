@@ -76,8 +76,16 @@ historical sprint handoff; new goals and acceptance gates live here.
    polish. `bmp_match` identifies only an MCU family and cannot distinguish two
    products built on the same chip. Add a signed catalog board-ID/UID policy and
    read it before any flash write.
-4. Add real ELF/HEX load-range validation against catalog-declared flash/RAM
-   address ranges, not only `flash_kb` and file-format checks.
+4. ✅ **Done (2026-08-08).** ELF/HEX load-range validation against
+   catalog-declared flash/RAM address ranges. `FirmwareImage` reads the real
+   load map (ELF PT_LOAD physical addresses and file sizes; Intel HEX data
+   records with extended segment/linear addressing), and `FirmwareRangeCheck`
+   refuses anything that cannot belong to the target: `E_FW_TOO_LARGE` when the
+   image exceeds `flash_kb`, `E_FW_ADDRESS_RANGE` when a segment falls outside a
+   declared window. Wired into both `FlashWorkflow` and the CLI, after the
+   SHA-256 check so a corrupt download still reports as an integrity failure.
+   The catalog memory map is optional, so previously signed catalogs stay valid
+   and fall back to size-only checking.
 
 ## Sprint 8 — cross-platform application
 
@@ -152,9 +160,16 @@ bench acceptance and non-Windows packaging, not features.
   plus invocation-level `--lang uk|en|de` for CLI. Keep Ukrainian as the
   compatibility default and keep logs/protocol values language-neutral.
 - Centralize color, spacing, typography, focus, high-contrast, and semantic
-  status resources. Add Avalonia headless UI tests — `MainWindowViewModel` takes
-  all four workflows by constructor injection, so its gating, banner-state, and
-  batch-lock logic is testable without a display; this is the next gap to close.
+  status resources.
+- ✅ **Avalonia headless UI tests (2026-08-08).** `tests/Iskra.Desktop.Tests`
+  runs the real `App` on Avalonia's headless platform via `Avalonia.Headless.XUnit`
+  (which requires xunit v3; the Core and Application suites stay on v2). Covers
+  flash gating for probe/gdb/catalog/operator/batch, banner colour and text per
+  state, catalog selection and remote-release labelling, PASS and refusal paths
+  through the real workflow, settings validation and auto-save, hotkey mapping,
+  and language switching. It immediately found a real defect: a dispatcher-queued
+  progress report could repaint over the final PASS/FAIL verdict — fixed in both
+  Avalonia and WPF.
 - Keep WPF maintained as a supported Windows variant. Avalonia may become the
   cross-platform/default frontend only after Windows behavior parity,
   packaged-app acceptance, and HIL; it does not delete WPF support.

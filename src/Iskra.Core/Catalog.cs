@@ -16,7 +16,17 @@ public sealed record TargetDescriptor(
     int? FrequencyHz = null,
     PowerMode? PowerMode = null,
     bool? ConnectReset = null,
-    [property: JsonPropertyName("timeout_s")] int? TimeoutSeconds = null);
+    [property: JsonPropertyName("timeout_s")] int? TimeoutSeconds = null,
+    // Optional memory map. When flash_origin is present the flasher rejects any
+    // firmware whose load addresses fall outside the declared windows; without
+    // it only the total size can be checked against flash_kb. Accepts hex
+    // strings ("0x08000000") so a catalog reads like the linker script it came
+    // from. Omitted by older catalogs, which stay valid.
+    [property: JsonConverter(typeof(HexOrNumberUInt64Converter))]
+    ulong? FlashOrigin = null,
+    [property: JsonConverter(typeof(HexOrNumberUInt64Converter))]
+    ulong? RamOrigin = null,
+    int? RamKb = null);
 
 public enum FirmwareKind
 {

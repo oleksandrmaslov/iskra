@@ -4,6 +4,33 @@ All notable changes to Iskra are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added firmware load-address validation. `FirmwareImage` reads the real load
+  map from an ELF's PT_LOAD program headers (physical address and file size, the
+  pair `gdb load` actually writes) or from Intel HEX data records including
+  extended segment and linear addressing. `FirmwareRangeCheck` then refuses any
+  image that cannot belong to the catalog-declared target: `E_FW_TOO_LARGE` when
+  it exceeds `flash_kb`, `E_FW_ADDRESS_RANGE` when a segment falls outside a
+  declared memory window. This closes a named production blocker — BMP's
+  `bmp_match` identifies only an MCU family, so a build for a larger sibling
+  part or a different memory map previously reached gdb looking valid.
+- Added optional `flash_origin`, `ram_origin`, and `ram_kb` to the catalog target
+  descriptor and the `target.json` sidecar, accepted as hex strings or numbers.
+  Catalogs signed before this field existed remain valid and fall back to
+  size-only checking. Corresponding `--flash-origin`, `--ram-origin`, and
+  `--ram-kb` CLI flags, populated automatically in catalog mode.
+- Added `tests/Iskra.Desktop.Tests`, an Avalonia headless view-model suite
+  covering flash gating, banner state, catalog selection, settings validation
+  and auto-save, hotkey mapping, and language switching.
+
+### Fixed
+
+- Fixed a dispatcher-queued progress report being able to repaint over the final
+  PASS/FAIL band. `Progress<T>` posts to the UI thread, so a late "Flashing…"
+  could overwrite the verdict an operator relies on. Fixed in both Avalonia and
+  WPF; found by the new headless tests.
+
 ## [2.0.0] - 2026-08-07
 
 Iskra 2.0.0 turns the Avalonia frontend from a read-only preview into a working

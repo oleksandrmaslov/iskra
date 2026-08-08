@@ -557,6 +557,13 @@ Open Sprint 5 items:
     sanity check against the elf section sizes.
   - `part_number` — display string shown to operators (`"PY32F002Ax5"`).
     NOT used for verification — BMP can't tell variants apart within a family.
+  - `flash_origin` / `ram_origin` / `ram_kb` — **optional** memory map, hex
+    string or number (`"0x08000000"`). When `flash_origin` is present, every
+    loadable segment's address must fall inside a declared window or the flash
+    is refused with `E_FW_ADDRESS_RANGE`. Without it only total size is checked
+    against `flash_kb` (`E_FW_TOO_LARGE`). Declaring RAM requires both
+    `ram_origin` and `ram_kb`, plus `flash_origin`. Catalogs signed before this
+    field existed stay valid and run in size-only mode.
 - **Operator languages:** Ukrainian, English, and German. Ukrainian remains the
   compatibility default. Error codes (`E_*`), logs, flags, hashes, catalog data,
   raw GDB output, and developer diagnostics stay English / ASCII; only operator
@@ -645,8 +652,9 @@ CREATE TABLE flash_attempts (
 
 `E_PROBE_NOT_FOUND`, `E_PROBE_BUSY`, `E_SCAN_NO_TARGET`, `E_TARGET_MISMATCH`,
 `E_ATTACH_FAILED`, `E_LOAD_FAILED`, `E_VERIFY_MISMATCH`, `E_TIMEOUT`,
-`E_GDB_CRASHED`, `E_FW_HASH_MISMATCH`. Each maps to a one-line localized
-operator hint while the durable error code remains unchanged.
+`E_GDB_CRASHED`, `E_FW_HASH_MISMATCH`, `E_FW_TOO_LARGE`, `E_FW_ADDRESS_RANGE`.
+Each maps to a one-line localized operator hint while the durable error code
+remains unchanged.
 
 ---
 
