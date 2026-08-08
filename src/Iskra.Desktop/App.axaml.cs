@@ -12,10 +12,12 @@ public sealed partial class App : Avalonia.Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new MainWindow
-            {
-                DataContext = new MainWindowViewModel(),
-            };
+            var viewModel = new MainWindowViewModel();
+            desktop.MainWindow = new MainWindow { DataContext = viewModel };
+            // Fire-and-forget startup check against the locked catalog source.
+            // It only raises a notice; the operator decides when to reload, so a
+            // station mid-batch never has its catalog swapped underneath it.
+            _ = viewModel.BackgroundFetchCatalogAsync();
         }
 
         base.OnFrameworkInitializationCompleted();

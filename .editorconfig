@@ -1,30 +1,93 @@
+# Iskra formatting baseline.
+#
+# This file DESCRIBES the house style; it is deliberately not a build gate.
+# The repository has pre-existing style drift, so every rule below is a
+# suggestion. Turning any of these into a warning or error, or adding a
+# `dotnet format --verify-no-changes` CI step, is a separate reviewed change
+# that must be preceded by a formatting sweep — otherwise the first CI run
+# fails on thousands of untouched lines and the gate gets disabled again.
+
 root = true
 
 [*]
 charset = utf-8
-end_of_line = lf
+end_of_line = crlf
 insert_final_newline = true
 trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-[*.{json,yml,yaml,xml,csproj,sln,props,targets}]
+[*.{yml,yaml,json,jsonc}]
+indent_size = 2
+
+[*.{xml,xaml,axaml,csproj,props,targets,wxs,wxl}]
 indent_size = 2
 
 [*.md]
+# Two trailing spaces are a hard line break in Markdown.
 trim_trailing_whitespace = false
 
-[*.cs]
-# .NET formatting
-dotnet_sort_system_directives_first = true
-csharp_new_line_before_open_brace = all
-csharp_new_line_before_else = true
-csharp_new_line_before_catch = true
-csharp_new_line_before_finally = true
-csharp_prefer_braces = true:warning
+[*.{ps1,psm1}]
+indent_size = 4
 
-# Naming
+[*.sh]
+end_of_line = lf
+
+[*.cs]
+indent_size = 4
+max_line_length = 100
+
+# ---- language conventions actually used across this codebase ----
+csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_using_directive_placement = outside_namespace:suggestion
+csharp_prefer_braces = when_multiline:suggestion
+csharp_style_prefer_primary_constructors = true:suggestion
+csharp_style_expression_bodied_properties = true:suggestion
+csharp_style_expression_bodied_accessors = true:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_prefer_switch_expression = true:suggestion
+csharp_style_prefer_pattern_matching = true:suggestion
+csharp_style_throw_expression = true:suggestion
+csharp_prefer_simple_using_statement = true:suggestion
+csharp_style_prefer_range_operator = true:suggestion
+csharp_style_prefer_index_operator = true:suggestion
+
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
 dotnet_style_qualification_for_field = false:suggestion
 dotnet_style_qualification_for_property = false:suggestion
 dotnet_style_qualification_for_method = false:suggestion
-dotnet_style_qualification_for_event = false:suggestion
+dotnet_style_object_initializer = true:suggestion
+dotnet_style_collection_initializer = true:suggestion
+dotnet_style_prefer_conditional_expression_over_assignment = true:suggestion
+dotnet_style_null_propagation = true:suggestion
+dotnet_style_coalesce_expression = true:suggestion
+dotnet_style_readonly_field = true:suggestion
+
+# ---- naming ----
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+dotnet_naming_style.camel_case_underscore.required_prefix = _
+dotnet_naming_style.camel_case_underscore.capitalization = camel_case
+
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = camel_case_underscore
+dotnet_naming_rule.private_fields_underscore.severity = suggestion
+
+dotnet_naming_symbols.public_members.applicable_kinds = property,method,event,namespace,class,struct,interface,enum,delegate
+dotnet_naming_symbols.public_members.applicable_accessibilities = public,internal,protected
+dotnet_naming_rule.public_members_pascal.symbols = public_members
+dotnet_naming_rule.public_members_pascal.style = pascal_case
+dotnet_naming_rule.public_members_pascal.severity = suggestion
+
+# ---- analyzers worth keeping visible ----
+# Platform compatibility stays a warning: it is what stops a Windows-only
+# credential or registry call from silently shipping in the portable CLI or
+# the cross-platform Avalonia frontend.
+dotnet_diagnostic.CA1416.severity = warning
+
+[tests/**/*.cs]
+# Test fixtures legitimately build throwaway objects and ignore return values.
+dotnet_diagnostic.CA1806.severity = none

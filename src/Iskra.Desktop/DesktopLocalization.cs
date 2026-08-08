@@ -588,6 +588,9 @@ public sealed class DesktopText
     public string DeviceAccessDenied => Get(DesktopTextKey.DeviceAccessDenied);
     public string DeviceCodeExpired => Get(DesktopTextKey.DeviceCodeExpired);
     public string UpdateChecking => Get(DesktopTextKey.UpdateChecking);
+    public string CatalogDefaultBadge => Get(DesktopTextKey.CatalogDefaultBadge);
+    public string CatalogRevokedBadge => Get(DesktopTextKey.CatalogRevokedBadge);
+    public string CatalogRemoteBadge => Get(DesktopTextKey.CatalogRemoteBadge);
     public string CatalogNoRelease => Get(DesktopTextKey.CatalogNoRelease);
     public string CatalogNetworkError => Get(DesktopTextKey.CatalogNetworkError);
     public string CatalogBadSignature => Get(DesktopTextKey.CatalogBadSignature);
@@ -627,6 +630,9 @@ public sealed class DesktopText
     public string DeviceBrowserFailed(string message) => Format(DesktopTextKey.DeviceBrowserFailed, message);
     public string DeviceError(string message) => Format(DesktopTextKey.DeviceError, message);
     public string CatalogUpdated(string tag) => Format(DesktopTextKey.CatalogUpdated, tag);
+    public string CatalogUpdateAvailable(string tag) => Format(DesktopTextKey.CatalogUpdateAvailable, tag);
+    public string TargetDetail(string bmpMatch, string partNumber, int flashKb, string flashOrigin) =>
+        Format(DesktopTextKey.TargetDetail, bmpMatch, partNumber, flashKb, flashOrigin);
     public string CatalogUpToDate(string tag) => Format(DesktopTextKey.CatalogUpToDate, tag);
     public string AppUpdateAvailable(string version) => Format(DesktopTextKey.AppUpdateAvailable, version);
     public string CloudQueuedShort(int pending) => Format(DesktopTextKey.CloudQueuedShort, pending);
@@ -848,7 +854,12 @@ internal enum DesktopTextKey
     DeviceError,
     UpdateChecking,
     CatalogUpdated,
+    CatalogUpdateAvailable,
     CatalogUpToDate,
+    TargetDetail,
+    CatalogDefaultBadge,
+    CatalogRevokedBadge,
+    CatalogRemoteBadge,
     CatalogNoRelease,
     CatalogNetworkError,
     CatalogBadSignature,

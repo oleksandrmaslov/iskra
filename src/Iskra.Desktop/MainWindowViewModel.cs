@@ -563,7 +563,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _catalog = catalog;
             _catalogDirectory = snapshot.Catalog.SourceDirectory;
             foreach (var product in catalog.Products)
-                Products.Add(new ProductSummaryViewModel(product, Text));
+                Products.Add(new ProductSummaryViewModel(product, Text, catalog)
+                {
+                    TargetDetailText = Text.TargetDetail(
+                        product.Target.BmpMatch,
+                        product.Target.PartNumber,
+                        product.Target.FlashKb,
+                        product.Target.FlashOrigin is { } origin ? $"0x{origin:X8}" : "—"),
+                });
 
             CatalogStatusText = snapshot.Catalog.TrustResult == CatalogTrustResult.Verified
                 ? Text.SignatureVerified
@@ -756,18 +763,58 @@ public sealed record ProductSummaryViewModel(
     string TargetLabel,
     string TargetText,
     string ReleaseLabel,
-    string ReleaseText)
+    string ReleaseText,
+    IReadOnlyList<ReleaseDetailViewModel> Releases)
 {
-    public ProductSummaryViewModel(Product product, DesktopText text)
+    public ProductSummaryViewModel(Product product, DesktopText text, Catalog catalog)
         : this(
             product.ProductId,
             product.DisplayName,
             text.Target,
             text.TargetSummary(product.Target.PartNumber, product.Target.FlashKb),
             text.DefaultRelease,
-            text.ReleaseSummary(product.DefaultRelease, product.Releases.Count))
+            text.ReleaseSummary(product.DefaultRelease, product.Releases.Count),
+            [.. product.Releases.Select(release =>
+                new ReleaseDetailViewModel(product, release, text, catalog))])
     {
     }
+
+    /// <summary>Full BMP match string and memory map, for the engineer reading the tab.</summary>
+    public string TargetDetailText { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// One release row on the catalog browser. Everything an engineer needs to
+/// confirm a station is about to flash what they published: the exact artefact
+/// name, its SHA-256, whether it is fetched from GitHub, and whether the
+/// catalog has revoked it.
+/// </summary>
+public sealed record ReleaseDetailViewModel(
+    string Version,
+    string FirmwareFilename,
+    string Sha256,
+    string KindText,
+    string ReleasedAtText,
+    bool IsDefault,
+    bool IsRemote,
+    bool IsRevoked,
+    string RevokedReason)
+{
+    public ReleaseDetailViewModel(Product product, FirmwareRelease release, DesktopText text, Catalog catalog)
+        : this(
+            $"v{release.Version}",
+            release.ElfFilename,
+            release.ElfSha256,
+            FirmwarePreflight.DisplayName(release.FirmwareKind),
+            release.ReleasedAt.ToLocalTime().ToString("d", text.Culture),
+            string.Equals(product.DefaultRelease, release.Version, StringComparison.OrdinalIgnoreCase),
+            release.IsRemote,
+            catalog.FindRevocation(product.ProductId, release.Version) is not null,
+            catalog.FindRevocation(product.ProductId, release.Version)?.Reason ?? string.Empty)
+    {
+    }
+
+    public bool HasRevokedReason => IsRevoked && RevokedReason.Length > 0;
 }
 
 public abstract class ViewModelBase : INotifyPropertyChanged

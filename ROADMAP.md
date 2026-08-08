@@ -91,15 +91,21 @@ historical sprint handoff; new goals and acceptance gates live here.
 
 ### 8.0 — platform-neutral application layer
 
-**In progress:** `Iskra.Application` now owns fail-closed catalog-session
-selection, station readiness, optional batch policy, the flash transaction,
-read-only history/export, and shared settings validation/persistence. WPF
-consumes these services; Avalonia consumes the safe read-only subset.
-Authentication, update, and cloud-sync orchestration still need extraction.
+**Extraction complete (2026-08-08):** `Iskra.Application` owns fail-closed
+catalog-session selection, station readiness, optional batch policy, the flash
+transaction, read-only history/export, settings validation/persistence, GitHub
+credential classification, and cloud log status/shipping. WPF, Avalonia, and the
+CLI all render the same snapshots rather than each carrying a copy.
 
-- Extract startup, catalog, flash, history, settings, authentication, update,
-  and cloud-sync orchestration from `MainWindow.xaml.cs` into testable services
-  and view models.
+- ✅ Extract startup, catalog, flash, history, settings, authentication, update,
+  and cloud-sync orchestration from `MainWindow.xaml.cs` into testable services.
+  `AuthWorkflow` classifies credentials (secure store absent, client not
+  configured, corrupt, not signed in, session expired, signed in) and answers
+  whether remote firmware can currently be fetched; `CloudLogWorkflow` owns
+  ship-readiness, pending counts, and the manual flush. Update checking was
+  deliberately left as direct `RemoteCatalogClient` / `AppUpdateClient` calls:
+  those Core types already are the service, and wrapping them would add a layer
+  that only forwards.
 - Done for the flash transaction: `FlashWorkflow` is UI-neutral and covered by
   workflow tests for blocking, integrity refusal, batch conflict, remote-auth
   failure, target overrides, two-phase execution, and PASS/FAIL logging.
@@ -125,8 +131,12 @@ the upgrade does not waive the remaining feature-parity and HIL gates.
   stable physical probe identity across reconnects.
 - Platform paths, file dialogs, browser launch, clipboard, sound, and update
   package selection become interfaces.
-- Extend `--doctor` with udev/serial permissions, secure-store readiness, GDB
-  provenance, filesystem permissions, and the current runtime identifier.
+- ✅ **`--doctor` extended (2026-08-08)** with the current runtime identifier and
+  framework, GDB provenance (the toolchain's own `--version` banner, so a
+  station running a different build than the installer pins is visible), shared
+  credential classification via `AuthWorkflow`, and cloud-log readiness with the
+  pending row count. Filesystem permission checks were already present. Linux
+  udev/serial permission checks remain, and need a Linux station to verify.
 
 Started in the 2026-07-12 slice: `ITokenStore`, Unix GDB endpoints, Linux BMP
 sysfs discovery, and a generic `net10.0` CLI with private-token features gated
@@ -150,9 +160,12 @@ bench acceptance and non-Windows packaging, not features.
   single-action factory flow, giant PASS/FAIL state, hotkey safety, or complete
   Ukrainian/English/German presentation. Done in 2.0.0: Flash tab, PASS/FAIL
   band, hotkey, gdb console, Device Flow window, editable settings with
-  auto-save, catalog/app update checks, cloud-log upload, and CSV export. The
-  remaining WPF-only surfaces are the read-only catalog browser detail view and
-  the startup background catalog fetch.
+  auto-save, catalog/app update checks, cloud-log upload, and CSV export.
+  Completed 2026-08-08: the catalog browser now shows per-release detail
+  (version, default/GitHub/revoked badges, firmware kind, date, artefact name,
+  full SHA-256, revocation reason) and the startup background catalog fetch
+  raises a reload notice rather than swapping the catalog under a station that
+  may be mid-batch. No WPF-only operator surface remains.
 - Remote firmware on Linux/macOS stays fail-closed until an encrypted
   `ITokenStore` exists for those platforms; the Device Flow window itself is
   cross-platform but the credential store is not.
@@ -180,9 +193,13 @@ bench acceptance and non-Windows packaging, not features.
 - Keep WiX for Windows; add a Linux package/udev policy and signed/notarized macOS
   `.app`/DMG. Select updates by exact OS and architecture.
 - Add Windows/Linux/macOS CI, locked restores, vulnerability gates, SBOM and
-  provenance, publish smoke tests, and per-OS BMP HIL. Establish and apply a
-  reviewed `.editorconfig`/formatter baseline before making format verification
-  a required gate; the current repository has broad pre-existing style drift.
+  provenance, publish smoke tests, and per-OS BMP HIL.
+- ✅ **`.editorconfig` baseline added (2026-08-08)**, describing the house style
+  with every rule at `suggestion` severity. It is intentionally not a gate: the
+  repository still has pre-existing drift, so a formatting sweep must land
+  before `dotnet format --verify-no-changes` becomes required. `CA1416` is kept
+  at warning — it is what stops a Windows-only credential call from silently
+  shipping in the portable CLI or the cross-platform frontend.
 
 ## Sprint 8.4 — approved branding
 

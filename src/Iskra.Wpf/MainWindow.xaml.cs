@@ -31,6 +31,9 @@ public partial class MainWindow : Window
     private readonly FlashWorkflow _flashWorkflow = new(new GitHubRemoteFirmwareProvider());
     private readonly HistoryWorkflow _historyWorkflow = new();
     private readonly SettingsWorkflow _settingsWorkflow = new();
+    private readonly CloudLogWorkflow _cloudLogWorkflow = new();
+    private readonly AuthWorkflow _authWorkflow = new(new TokenStore());
+    private AuthSnapshot? _authSnapshot;
     private bool _isLoaded;
     private bool _flashInProgress;
     private bool _suppressTabSelectionChanged;
@@ -1027,97 +1030,82 @@ public partial class MainWindow : Window
     /// to reflect: (a) whether the log shipper is configured at all, (b) how
     /// many rows are pending upload. Cheap — just opens the SQLite to count.
     /// </summary>
+    /// <summary>
+    /// Renders the shared <see cref="CloudLogWorkflow"/> snapshot on the status
+    /// strip and the Settings tab. Classification is shared with Avalonia so the
+    /// two frontends cannot disagree about what is queued.
+    /// </summary>
     private void RefreshCloudSyncStatus()
     {
-        if (!_settings.LogShippingEnabled)
+        var snapshot = _cloudLogWorkflow.Inspect(_settings);
+        switch (snapshot.Status)
         {
-            StatusCloud.Text = T("Cloud.Disabled.Status");
-            LogShipStatus.Text = T("Cloud.Disabled.Detail");
-            return;
-        }
-        if (!GitHubAppConfig.IsLogShipperConfigured)
-        {
-            StatusCloud.Text = T("Cloud.Unconfigured.Status");
-            LogShipStatus.Text = T("Cloud.Unconfigured.Detail");
-            return;
-        }
-        try
-        {
-            var dbPath = ResolveDbPath();
-            if (!File.Exists(dbPath))
-            {
+            case CloudLogStatus.Disabled:
+                StatusCloud.Text = T("Cloud.Disabled.Status");
+                LogShipStatus.Text = T("Cloud.Disabled.Detail");
+                break;
+            case CloudLogStatus.NotConfigured:
+                StatusCloud.Text = T("Cloud.Unconfigured.Status");
+                LogShipStatus.Text = T("Cloud.Unconfigured.Detail");
+                break;
+            case CloudLogStatus.NoDatabase:
                 StatusCloud.Text = T("Cloud.Empty.Status");
                 LogShipStatus.Text = T("Cloud.Empty.Detail");
-                return;
-            }
-            using var store = new SqliteLogStore(dbPath);
-            var pending = store.CountUnsynced();
-            StatusCloud.Text = pending == 0 ? T("Cloud.Synced.Status") : T("Cloud.Queued.Status", pending);
-            LogShipStatus.Text = pending == 0
-                ? T("Cloud.UploadedAll")
-                : T("Cloud.RowsWaiting", pending);
-        }
-        catch (Exception ex)
-        {
-            StatusCloud.Text = T("Cloud.Error.Status");
-            LogShipStatus.Text = $"✗ {ex.Message}";
+                break;
+            case CloudLogStatus.Synced:
+                StatusCloud.Text = T("Cloud.Synced.Status");
+                LogShipStatus.Text = T("Cloud.UploadedAll");
+                break;
+            case CloudLogStatus.Pending:
+                StatusCloud.Text = T("Cloud.Queued.Status", snapshot.PendingRows);
+                LogShipStatus.Text = T("Cloud.RowsWaiting", snapshot.PendingRows);
+                break;
+            default:
+                StatusCloud.Text = T("Cloud.Error.Status");
+                LogShipStatus.Text = $"✗ {snapshot.Diagnostic}";
+                break;
         }
     }
 
     private async void LogShipNow_Click(object sender, RoutedEventArgs e)
     {
-        if (!_settings.LogShippingEnabled)
-        {
-            LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-            LogShipStatus.Text = T("Cloud.EnableFirst");
-            return;
-        }
-        if (!GitHubAppConfig.IsLogShipperConfigured)
-        {
-            LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            LogShipStatus.Text = T("Cloud.Unconfigured.Detail");
-            return;
-        }
-
-        var keyPath = string.IsNullOrWhiteSpace(SettingsLogShipperKey.Text)
-            ? _settings.LogShipperPrivateKeyPath
-            : SettingsLogShipperKey.Text.Trim();
-        if (!File.Exists(keyPath))
-        {
-            LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            LogShipStatus.Text = T("Cloud.KeyMissing", keyPath);
-            return;
-        }
-
         LogShipNowButton.IsEnabled = false;
         LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
         LogShipStatus.Text = T("Cloud.Uploading");
         try
         {
-            ShipReport report;
-            using (var store = new SqliteLogStore(ResolveDbPath()))
-            using (var http  = new System.Net.Http.HttpClient())
+            // Pass the edited key path rather than the saved one: the operator
+            // may be pointing at a freshly delivered .pem before saving.
+            var result = await _cloudLogWorkflow.ShipAsync(_settings, SettingsLogShipperKey.Text);
+            switch (result.Status)
             {
-                var tokens = new GitHubAppInstallationTokenProvider(
-                    http,
-                    GitHubAppConfig.LogShipperAppId,
-                    GitHubAppConfig.LogShipperInstallationId,
-                    () => GitHubAppInstallationTokenProvider.LoadPemKey(keyPath));
-                var shipper = new LogShipper(
-                    store, tokens, http,
-                    GitHubAppConfig.LogsRepoOwner,
-                    GitHubAppConfig.LogsRepoName);
-                report = await shipper.ShipPendingAsync();
+                case CloudShipStatus.Shipped:
+                    LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
+                    LogShipStatus.Text = T("Cloud.UploadReport", result.RowsPushed,
+                        result.FilesCreated, result.FilesUpdated,
+                        result.RowsLeftover > 0 ? T("Cloud.Leftover", result.RowsLeftover) : ".");
+                    break;
+                case CloudShipStatus.Disabled:
+                    LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
+                    LogShipStatus.Text = T("Cloud.EnableFirst");
+                    break;
+                case CloudShipStatus.NotConfigured:
+                    LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                    LogShipStatus.Text = T("Cloud.Unconfigured.Detail");
+                    break;
+                case CloudShipStatus.KeyMissing:
+                    LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                    LogShipStatus.Text = T("Cloud.KeyMissing", result.KeyPath ?? "");
+                    break;
+                case CloudShipStatus.NoDatabase:
+                    LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
+                    LogShipStatus.Text = T("Cloud.Empty.Detail");
+                    break;
+                default:
+                    LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                    LogShipStatus.Text = $"✗ {result.Diagnostic}";
+                    break;
             }
-            LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-            LogShipStatus.Text = T("Cloud.UploadReport", report.RowsPushed,
-                report.FilesCreated, report.FilesUpdated,
-                report.RowsLeftover > 0 ? T("Cloud.Leftover", report.RowsLeftover) : ".");
-        }
-        catch (Exception ex)
-        {
-            LogShipStatus.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            LogShipStatus.Text = $"✗ {ex.Message}";
         }
         finally
         {
@@ -1134,59 +1122,43 @@ public partial class MainWindow : Window
 
     private static readonly TimeSpan AuthRefreshSkew = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Renders the shared <see cref="AuthWorkflow"/> snapshot. Avalonia renders
+    /// the same one, so neither frontend can invent its own notion of
+    /// "signed in" or of when a session has lapsed.
+    /// </summary>
     private void RefreshAuthStatus()
     {
-        var store = new TokenStore();
-        StoredTokens? stored;
-        try { stored = store.Load(); }
-        catch (TokenStoreException ex)
+        _authSnapshot = _authWorkflow.Evaluate();
+        switch (_authSnapshot.Status)
         {
-            AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            AuthStatusLabel.Text = T("Auth.TokenCorrupt", ex.Message);
-            AuthLoginButton.IsEnabled  = GitHubAppConfig.IsConfigured;
-            AuthLogoutButton.IsEnabled = true;
-            RefreshAuthBanner(CurrentSelectedRelease());
-            return;
+            case AuthStatus.SecureStoreUnavailable:
+            case AuthStatus.ClientNotConfigured:
+                AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                AuthStatusLabel.Text = T("Auth.ClientMissing.Short");
+                break;
+            case AuthStatus.TokenStoreCorrupt:
+                AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                AuthStatusLabel.Text = T("Auth.TokenCorrupt", _authSnapshot.Diagnostic ?? "");
+                break;
+            case AuthStatus.NotSignedIn:
+                AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
+                AuthStatusLabel.Text = T("Auth.NotSignedIn");
+                break;
+            case AuthStatus.SessionExpired:
+                AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                AuthStatusLabel.Text = T("Auth.SessionExpired");
+                break;
+            default:
+                AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
+                AuthStatusLabel.Text = T("Auth.SignedIn",
+                    _authSnapshot.AccessTokenFresh ? T("Auth.Access.Valid") : T("Auth.Access.Refresh"),
+                    _authSnapshot.AccessTokenExpiresAtUtc, _authSnapshot.RefreshTokenExpiresAtUtc);
+                break;
         }
 
-        if (!GitHubAppConfig.IsConfigured)
-        {
-            AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            AuthStatusLabel.Text = T("Auth.ClientMissing.Short");
-            AuthLoginButton.IsEnabled = false;
-            AuthLogoutButton.IsEnabled = stored is not null;
-            RefreshAuthBanner(CurrentSelectedRelease());
-            return;
-        }
-
-        if (stored is null)
-        {
-            AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
-            AuthStatusLabel.Text = T("Auth.NotSignedIn");
-            AuthLoginButton.IsEnabled = true;
-            AuthLogoutButton.IsEnabled = false;
-            RefreshAuthBanner(CurrentSelectedRelease());
-            return;
-        }
-
-        var now = DateTime.UtcNow;
-        if (stored.RefreshTokenIsExpired(now))
-        {
-            AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
-            AuthStatusLabel.Text = T("Auth.SessionExpired");
-            AuthLoginButton.IsEnabled = true;
-            AuthLogoutButton.IsEnabled = true;
-            RefreshAuthBanner(CurrentSelectedRelease());
-            return;
-        }
-
-        var freshAccess = stored.AccessTokenIsFresh(now, AuthRefreshSkew);
-        AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
-        AuthStatusLabel.Text = T("Auth.SignedIn",
-            freshAccess ? T("Auth.Access.Valid") : T("Auth.Access.Refresh"),
-            stored.AccessTokenExpiresAtUtc, stored.RefreshTokenExpiresAtUtc);
-        AuthLoginButton.IsEnabled = true;
-        AuthLogoutButton.IsEnabled = true;
+        AuthLoginButton.IsEnabled = _authSnapshot.CanSignIn;
+        AuthLogoutButton.IsEnabled = _authSnapshot.CanSignOut;
         RefreshAuthBanner(CurrentSelectedRelease());
     }
 
@@ -1205,28 +1177,22 @@ public partial class MainWindow : Window
             return;
         }
 
-        var store = new TokenStore();
-        StoredTokens? stored;
-        try { stored = store.Load(); } catch (TokenStoreException) { stored = null; }
-
-        bool ok = stored is not null
-                  && !stored.RefreshTokenIsExpired(DateTime.UtcNow)
-                  && GitHubAppConfig.IsConfigured;
-
-        if (ok)
+        var snapshot = _authSnapshot ?? _authWorkflow.Evaluate();
+        if (snapshot.CanFetchRemoteFirmware)
         {
             AuthHintBanner.Visibility = Visibility.Collapsed;
+            return;
         }
-        else
+
+        AuthHintText.Text = snapshot.Status switch
         {
-            AuthHintText.Text = !GitHubAppConfig.IsConfigured
-                ? T("Auth.ProductClientMissing")
-                : (stored is null
-                    ? T("Auth.ProductNeedsSignIn", release.Version)
-                    : T("Auth.ProductSessionExpired"));
-            AuthHintLoginButton.IsEnabled = GitHubAppConfig.IsConfigured;
-            AuthHintBanner.Visibility = Visibility.Visible;
-        }
+            AuthStatus.ClientNotConfigured or AuthStatus.SecureStoreUnavailable =>
+                T("Auth.ProductClientMissing"),
+            AuthStatus.NotSignedIn => T("Auth.ProductNeedsSignIn", release.Version),
+            _ => T("Auth.ProductSessionExpired"),
+        };
+        AuthHintLoginButton.IsEnabled = snapshot.CanSignIn;
+        AuthHintBanner.Visibility = Visibility.Visible;
     }
 
     private async void AuthLogin_Click(object sender, RoutedEventArgs e) => await DoLoginAsync();
@@ -1235,13 +1201,10 @@ public partial class MainWindow : Window
 
     private void AuthLogout_Click(object sender, RoutedEventArgs e)
     {
-        try
+        var after = _authWorkflow.SignOut();
+        if (after.Status == AuthStatus.TokenStoreCorrupt && after.Diagnostic is { } diagnostic)
         {
-            new TokenStore().Delete();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, T("Auth.DeleteFailed", ex.Message),
+            MessageBox.Show(this, T("Auth.DeleteFailed", diagnostic),
                 T("Auth.SignOut.Title"), MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         RefreshAuthStatus();
@@ -1252,11 +1215,9 @@ public partial class MainWindow : Window
         RefreshAuthStatus();
         if (!GitHubAppConfig.IsConfigured) return;
 
-        var store = new TokenStore();
-        StoredTokens? stored;
-        try { stored = store.Load(); } catch { stored = null; }
-        if (stored is null) return;
+        if (!(_authSnapshot?.CanSignOut ?? false)) return;
 
+        var store = new TokenStore();
         AuthRefreshButton.IsEnabled = false;
         try
         {

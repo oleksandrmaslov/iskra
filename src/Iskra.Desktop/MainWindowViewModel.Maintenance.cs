@@ -14,14 +14,19 @@ namespace Iskra.Desktop;
 /// </summary>
 public sealed partial class MainWindowViewModel
 {
-    private static readonly TimeSpan AuthRefreshSkew = TimeSpan.FromMinutes(5);
+    // Windows DPAPI is the only encrypted token store today; elsewhere the
+    // workflow is handed null and reports SecureStoreUnavailable rather than
+    // offering a sign-in that could not be persisted safely.
+    private readonly AuthWorkflow _authWorkflow =
+        new(OperatingSystem.IsWindows() ? new TokenStore() : null);
+    private readonly CloudLogWorkflow _cloudLogWorkflow = new();
 
+    private AuthSnapshot? _authSnapshot;
     private string _authStatusText = string.Empty;
     private IBrush _authStatusBrush = StatusMutedBrush;
-    private bool _canSignIn;
-    private bool _canSignOut;
     private string _catalogUpdateStatusText = string.Empty;
     private IBrush _catalogUpdateStatusBrush = StatusMutedBrush;
+    private string _catalogUpdateNoticeText = string.Empty;
     private string _appUpdateStatusText = string.Empty;
     private IBrush _appUpdateStatusBrush = StatusMutedBrush;
     private string? _latestReleaseUrl;
@@ -45,8 +50,8 @@ public sealed partial class MainWindowViewModel
 
     private void InitializeMaintenanceSurface()
     {
-        SignInCommand = new AsyncRelayCommand(SignInAsync, () => _canSignIn);
-        SignOutCommand = new RelayCommand(SignOut, () => _canSignOut);
+        SignInCommand = new AsyncRelayCommand(SignInAsync, () => _authSnapshot?.CanSignIn ?? false);
+        SignOutCommand = new RelayCommand(SignOut, () => _authSnapshot?.CanSignOut ?? false);
         RefreshAuthCommand = new AsyncRelayCommand(RefreshAuthTokenAsync);
         CheckCatalogUpdateCommand = new AsyncRelayCommand(CheckCatalogUpdateAsync);
         CheckAppUpdateCommand = new AsyncRelayCommand(CheckAppUpdateAsync);
@@ -57,11 +62,31 @@ public sealed partial class MainWindowViewModel
         ExportBatchCommand = new AsyncRelayCommand(
             () => ExportAsync(HistoryExportScope.CurrentBatch),
             () => BatchesEnabled);
+        ReloadCatalogCommand = new RelayCommand(() =>
+        {
+            CatalogUpdateNoticeText = string.Empty;
+            RefreshReadiness();
+        });
     }
+
+    public RelayCommand ReloadCatalogCommand { get; private set; } = null!;
 
     public string AuthStatusText { get => _authStatusText; private set => SetProperty(ref _authStatusText, value); }
     public IBrush AuthStatusBrush { get => _authStatusBrush; private set => SetProperty(ref _authStatusBrush, value); }
     public string CatalogUpdateStatusText { get => _catalogUpdateStatusText; private set => SetProperty(ref _catalogUpdateStatusText, value); }
+
+    /// <summary>Banner on the Catalog tab: a newer signed catalog is cached and waiting for a reload.</summary>
+    public string CatalogUpdateNoticeText
+    {
+        get => _catalogUpdateNoticeText;
+        private set
+        {
+            if (SetProperty(ref _catalogUpdateNoticeText, value))
+                OnPropertyChanged(nameof(HasCatalogUpdateNotice));
+        }
+    }
+
+    public bool HasCatalogUpdateNotice => _catalogUpdateNoticeText.Length > 0;
     public IBrush CatalogUpdateStatusBrush { get => _catalogUpdateStatusBrush; private set => SetProperty(ref _catalogUpdateStatusBrush, value); }
     public string AppUpdateStatusText { get => _appUpdateStatusText; private set => SetProperty(ref _appUpdateStatusText, value); }
     public IBrush AppUpdateStatusBrush { get => _appUpdateStatusBrush; private set => SetProperty(ref _appUpdateStatusBrush, value); }
@@ -86,60 +111,30 @@ public sealed partial class MainWindowViewModel
     // GitHub sign-in
     // ============================================================
 
+    /// <summary>
+    /// Classification lives in the shared <see cref="AuthWorkflow"/>; this method
+    /// only renders it. WPF renders the same snapshot, so both frontends cannot
+    /// drift on what "signed in" means.
+    /// </summary>
     private void RefreshAuthStatus()
     {
-        if (!IsAuthSupported)
+        _authSnapshot = _authWorkflow.Evaluate();
+        var (text, brush) = _authSnapshot.Status switch
         {
-            SetAuth(Text.AuthUnsupportedPlatform, StatusWarnBrush, canSignIn: false, canSignOut: false);
-            return;
-        }
+            AuthStatus.SecureStoreUnavailable => (Text.AuthUnsupportedPlatform, StatusWarnBrush),
+            AuthStatus.ClientNotConfigured => (Text.AuthClientMissing, StatusErrorBrush),
+            AuthStatus.TokenStoreCorrupt =>
+                (Text.AuthTokenCorrupt(_authSnapshot.Diagnostic ?? string.Empty), StatusErrorBrush),
+            AuthStatus.NotSignedIn => (Text.AuthNotSignedIn, StatusWarnBrush),
+            AuthStatus.SessionExpired => (Text.AuthSessionExpired, StatusErrorBrush),
+            _ => (Text.AuthSignedIn(
+                    _authSnapshot.AccessTokenFresh ? Text.AuthAccessValid : Text.AuthAccessRefresh,
+                    _authSnapshot.AccessTokenExpiresAtUtc?.ToLocalTime().ToString("g", Text.Culture) ?? "?"),
+                StatusOkBrush),
+        };
 
-        if (!GitHubAppConfig.IsConfigured)
-        {
-            SetAuth(Text.AuthClientMissing, StatusErrorBrush, canSignIn: false, canSignOut: false);
-            return;
-        }
-
-        StoredTokens? stored;
-        try
-        {
-            stored = LoadTokens();
-        }
-        catch (TokenStoreException ex)
-        {
-            SetAuth(Text.AuthTokenCorrupt(ex.Message), StatusErrorBrush, canSignIn: true, canSignOut: true);
-            return;
-        }
-
-        if (stored is null)
-        {
-            SetAuth(Text.AuthNotSignedIn, StatusWarnBrush, canSignIn: true, canSignOut: false);
-            return;
-        }
-
-        var now = DateTime.UtcNow;
-        if (stored.RefreshTokenIsExpired(now))
-        {
-            SetAuth(Text.AuthSessionExpired, StatusErrorBrush, canSignIn: true, canSignOut: true);
-            return;
-        }
-
-        var access = stored.AccessTokenIsFresh(now, AuthRefreshSkew)
-            ? Text.AuthAccessValid
-            : Text.AuthAccessRefresh;
-        SetAuth(
-            Text.AuthSignedIn(access, stored.AccessTokenExpiresAtUtc.ToLocalTime().ToString("g", Text.Culture)),
-            StatusOkBrush,
-            canSignIn: true,
-            canSignOut: true);
-    }
-
-    private void SetAuth(string text, IBrush brush, bool canSignIn, bool canSignOut)
-    {
         AuthStatusText = text;
         AuthStatusBrush = brush;
-        _canSignIn = canSignIn;
-        _canSignOut = canSignOut;
         SignInCommand.RaiseCanExecuteChanged();
         SignOutCommand.RaiseCanExecuteChanged();
         RefreshRemoteFirmwareHint();
@@ -147,15 +142,17 @@ public sealed partial class MainWindowViewModel
 
     private void RefreshRemoteFirmwareHint() =>
         ShowAuthHint = SelectedRelease?.IsRemote == true
-            && !DesktopRemoteFirmwareProvider.CanFetchRemoteFirmware();
-
-    private static StoredTokens? LoadTokens() =>
-        OperatingSystem.IsWindows() ? new TokenStore().Load() : null;
+            && !(_authSnapshot?.CanFetchRemoteFirmware ?? false);
 
     private async Task SignInAsync()
     {
         if (!IsAuthSupported || !GitHubAppConfig.IsConfigured) return;
-        if (Dialogs is null) { SetAuth(Text.DialogUnavailable, StatusErrorBrush, _canSignIn, _canSignOut); return; }
+        if (Dialogs is null)
+        {
+            AuthStatusText = Text.DialogUnavailable;
+            AuthStatusBrush = StatusErrorBrush;
+            return;
+        }
 
         try
         {
@@ -205,13 +202,12 @@ public sealed partial class MainWindowViewModel
 
     private void SignOut()
     {
-        try
+        var after = _authWorkflow.SignOut();
+        if (after.Status == AuthStatus.TokenStoreCorrupt && after.Diagnostic is { } diagnostic)
         {
-            if (OperatingSystem.IsWindows()) new TokenStore().Delete();
-        }
-        catch (Exception ex)
-        {
-            SetAuth(Text.AuthDeleteFailed(ex.Message), StatusErrorBrush, _canSignIn, _canSignOut);
+            _authSnapshot = after;
+            AuthStatusText = Text.AuthDeleteFailed(diagnostic);
+            AuthStatusBrush = StatusErrorBrush;
             return;
         }
 
@@ -225,9 +221,7 @@ public sealed partial class MainWindowViewModel
         // only recognises OperatingSystem.IsWindows() as a guard for TokenStore.
         if (!OperatingSystem.IsWindows() || !GitHubAppConfig.IsConfigured) return;
 
-        StoredTokens? stored;
-        try { stored = LoadTokens(); } catch { stored = null; }
-        if (stored is null) return;
+        if (!_authWorkflow.Evaluate().CanSignOut) return;
 
         try
         {
@@ -244,7 +238,8 @@ public sealed partial class MainWindowViewModel
         }
         catch (Exception ex)
         {
-            SetAuth(Text.AuthRefreshFailed(ex.Message), StatusErrorBrush, _canSignIn, _canSignOut);
+            AuthStatusText = Text.AuthRefreshFailed(ex.Message);
+            AuthStatusBrush = StatusErrorBrush;
         }
     }
 
@@ -336,6 +331,34 @@ public sealed partial class MainWindowViewModel
         CatalogUpdateStatusBrush = brush;
     }
 
+    /// <summary>
+    /// Non-blocking startup check against the locked catalog source, mirroring
+    /// WPF. It deliberately does not swap the catalog under a station that may
+    /// be mid-batch: on a new tag it only raises a notice, and the operator
+    /// chooses when to reload.
+    /// </summary>
+    public async Task BackgroundFetchCatalogAsync()
+    {
+        if (!_settings.CatalogAutoUpdate) return;
+
+        try
+        {
+            using var http = new HttpClient();
+            var result = await new RemoteCatalogClient(http).FetchAsync().ConfigureAwait(true);
+            if (result.Status == RemoteCatalogStatus.Updated && result.ChangedFromCached)
+            {
+                CatalogUpdateNoticeText = Text.CatalogUpdateAvailable(result.TagName);
+                SetCatalogUpdate(Text.CatalogUpdated(result.TagName), StatusOkBrush);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Startup convenience only: a station with no network must still
+            // reach a usable Flash tab.
+            SetCatalogUpdate($"✗ {ex.Message}", StatusWarnBrush);
+        }
+    }
+
     private void SetAppUpdate(string text, IBrush brush)
     {
         AppUpdateStatusText = text;
@@ -348,38 +371,22 @@ public sealed partial class MainWindowViewModel
 
     private void RefreshCloudStatus()
     {
-        if (!_settings.LogShippingEnabled)
+        var snapshot = _cloudLogWorkflow.Inspect(_settings);
+        var (status, detail, brush) = snapshot.Status switch
         {
-            SetCloud(Text.CloudDisabledShort, Text.CloudDisabledDetail, StatusMutedBrush);
-            return;
-        }
+            CloudLogStatus.Disabled => (Text.CloudDisabledShort, Text.CloudDisabledDetail, StatusMutedBrush),
+            CloudLogStatus.NotConfigured =>
+                (Text.CloudUnconfiguredShort, Text.CloudUnconfiguredDetail, StatusWarnBrush),
+            CloudLogStatus.NoDatabase => (Text.CloudEmptyShort, Text.CloudEmptyDetail, StatusMutedBrush),
+            CloudLogStatus.Synced => (Text.CloudSyncedShort, Text.CloudUploadedAll, StatusOkBrush),
+            CloudLogStatus.Pending => (
+                Text.CloudQueuedShort(snapshot.PendingRows),
+                Text.CloudRowsWaiting(snapshot.PendingRows),
+                StatusWarnBrush),
+            _ => (Text.CloudErrorShort, $"✗ {snapshot.Diagnostic}", StatusErrorBrush),
+        };
 
-        if (!GitHubAppConfig.IsLogShipperConfigured)
-        {
-            SetCloud(Text.CloudUnconfiguredShort, Text.CloudUnconfiguredDetail, StatusWarnBrush);
-            return;
-        }
-
-        try
-        {
-            var dbPath = ApplicationPaths.ResolveDatabasePath(_settings);
-            if (!File.Exists(dbPath))
-            {
-                SetCloud(Text.CloudEmptyShort, Text.CloudEmptyDetail, StatusMutedBrush);
-                return;
-            }
-
-            using var store = new SqliteLogStore(dbPath);
-            var pending = store.CountUnsynced();
-            SetCloud(
-                pending == 0 ? Text.CloudSyncedShort : Text.CloudQueuedShort(pending),
-                pending == 0 ? Text.CloudUploadedAll : Text.CloudRowsWaiting(pending),
-                pending == 0 ? StatusOkBrush : StatusWarnBrush);
-        }
-        catch (Exception ex)
-        {
-            SetCloud(Text.CloudErrorShort, $"✗ {ex.Message}", StatusErrorBrush);
-        }
+        SetCloud(status, detail, brush);
     }
 
     private void SetCloud(string status, string detail, IBrush brush)
@@ -391,59 +398,26 @@ public sealed partial class MainWindowViewModel
 
     private async Task ShipLogsNowAsync()
     {
-        if (!_settings.LogShippingEnabled)
-        {
-            SetCloud(CloudStatusText, Text.CloudEnableFirst, StatusWarnBrush);
-            return;
-        }
-
-        if (!GitHubAppConfig.IsLogShipperConfigured)
-        {
-            SetCloud(CloudStatusText, Text.CloudUnconfiguredDetail, StatusErrorBrush);
-            return;
-        }
-
-        var keyPath = string.IsNullOrWhiteSpace(_logShipperKeyInput)
-            ? _settings.LogShipperPrivateKeyPath
-            : _logShipperKeyInput.Trim();
-        if (!File.Exists(keyPath))
-        {
-            SetCloud(CloudStatusText, Text.CloudKeyMissing(keyPath), StatusErrorBrush);
-            return;
-        }
-
         SetCloud(CloudStatusText, Text.CloudUploading, StatusMutedBrush);
-        try
-        {
-            ShipReport report;
-            using (var store = new SqliteLogStore(ApplicationPaths.ResolveDatabasePath(_settings)))
-            using (var http = new HttpClient())
-            {
-                var tokens = new GitHubAppInstallationTokenProvider(
-                    http,
-                    GitHubAppConfig.LogShipperAppId,
-                    GitHubAppConfig.LogShipperInstallationId,
-                    () => GitHubAppInstallationTokenProvider.LoadPemKey(keyPath));
-                var shipper = new LogShipper(
-                    store, tokens, http,
-                    GitHubAppConfig.LogsRepoOwner,
-                    GitHubAppConfig.LogsRepoName);
-                report = await shipper.ShipPendingAsync();
-            }
+        // Pass the edited key path rather than the saved one: the operator may
+        // be pointing at a freshly delivered .pem before saving Settings.
+        var result = await _cloudLogWorkflow.ShipAsync(_settings, _logShipperKeyInput);
 
-            SetCloud(
-                CloudStatusText,
-                Text.CloudUploadReport(report.RowsPushed, report.FilesCreated, report.FilesUpdated, report.RowsLeftover),
-                StatusOkBrush);
-        }
-        catch (Exception ex)
+        var (detail, brush) = result.Status switch
         {
-            SetCloud(CloudStatusText, $"✗ {ex.Message}", StatusErrorBrush);
-        }
-        finally
-        {
-            RefreshCloudStatus();
-        }
+            CloudShipStatus.Shipped => (
+                Text.CloudUploadReport(
+                    result.RowsPushed, result.FilesCreated, result.FilesUpdated, result.RowsLeftover),
+                StatusOkBrush),
+            CloudShipStatus.Disabled => (Text.CloudEnableFirst, StatusWarnBrush),
+            CloudShipStatus.NotConfigured => (Text.CloudUnconfiguredDetail, StatusErrorBrush),
+            CloudShipStatus.KeyMissing => (Text.CloudKeyMissing(result.KeyPath ?? string.Empty), StatusErrorBrush),
+            CloudShipStatus.NoDatabase => (Text.CloudEmptyDetail, StatusMutedBrush),
+            _ => ($"✗ {result.Diagnostic}", StatusErrorBrush),
+        };
+
+        RefreshCloudStatus();
+        SetCloud(CloudStatusText, detail, brush);
     }
 
     // ============================================================

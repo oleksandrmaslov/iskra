@@ -23,6 +23,23 @@ All notable changes to Iskra are documented here.
 - Added `tests/Iskra.Desktop.Tests`, an Avalonia headless view-model suite
   covering flash gating, banner state, catalog selection, settings validation
   and auto-save, hotkey mapping, and language switching.
+- Added `AuthWorkflow` and `CloudLogWorkflow` to `Iskra.Application`, completing
+  the Sprint 8.0 extraction. Credential classification and cloud log
+  status/shipping are now defined once and rendered by WPF, Avalonia, and
+  `--doctor`, instead of each carrying its own copy.
+- Added per-release detail to the Avalonia catalog browser: default, GitHub, and
+  revoked badges, firmware kind, release date, artefact name, full SHA-256, and
+  the revocation reason. Added the startup background catalog fetch, which
+  raises a reload notice rather than swapping the catalog under a station that
+  may be mid-batch.
+- Extended `Iskra.Cli --doctor` with the runtime identifier and framework, GDB
+  provenance from the toolchain's own `--version` banner, shared credential
+  classification, and cloud-log readiness including the pending row count.
+- Added an `.editorconfig` describing the house style. Every rule is at
+  `suggestion` severity and no format gate was added: the repository still has
+  pre-existing drift, so a formatting sweep must land first. `CA1416` is kept at
+  warning because it is what stops a Windows-only credential call from silently
+  shipping in the portable CLI or the cross-platform frontend.
 
 ### Fixed
 

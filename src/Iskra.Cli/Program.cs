@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text;
+using Iskra.Application;
 using Iskra.Application.Localization;
 using Iskra.Core;
 
@@ -931,6 +932,12 @@ static int Doctor(string[] args)
     Console.WriteLine("====================");
 
     Pass(CliText.Get("Doctor.OperatingSystem"), System.Runtime.InteropServices.RuntimeInformation.OSDescription);
+    // The runtime identifier decides which update package and which OS adapters
+    // apply, so a support report is ambiguous without it.
+    Pass(CliText.Get("Doctor.Runtime"), CliText.Get(
+        "Doctor.RuntimeDetail",
+        System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier,
+        System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription));
 
     var appDir = AppContext.BaseDirectory;
     var appFileName = OperatingSystem.IsWindows() ? "Iskra.exe" : "Iskra";
@@ -950,9 +957,20 @@ static int Doctor(string[] args)
 
     var gdbPath = GdbDiscovery.Find(ArgValue(args, "--gdb-path"));
     if (gdbPath is null)
+    {
         Fail("Arm GNU Toolchain", CliText.Get("Doctor.GdbMissing"));
+    }
     else
+    {
         Pass("Arm GNU Toolchain", gdbPath);
+        // Provenance: the path alone does not say which build is installed, and
+        // a mismatched toolchain is a plausible cause of odd flash failures.
+        var banner = TryReadGdbVersion(gdbPath);
+        if (banner is null)
+            Warn("gdb version", CliText.Get("Doctor.GdbVersionUnknown"));
+        else
+            Pass("gdb version", banner);
+    }
 
     var probes = ProbeDiscovery.FindGdbPorts();
     switch (probes.Count)
@@ -1034,27 +1052,54 @@ static int Doctor(string[] args)
     else
         Fail("%PROGRAMDATA%\\Iskra", programDataError ?? CliText.Get("Doctor.NotWritable"));
 
-    if (OperatingSystem.IsWindows())
+    // Same classification the desktop frontends render, so a doctor report and
+    // the Settings tab can never disagree about the session state.
+    var authSnapshot = new AuthWorkflow(OperatingSystem.IsWindows() ? new TokenStore() : null).Evaluate();
+    switch (authSnapshot.Status)
     {
-        var tokenStore = new TokenStore();
-        try
-        {
-            var tokens = tokenStore.Load();
-            if (tokens is null)
-                Warn("GitHub auth", CliText.Get("Doctor.NotSignedIn"));
-            else if (tokens.RefreshTokenIsExpired(DateTime.UtcNow))
-                Fail("GitHub auth", CliText.Get("Doctor.RefreshExpired"));
-            else
-                Pass("GitHub auth", tokenStore.Path);
-        }
-        catch (Exception ex) when (ex is TokenStoreException or IOException or UnauthorizedAccessException)
-        {
-            Fail("GitHub auth", ex.Message);
-        }
+        case AuthStatus.SecureStoreUnavailable:
+            Warn("GitHub auth", CliText.Get("Doctor.SecureStoreMissing"));
+            break;
+        case AuthStatus.ClientNotConfigured:
+            Warn("GitHub auth", CliText.Get("Doctor.AuthClientMissing"));
+            break;
+        case AuthStatus.TokenStoreCorrupt:
+            Fail("GitHub auth", authSnapshot.Diagnostic ?? "");
+            break;
+        case AuthStatus.NotSignedIn:
+            Warn("GitHub auth", CliText.Get("Doctor.NotSignedIn"));
+            break;
+        case AuthStatus.SessionExpired:
+            Fail("GitHub auth", CliText.Get("Doctor.RefreshExpired"));
+            break;
+        default:
+            Pass("GitHub auth", CliText.Get(
+                "Doctor.SignedInUntil",
+                authSnapshot.RefreshTokenExpiresAtUtc?.ToString("u") ?? "?"));
+            break;
     }
-    else
+
+    var cloud = new CloudLogWorkflow().Inspect(AppSettingsStore.Load());
+    switch (cloud.Status)
     {
-        Warn("GitHub auth", CliText.Get("Doctor.SecureStoreMissing"));
+        case CloudLogStatus.Disabled:
+            Warn("Cloud log", CliText.Get("Doctor.CloudDisabled"));
+            break;
+        case CloudLogStatus.NotConfigured:
+            Warn("Cloud log", CliText.Get("Doctor.CloudUnconfigured"));
+            break;
+        case CloudLogStatus.NoDatabase:
+            Pass("Cloud log", CliText.Get("Doctor.CloudNoDatabase"));
+            break;
+        case CloudLogStatus.Synced:
+            Pass("Cloud log", CliText.Get("Doctor.CloudSynced"));
+            break;
+        case CloudLogStatus.Pending:
+            Warn("Cloud log", CliText.Get("Doctor.CloudPending", cloud.PendingRows));
+            break;
+        default:
+            Fail("Cloud log", cloud.Diagnostic ?? "");
+            break;
     }
 
     Console.WriteLine();
@@ -1066,6 +1111,40 @@ static int Doctor(string[] args)
 
     Console.WriteLine(CliText.Get("Doctor.Fail", failures, warnings));
     return 1;
+}
+
+/// <summary>
+/// Reads the toolchain's own version banner. Best-effort and short-fused: a
+/// diagnostic must never hang on a wedged executable.
+/// </summary>
+static string? TryReadGdbVersion(string gdbPath)
+{
+    try
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = gdbPath,
+            Arguments = "--version",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        });
+        if (process is null) return null;
+
+        var firstLine = process.StandardOutput.ReadLine();
+        if (!process.WaitForExit(5000))
+        {
+            process.Kill(entireProcessTree: true);
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(firstLine) ? null : firstLine.Trim();
+    }
+    catch
+    {
+        return null;
+    }
 }
 
 static void WriteDoctorLine(string status, string name, string detail)
