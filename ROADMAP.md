@@ -66,12 +66,34 @@ historical sprint handoff; new goals and acceptance gates live here.
 ## Production blockers and conditional gates carried forward
 
 1. Repeat the 50-consecutive-PASS bench run after the two-phase GDB changes.
-2. Sprint 6.5 is conditional while batch mode remains disabled: cross-station
-   locking is not a blocker for the current unbatched use case. If production
-   enables batches, the shared lock becomes a release blocker and must include
-   product, version, firmware SHA-256, target descriptor, station identity, and
-   an explicit offline policy. Recommended policy: fail closed; supervisor
-   recovery is a separately audited action.
+2. **Sprint 6.5 deferred by owner decision (2026-08-08).** Batch mode is off in
+   production, so cross-station locking is not a blocker and building it now
+   would mean guessing at factory network topology. The gap is real and is
+   recorded here rather than half-built:
+
+   - **Today's behaviour.** `SqliteLogStore.ReserveBatchLock` is per station.
+     Two stations running the same batch ID keep two independent locks and will
+     not detect a conflicting product/version/digest between them. With batch
+     mode disabled the app records a blank batch ID and reserves nothing, so
+     there is nothing to diverge.
+   - **Trigger to build it.** Enabling `BatchesEnabled` on more than one station
+     that shares a batch ID. At that point the shared lock is a release blocker.
+   - **Decided policy, so the implementer does not have to re-litigate it.**
+     Fail closed, always: with batch mode on and the shared store unreachable,
+     flashing stops. No silent fallback to the local lock — that reintroduces
+     precisely the split brain the sprint exists to prevent. A supervisor
+     override, if ever added, must be a separately audited action that writes an
+     explicit override flag and reason into the attempt record.
+   - **Required binding.** batch ID, product, version, firmware SHA-256, target
+     descriptor (BMP match + flash size), and station identity. Note the current
+     `BatchLockDescriptor` carries everything except station identity, so it
+     needs one extra field.
+   - **Open decision.** Where shared state lives. A shared network folder with
+     atomic exclusive-create is the leading candidate (no server, no per-flash
+     internet, supervisor-readable). The GitHub `iskra-logs` route is rejected
+     for this purpose: it adds an internet round-trip to every flash in a
+     500-unit batch and, with today's shared write key, lets a compromised
+     station forge another station's lock.
 3. Sprint 7: trustworthy board identity is now a production gate, not optional
    polish. `bmp_match` identifies only an MCU family and cannot distinguish two
    products built on the same chip. Add a signed catalog board-ID/UID policy and
@@ -188,6 +210,19 @@ bench acceptance and non-Windows packaging, not features.
   packaged-app acceptance, and HIL; it does not delete WPF support.
 
 ### 8.3 — packaging, CI, and HIL parity
+
+**Windows Avalonia packaging done (2026-08-08).** `installer/Product.Avalonia.wxs`,
+`Bundle.Avalonia.wxs`, and `build-avalonia-installer.ps1` produce an
+`Iskra-Avalonia-<ver>-setup-x64.exe` carrying the same SHA-256-pinned Arm GNU
+Toolchain as the WPF setup, so a bare station needs no other download. It is a
+separate product by construction — distinct UpgradeCode, distinct ProductCode,
+`C:\Program Files\Iskra Avalonia\`, its own Start Menu entry and registry key
+path — so it installs beside the production WPF station and can never upgrade,
+repair, or remove it. Both bundles mark the Arm toolchain permanent, so removing
+either product leaves the compiler in place for the other. Toolchain pins live in
+`installer/arm-toolchain.pins.ps1`, dot-sourced by both builders, so the two
+setup EXEs cannot ship different compilers. Linux and macOS packaging remain.
+
 
 - First release order: Windows x64, Ubuntu/Debian x64, macOS arm64, then macOS x64.
 - Keep WiX for Windows; add a Linux package/udev policy and signed/notarized macOS

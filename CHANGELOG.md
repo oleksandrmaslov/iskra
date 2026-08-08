@@ -40,6 +40,32 @@ All notable changes to Iskra are documented here.
   pre-existing drift, so a formatting sweep must land first. `CA1416` is kept at
   warning because it is what stops a Windows-only credential call from silently
   shipping in the portable CLI or the cross-platform frontend.
+- Added a dedicated Iskra Avalonia installer: `installer/Product.Avalonia.wxs`,
+  `installer/Bundle.Avalonia.wxs`, and `installer/build-avalonia-installer.ps1`
+  produce a setup EXE that carries the same SHA-256-pinned Arm GNU Toolchain as
+  the WPF setup, so a bare station needs no other download. It installs
+  **beside** the production WPF station, never over it: distinct UpgradeCode,
+  distinct ProductCode, its own `C:\Program Files\Iskra Avalonia\` folder, its
+  own Start Menu entry, and its own registry key path. The shared Arm toolchain
+  is marked permanent by both bundles, so removing either product never strips
+  the compiler from a station still flashing production.
+- Added `installer/arm-toolchain.pins.ps1` as the single source of truth for the
+  bundled toolchain version, filename, URL, and SHA-256. Both installer builders
+  dot-source it, so the two setup EXEs cannot ship different compilers under the
+  same claim.
+- Added a full-screen mode to the Avalonia app: a header toggle, F11, and Escape
+  to leave. Full screen is the intended factory-floor mode — only the PASS/FAIL
+  band and the FLASH button, with no desktop behind them.
+
+### Changed
+
+- Reduced the Avalonia default window to 1040x720 with a 760x520 minimum, and
+  clamped it on open to the working area of the screen it actually lands on. The
+  previous 1120x820 default pushed its own title bar off the top of a 1080p
+  screen at 125% scaling, leaving the window impossible to move or resize.
+- Gave buttons on the dark header and status strip an explicit light-on-dark
+  style. The BMP "Check again" button was rendering Fluent's dark text on the
+  dark strip and was effectively unreadable.
 
 ### Fixed
 
@@ -47,6 +73,14 @@ All notable changes to Iskra are documented here.
   PASS/FAIL band. `Progress<T>` posts to the UI thread, so a late "Flashing…"
   could overwrite the verdict an operator relies on. Fixed in both Avalonia and
   WPF; found by the new headless tests.
+
+### Notes
+
+- **Sprint 6.5 (cross-station batch lock) deferred by owner decision.** Batch
+  mode is off in production, so cross-station locking is not a blocker and
+  building it now would mean guessing at factory network topology. The gap, the
+  trigger to build it, and the decided fail-closed policy are recorded in
+  `ROADMAP.md` so the eventual implementer does not have to re-litigate them.
 
 ## [2.0.0] - 2026-08-07
 

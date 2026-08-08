@@ -7,10 +7,10 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:vm="using:Iskra.Desktop"
     Title="{Binding WindowTitle}"
-    Width="1120"
-    Height="820"
-    MinWidth="960"
-    MinHeight="700"
+    Width="1040"
+    Height="720"
+    MinWidth="760"
+    MinHeight="520"
     WindowStartupLocation="CenterScreen"
     mc:Ignorable="d">
 
@@ -42,6 +42,31 @@
       <Setter Property="Foreground" Value="#FFDCDCDC" />
       <Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+    <!-- Buttons sitting on the dark header/status strip. Fluent's default
+         button is a light chrome with dark text, which is unreadable there. -->
+    <Style Selector="Button.on-dark">
+      <Setter Property="Foreground" Value="#FFF2F5F9" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="Button.on-dark /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF3C4350" />
+      <Setter Property="BorderBrush" Value="#FF5A6472" />
+      <Setter Property="TextElement.Foreground" Value="#FFF2F5F9" />
+    </Style>
+    <Style Selector="Button.on-dark:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF4C5563" />
+      <Setter Property="BorderBrush" Value="#FF76808F" />
+      <Setter Property="TextElement.Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.on-dark:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF2A303A" />
+      <Setter Property="TextElement.Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.on-dark:disabled /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF33383F" />
+      <Setter Property="TextElement.Foreground" Value="#FF8A929C" />
     </Style>
     <Style Selector="Button.primary">
       <Setter Property="Background" Value="#FF1B5FCC" />
@@ -125,7 +150,7 @@
     <!-- Header. Deliberately single-row: every pixel spent here is a pixel the
          PASS/FAIL band and the gdb console lose on a 1366x768 station screen. -->
     <Border Grid.Row="0" Background="#FF162033" Padding="20,8">
-      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="12">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="12">
         <TextBlock Grid.Column="0" FontSize="22" FontWeight="Bold" Foreground="White"
                    VerticalAlignment="Center" Text="ISKRA" />
         <Border Grid.Column="1" Background="#FFD97706" CornerRadius="4" Padding="8,3"
@@ -146,6 +171,12 @@
             </DataTemplate>
           </ComboBox.ItemTemplate>
         </ComboBox>
+        <Button Grid.Column="5" Classes="on-dark" x:Name="FullScreenButton"
+                Width="38" Padding="0,3" VerticalAlignment="Center" Margin="8,0,0,0"
+                HorizontalContentAlignment="Center"
+                Click="FullScreen_Click"
+                ToolTip.Tip="{Binding Text.FullScreenTooltip}"
+                Content="⛶" />
       </Grid>
     </Border>
 
@@ -162,8 +193,8 @@
         <TextBlock Grid.Column="3" Classes="chip" Margin="0,0,16,0">
           <Run Text="☁" /><Run Text=" " /><Run Text="{Binding CloudStatusText}" />
         </TextBlock>
-        <Button Grid.Column="4"
-                Padding="10,2"
+        <Button Grid.Column="4" Classes="on-dark"
+                Padding="12,3"
                 Command="{Binding RefreshReadinessCommand}"
                 Content="{Binding Text.Refresh}" />
       </Grid>

@@ -1,21 +1,26 @@
-# Builds a release installer for Iskra.
+# Builds the Iskra Avalonia installer.
+#
+# This is the cross-platform frontend packaged to install BESIDE the production
+# WPF station, not over it: separate UpgradeCode, separate install folder,
+# separate Start Menu entry. Installing or removing it cannot disturb a WPF
+# station that is currently flashing production.
 #
 # Steps:
 #   1. Restore the committed package locks without narrowing the RID matrix.
-#   2. Publish the WPF app as a single-file, self-contained Windows-x64 exe.
-#   3. Publish the CLI as a single-file, self-contained Windows-x64 exe.
+#   2. Publish the Avalonia app as a single-file, self-contained Windows-x64 exe.
+#   3. Publish the CLI the same way, so this product is independently usable
+#      for --doctor and --login on a station that never got the WPF install.
 #   4. Add required WiX extensions if not already present.
-#   5. Run wix to compile installer/Product.wxs into an app .msi.
+#   5. Run wix to compile installer/Product.Avalonia.wxs into an app .msi.
 #   6. Remove large publish/bin intermediates unless -KeepPublishOutput is set.
 #   7. Download/cache the pinned Arm GNU Toolchain MSI if needed.
-#   8. Run wix to compile installer/Bundle.wxs into a single setup .exe
-#      that checks prerequisites, chains the Arm toolchain MSI, and the Iskra MSI.
+#   8. Run wix to compile installer/Bundle.Avalonia.wxs into a single setup .exe
+#      that checks prerequisites, chains the Arm toolchain MSI, then Iskra Avalonia.
 #
 # Outputs:
-#   installer/out/Iskra-<ver>-x64.msi
-#   installer/out/Iskra-<ver>-setup-x64.exe
-#   installer/out/Iskra-<ver>-preinstall-check.ps1
-#   installer/out/Iskra-<ver>-SHA256SUMS.txt
+#   installer/out/Iskra-Avalonia-<ver>-x64.msi
+#   installer/out/Iskra-Avalonia-<ver>-setup-x64.exe
+#   installer/out/Iskra-Avalonia-<ver>-SHA256SUMS.txt
 #
 # Requires:
 #   * .NET SDK 10.0.301 on PATH (or LOCALAPPDATA install; `global.json` pins it)
@@ -23,10 +28,8 @@
 #   * curl.exe (built into supported Windows 10/11 images)
 #
 # Usage:
-#   pwsh ./installer/build-installer.ps1
-#   pwsh ./installer/build-installer.ps1 -Version 1.2.3
-#   pwsh ./installer/build-installer.ps1 -KeepPublishOutput
-#   pwsh ./installer/build-installer.ps1 -ArmToolchainInstaller C:\deps\arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi.msi
+#   pwsh ./installer/build-avalonia-installer.ps1
+#   pwsh ./installer/build-avalonia-installer.ps1 -Version 2.1.0
 
 param(
     [string] $Version = "1.0.0",
@@ -40,11 +43,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-# Toolchain version/URL/hash live in one place shared with the Avalonia builder,
-# so the two setup EXEs can never ship different compilers under the same claim.
+# Toolchain version/URL/hash come from the shared pin file so the two setup
+# EXEs can never ship different compilers under the same claim.
 . (Join-Path $PSScriptRoot "arm-toolchain.pins.ps1")
 
-# Ensure dotnet + wix tool are on PATH for this session.
 $env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH;$env:USERPROFILE\.dotnet\tools"
 $dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
 if (-not (Test-Path -LiteralPath $dotnet)) {
@@ -99,10 +101,6 @@ function Resolve-ArmToolchainInstaller {
         Remove-Item -LiteralPath $ArmToolchainInstaller -Force
     }
 
-    if ([string]::IsNullOrWhiteSpace($ArmToolchainUrl)) {
-        throw "Arm toolchain MSI missing and ArmToolchainUrl is empty: $ArmToolchainInstaller"
-    }
-
     $tmp = "$ArmToolchainInstaller.tmp"
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     Invoke-CurlDownload $ArmToolchainUrl $tmp
@@ -129,27 +127,13 @@ function Remove-GeneratedDirectory([string] $Path) {
     Remove-Item -LiteralPath $full -Recurse -Force
 }
 
-function Remove-PublishIntermediates {
-    if ($KeepPublishOutput) {
-        Write-Host "  keeping publish/bin intermediates"
-        return
-    }
-
-    Write-Host "  removing publish/bin intermediates before bundling"
-    Remove-GeneratedDirectory $publishDir
-    Remove-GeneratedDirectory $cliPublishDir
-    Remove-GeneratedDirectory (Join-Path $repoRoot "src\Iskra.Wpf\bin")
-    Remove-GeneratedDirectory (Join-Path $repoRoot "src\Iskra.Cli\bin")
-    Remove-GeneratedDirectory (Join-Path $repoRoot "src\Iskra.Core\bin")
-}
-
 Write-Host "[1/8] locked solution restore" -ForegroundColor Cyan
 & $dotnet restore Iskra.sln --locked-mode --nologo | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "locked solution restore failed (exit $LASTEXITCODE)" }
 
-Write-Host "[2/8] dotnet publish WPF (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
-$publishDir = Join-Path $repoRoot "publish\$Runtime"
-& $dotnet publish src/Iskra.Wpf `
+Write-Host "[2/8] dotnet publish Avalonia (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
+$publishDir = Join-Path $repoRoot "publish\avalonia-$Runtime"
+& $dotnet publish src/Iskra.Desktop `
     -c $Configuration `
     -r $Runtime `
     --self-contained true `
@@ -158,14 +142,18 @@ $publishDir = Join-Path $repoRoot "publish\$Runtime"
     -p:IncludeAllContentForSelfExtract=true `
     -p:Version=$Version `
     -o $publishDir | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "dotnet publish WPF failed (exit $LASTEXITCODE)" }
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish Avalonia failed (exit $LASTEXITCODE)" }
 
-if (-not (Test-Path (Join-Path $publishDir "Iskra.exe"))) {
-    throw "publish completed but Iskra.exe not at $publishDir"
+# The project emits Iskra.Desktop.exe; the shipped product name is Iskra.Avalonia.exe.
+$publishedExe = Join-Path $publishDir "Iskra.Desktop.exe"
+if (-not (Test-Path -LiteralPath $publishedExe)) {
+    throw "publish completed but Iskra.Desktop.exe not at $publishDir"
 }
+$brandedExe = Join-Path $publishDir "Iskra.Avalonia.exe"
+Move-Item -LiteralPath $publishedExe -Destination $brandedExe -Force
 
 Write-Host "[3/8] dotnet publish CLI (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
-$cliPublishDir = Join-Path $repoRoot "publish\cli-$Runtime"
+$cliPublishDir = Join-Path $repoRoot "publish\avalonia-cli-$Runtime"
 & $dotnet publish src/Iskra.Cli `
     -c $Configuration `
     -r $Runtime `
@@ -182,23 +170,19 @@ if (-not (Test-Path (Join-Path $cliPublishDir "Iskra.Cli.exe"))) {
 }
 
 Write-Host "[4/8] WiX extensions (idempotent)" -ForegroundColor Cyan
-# Pin extensions to the matching WiX v5 line. v7-line extensions do not unpack
-# into the v5 layout (warning WIX6101).
 Add-WixExtension "WixToolset.UI.wixext"
 Add-WixExtension "WixToolset.BootstrapperApplications.wixext"
 Add-WixExtension "WixToolset.Util.wixext"
 
-Write-Host "[5/8] wix build MSI -> installer/out/Iskra-$Version-x64.msi" -ForegroundColor Cyan
+Write-Host "[5/8] wix build MSI -> installer/out/Iskra-Avalonia-$Version-x64.msi" -ForegroundColor Cyan
 $outDir = Join-Path $PSScriptRoot "out"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-$msiPath = Join-Path $outDir "Iskra-$Version-x64.msi"
-$preinstallCheckPath = Join-Path $outDir "Iskra-$Version-preinstall-check.ps1"
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "check-station.ps1") -Destination $preinstallCheckPath -Force
+$msiPath = Join-Path $outDir "Iskra-Avalonia-$Version-x64.msi"
 
 wix build `
-    (Join-Path $PSScriptRoot "Product.wxs") `
+    (Join-Path $PSScriptRoot "Product.Avalonia.wxs") `
     -d "AppVersion=$Version" `
-    -d "PublishDir=$publishDir" `
+    -d "AvaloniaPublishDir=$publishDir" `
     -d "CliPublishDir=$cliPublishDir" `
     -d "SolutionDir=$repoRoot" `
     -ext WixToolset.UI.wixext `
@@ -207,16 +191,24 @@ wix build `
 if ($LASTEXITCODE -ne 0) { throw "wix build failed (exit $LASTEXITCODE)" }
 
 Write-Host "[6/8] trim intermediate publish output" -ForegroundColor Cyan
-Remove-PublishIntermediates
+if ($KeepPublishOutput) {
+    Write-Host "  keeping publish/bin intermediates"
+} else {
+    Write-Host "  removing publish/bin intermediates before bundling"
+    Remove-GeneratedDirectory $publishDir
+    Remove-GeneratedDirectory $cliPublishDir
+    Remove-GeneratedDirectory (Join-Path $repoRoot "src\Iskra.Desktop\bin")
+    Remove-GeneratedDirectory (Join-Path $repoRoot "src\Iskra.Cli\bin")
+}
 
 Write-Host "[7/8] Arm GNU Toolchain $ArmToolchainVersion MSI" -ForegroundColor Cyan
 $armToolchainMsi = Resolve-ArmToolchainInstaller
 
-Write-Host "[8/8] wix build bundle -> installer/out/Iskra-$Version-setup-x64.exe" -ForegroundColor Cyan
-$bundlePath = Join-Path $outDir "Iskra-$Version-setup-x64.exe"
+Write-Host "[8/8] wix build bundle -> installer/out/Iskra-Avalonia-$Version-setup-x64.exe" -ForegroundColor Cyan
+$bundlePath = Join-Path $outDir "Iskra-Avalonia-$Version-setup-x64.exe"
 
 wix build `
-    (Join-Path $PSScriptRoot "Bundle.wxs") `
+    (Join-Path $PSScriptRoot "Bundle.Avalonia.wxs") `
     -d "AppVersion=$Version" `
     -d "IskraMsi=$msiPath" `
     -d "ArmToolchainMsi=$armToolchainMsi" `
@@ -227,9 +219,8 @@ wix build `
     -out $bundlePath | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "wix bundle build failed (exit $LASTEXITCODE)" }
 
-$checksumPath = Join-Path $outDir "Iskra-$Version-SHA256SUMS.txt"
-$checksumFiles = @($bundlePath, $msiPath, $preinstallCheckPath)
-$checksumLines = foreach ($path in $checksumFiles) {
+$checksumPath = Join-Path $outDir "Iskra-Avalonia-$Version-SHA256SUMS.txt"
+$checksumLines = foreach ($path in @($bundlePath, $msiPath)) {
     "$(Get-Sha256 $path)  $([IO.Path]::GetFileName($path))"
 }
 [IO.File]::WriteAllLines(
@@ -238,6 +229,7 @@ $checksumLines = foreach ($path in $checksumFiles) {
     [Text.UTF8Encoding]::new($false))
 
 Write-Host ""
-Write-Host "[OK] Built installer bundle and app MSI" -ForegroundColor Green
-Get-Item $bundlePath, $msiPath, $preinstallCheckPath, $checksumPath |
+Write-Host "[OK] Built Iskra Avalonia setup EXE and MSI" -ForegroundColor Green
+Write-Host "     Installs beside the WPF product; it does not upgrade or remove it." -ForegroundColor Green
+Get-Item $bundlePath, $msiPath, $checksumPath |
     Select-Object FullName, Length, LastWriteTime

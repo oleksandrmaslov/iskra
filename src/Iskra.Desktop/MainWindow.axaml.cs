@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -26,7 +27,48 @@ public sealed partial class MainWindow : Window
         DataContextChanged += OnDataContextChanged;
         MainTabs.SelectionChanged += OnTabSelectionChanged;
         Closing += OnWindowClosing;
+        Opened += OnWindowOpened;
     }
+
+    /// <summary>
+    /// Clamp to the screen the window actually landed on. The designed size is
+    /// only a preference: on a 1366x768 panel, or a 1080p screen at 125%
+    /// scaling, an unclamped window puts its own title bar off the top edge and
+    /// leaves the operator unable to move or resize it.
+    /// </summary>
+    private void OnWindowOpened(object? sender, EventArgs e)
+    {
+        var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+        if (screen is null) return;
+
+        // WorkingArea excludes the taskbar; it is in physical pixels, so convert
+        // through the screen's own scaling rather than assuming 1.0.
+        var scale = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
+        var availableWidth = screen.WorkingArea.Width / scale;
+        var availableHeight = screen.WorkingArea.Height / scale;
+
+        // Leave a margin so the frame and shadow stay grabbable.
+        var width = Math.Min(Width, Math.Max(MinWidth, availableWidth - 40));
+        var height = Math.Min(Height, Math.Max(MinHeight, availableHeight - 40));
+        if (Math.Abs(width - Width) < 0.5 && Math.Abs(height - Height) < 0.5) return;
+
+        Width = width;
+        Height = height;
+        Position = new PixelPoint(
+            screen.WorkingArea.X + (int)((availableWidth - width) / 2 * scale),
+            screen.WorkingArea.Y + (int)((availableHeight - height) / 2 * scale));
+    }
+
+    private void FullScreen_Click(object? sender, RoutedEventArgs e) => ToggleFullScreen();
+
+    /// <summary>
+    /// Full screen is the intended factory-floor mode: the operator sees only
+    /// the PASS/FAIL band and the FLASH button, with no desktop behind it.
+    /// </summary>
+    private void ToggleFullScreen() =>
+        WindowState = WindowState == WindowState.FullScreen
+            ? WindowState.Normal
+            : WindowState.FullScreen;
 
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
@@ -79,6 +121,23 @@ public sealed partial class MainWindow : Window
 
     private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
     {
+        // F11 everywhere, and Escape to leave full screen — the conventional
+        // pair, and Escape matters because a full-screen window hides the
+        // close button an operator would otherwise reach for.
+        if (e.Key == Key.F11)
+        {
+            e.Handled = true;
+            ToggleFullScreen();
+            return;
+        }
+
+        if (e.Key == Key.Escape && WindowState == WindowState.FullScreen)
+        {
+            e.Handled = true;
+            WindowState = WindowState.Normal;
+            return;
+        }
+
         if (_viewModel is null || _viewModel.FlashHotkey == FlashHotkey.None) return;
         if (MainTabs.SelectedIndex != FlashTabIndex) return;
         if (!MatchesHotkey(_viewModel.FlashHotkey, e.Key)) return;

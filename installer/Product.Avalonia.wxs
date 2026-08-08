@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <!--
+    Iskra Avalonia — the cross-platform frontend, packaged to install BESIDE the
+    proven WPF station rather than over it.
+
+    Deliberately distinct from Product.wxs in three ways, all of which matter
+    while WPF is the frontend actually running production:
+      * its own UpgradeCode, so installing or removing this never upgrades,
+        repairs, or uninstalls the WPF product;
+      * its own INSTALLFOLDER, so neither product can overwrite the other's
+        Iskra.Cli.exe or examples;
+      * its own Start Menu entry, so an operator can tell them apart.
+    The two share only the Arm GNU Toolchain prerequisite, which is installed
+    once and marked permanent by both bundles.
+  -->
+  <Package Name="Iskra Avalonia"
+           Manufacturer="Oleksandr Maslov"
+           Version="$(var.AppVersion)"
+           UpgradeCode="A82F4AE4-3570-41DF-82C1-4E3487662CEC"
+           Scope="perMachine"
+           Language="1058"
+           Codepage="1251"
+           InstallerVersion="500"
+           Compressed="yes">
+
+    <SummaryInformation Description="Iskra Avalonia — cross-platform Black Magic Probe flasher" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <MajorUpgrade DowngradeErrorMessage="Уже встановлено новішу версію Iskra Avalonia." />
+
+    <!-- Standalone MSI gate. The setup EXE installs the Arm toolchain first. -->
+    <Property Id="ARM_GDB_15_PATH">
+      <DirectorySearch Id="SearchArmGdb15Dir"
+                       Path="[ProgramFiles64Folder]Arm\GNU Toolchain mingw-w64-i686-arm-none-eabi\bin">
+        <FileSearch Id="SearchArmGdb15File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="ARM_GDB_15_X86_PATH">
+      <DirectorySearch Id="SearchArmGdb15X86Dir"
+                       Path="[ProgramFilesFolder]Arm\GNU Toolchain mingw-w64-i686-arm-none-eabi\bin">
+        <FileSearch Id="SearchArmGdb15X86File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="ARM_GDB_LEGACY_ARM_15_PATH">
+      <DirectorySearch Id="SearchArmGdbLegacyArm15Dir"
+                       Path="[ProgramFiles64Folder]Arm GNU Toolchain arm-none-eabi\15.2 rel1\bin">
+        <FileSearch Id="SearchArmGdbLegacyArm15File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="ARM_GDB_LEGACY_ARM_15_X86_PATH">
+      <DirectorySearch Id="SearchArmGdbLegacyArm15X86Dir"
+                       Path="[ProgramFilesFolder]Arm GNU Toolchain arm-none-eabi\15.2 rel1\bin">
+        <FileSearch Id="SearchArmGdbLegacyArm15X86File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="ARM_GDB_LEGACY_ARM_14_PATH">
+      <DirectorySearch Id="SearchArmGdbLegacyArm14Dir"
+                       Path="[ProgramFilesFolder]Arm GNU Toolchain arm-none-eabi\14.3 rel1\bin">
+        <FileSearch Id="SearchArmGdbLegacyArm14File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="ARM_GDB_LEGACY_ARM_10_PATH">
+      <DirectorySearch Id="SearchArmGdbLegacyArm10Dir"
+                       Path="[ProgramFilesFolder]Arm GNU Toolchain arm-none-eabi\10 2021.10\bin">
+        <FileSearch Id="SearchArmGdbLegacyArm10File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="ARM_GDB_LEGACY_GNU_10_PATH">
+      <DirectorySearch Id="SearchArmGdbLegacyGnu10Dir"
+                       Path="[ProgramFilesFolder]GNU Arm Embedded Toolchain\10 2021.10\bin">
+        <FileSearch Id="SearchArmGdbLegacyGnu10File" Name="arm-none-eabi-gdb.exe" />
+      </DirectorySearch>
+    </Property>
+
+    <Launch Condition="VersionNT64 &gt;= 603"
+            Message="Потрібна Windows 10/11 x64. Встановлення Iskra Avalonia зупинено." />
+    <Launch Condition="Installed OR ARM_GDB_15_PATH OR ARM_GDB_15_X86_PATH OR ARM_GDB_LEGACY_ARM_15_PATH OR ARM_GDB_LEGACY_ARM_15_X86_PATH OR ARM_GDB_LEGACY_ARM_14_PATH OR ARM_GDB_LEGACY_ARM_10_PATH OR ARM_GDB_LEGACY_GNU_10_PATH"
+            Message="Arm GNU Toolchain (arm-none-eabi-gdb.exe) не знайдено. Запустіть Iskra Avalonia setup EXE або встановіть Arm GNU Toolchain перед MSI." />
+
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.SolutionDir)\installer\assets\banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.SolutionDir)\installer\assets\dialog.bmp" />
+
+    <Icon Id="IskraIcon.ico" SourceFile="$(var.SolutionDir)\installer\assets\iskra.ico" />
+    <Property Id="ARPPRODUCTICON" Value="IskraIcon.ico" />
+
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <Feature Id="MainFeature" Title="Iskra Avalonia" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="ExampleFiles" />
+      <ComponentGroupRef Id="StationCheckFiles" />
+      <ComponentRef Id="AppStartMenuShortcut" />
+    </Feature>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Iskra Avalonia">
+        <Directory Id="ExamplesFolder" Name="examples" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="AppStartMenuShortcut" Guid="B75239C0-EEA7-4718-81BA-63A34B39A1E6">
+        <Shortcut Id="AppStartMenuShortcutTarget"
+                  Name="Iskra Avalonia"
+                  Description="Прошивка через Black Magic Probe (кросплатформний інтерфейс)"
+                  Target="[INSTALLFOLDER]Iskra.Avalonia.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="IskraIcon.ico" />
+        <!-- Distinct registry key from the WPF product so the two components
+             never share a key path and cannot uninstall each other's shortcut. -->
+        <RegistryValue Root="HKCU"
+                       Key="Software\Iskra\Avalonia"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component>
+        <File Source="$(var.AvaloniaPublishDir)\Iskra.Avalonia.exe" />
+      </Component>
+      <!-- Its own CLI copy: this product must be independently usable for the
+           doctor and login commands on a station that never got the WPF
+           install. -->
+      <Component>
+        <File Source="$(var.CliPublishDir)\Iskra.Cli.exe" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="ExampleFiles" Directory="ExamplesFolder">
+      <Component>
+        <File Source="$(var.SolutionDir)\examples\catalog.json" />
+      </Component>
+      <Component>
+        <File Source="$(var.SolutionDir)\examples\catalog.json.sig" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="StationCheckFiles" Directory="INSTALLFOLDER">
+      <Component>
+        <File Source="$(var.SolutionDir)\installer\check-station.ps1" />
+      </Component>
+    </ComponentGroup>
+
+  </Package>
+</Wix>

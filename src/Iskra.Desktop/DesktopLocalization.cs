@@ -591,6 +591,7 @@ public sealed class DesktopText
     public string CatalogDefaultBadge => Get(DesktopTextKey.CatalogDefaultBadge);
     public string CatalogRevokedBadge => Get(DesktopTextKey.CatalogRevokedBadge);
     public string CatalogRemoteBadge => Get(DesktopTextKey.CatalogRemoteBadge);
+    public string FullScreenTooltip => Get(DesktopTextKey.FullScreenTooltip);
     public string CatalogNoRelease => Get(DesktopTextKey.CatalogNoRelease);
     public string CatalogNetworkError => Get(DesktopTextKey.CatalogNetworkError);
     public string CatalogBadSignature => Get(DesktopTextKey.CatalogBadSignature);
@@ -860,6 +861,7 @@ internal enum DesktopTextKey
     CatalogDefaultBadge,
     CatalogRevokedBadge,
     CatalogRemoteBadge,
+    FullScreenTooltip,
     CatalogNoRelease,
     CatalogNetworkError,
     CatalogBadSignature,
