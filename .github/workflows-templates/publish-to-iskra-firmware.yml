@@ -1,0 +1,142 @@
+# Place this file at .github/workflows/publish-to-iskra-firmware.yml in EACH
+# firmware repo (ci-clop-firmware, venovisor-firmware, ...).
+#
+# WHY THIS EXISTS
+# Operators must be able to flash production firmware without being given the
+# firmware source. GitHub read access is repository-wide - there is no
+# "releases only" permission - so the separation has to be a separate
+# repository. This workflow copies the built artefacts of a release into the
+# shared distribution repo, which is the only repo approved operators can read.
+#
+# The source repo, its history, and its CI stay private to you.
+#
+# WHAT IT DOES
+# On `release: published` in this repo, it re-uploads that release's assets to
+#   oleksandrmaslov/iskra-firmware
+# under the tag  <product-id>-v<version>  (namespaced, because one distribution
+# repo serves every product and two products can share a version number).
+#
+# REQUIRED SECRET in this firmware repo:
+#   ISKRA_FIRMWARE_PUBLISH_TOKEN   fine-grained PAT, resource owner
+#                                  oleksandrmaslov, repository access limited to
+#                                  iskra-firmware ONLY, permission
+#                                  "Contents: Read and write".
+#
+#   Create at https://github.com/settings/personal-access-tokens/new
+#   Then: Settings -> Secrets and variables -> Actions -> New repository secret
+#
+#   Scope it to iskra-firmware alone. A token that can also write here would let
+#   a compromised distribution step reach back into firmware source.
+
+name: publish firmware to iskra-firmware
+
+on:
+  release:
+    types: [published]
+
+# Read-only against this repo. Writing to the distribution repo uses the PAT.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copy release assets into the distribution repo
+        env:
+          # Release metadata is data, never shell source. Everything below is
+          # passed through the environment and validated before use.
+          PUBLISH_TOKEN: ${{ secrets.ISKRA_FIRMWARE_PUBLISH_TOKEN }}
+          SOURCE_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          GH_TOKEN: ${{ github.token }}
+          DIST_REPO: oleksandrmaslov/iskra-firmware
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PUBLISH_TOKEN:-}" ]; then
+            echo "::error::ISKRA_FIRMWARE_PUBLISH_TOKEN is not set" >&2
+            exit 1
+          fi
+
+          # product id = this repo's name minus the -firmware suffix, matching
+          # the asset naming convention the catalog generator expects.
+          repo_name="${SOURCE_REPO##*/}"
+          case "$repo_name" in
+            *-firmware) product="${repo_name%-firmware}" ;;
+            *)
+              echo "::error::repo '$repo_name' does not end in -firmware" >&2
+              exit 1
+              ;;
+          esac
+
+          # Refuse anything that is not v<semver>. A stray tag would otherwise
+          # become a catalog entry pointing at an artefact nobody reviewed.
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::release tag '$RELEASE_TAG' is not v<semver>" >&2
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          dist_tag="${product}-v${version}"
+
+          echo "Publishing ${SOURCE_REPO}@${RELEASE_TAG} -> ${DIST_REPO}@${dist_tag}"
+
+          mkdir -p dist-assets
+          cd dist-assets
+
+          # Download this release's assets using the workflow's own read token.
+          gh release download "$RELEASE_TAG" --repo "$SOURCE_REPO" --clobber
+
+          shopt -s nullglob
+          assets=(*)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::error::release $RELEASE_TAG has no assets to publish" >&2
+            exit 1
+          fi
+
+          # The catalog reads target.json to learn the target stack; without it
+          # the regenerated catalog would silently omit this release.
+          if [ ! -f target.json ]; then
+            echo "::error::release $RELEASE_TAG has no target.json asset" >&2
+            exit 1
+          fi
+
+          # Every firmware artefact must follow <product>_v<version>_<part>.<ext>
+          # or the generator cannot match it to this product.
+          firmware_count=0
+          for f in *.elf *.hex; do
+            case "$f" in
+              "${product}_v${version}_"*) firmware_count=$((firmware_count + 1)) ;;
+              *)
+                echo "::error::asset '$f' does not match ${product}_v${version}_<part>.<ext>" >&2
+                exit 1
+                ;;
+            esac
+          done
+          if [ "$firmware_count" -eq 0 ]; then
+            echo "::error::release $RELEASE_TAG has no .elf or .hex artefact" >&2
+            exit 1
+          fi
+
+          printf 'Publishing %d artefact(s) plus target.json\n' "$firmware_count"
+
+          # Switch to the distribution-repo token only for the write steps.
+          export GH_TOKEN="$PUBLISH_TOKEN"
+
+          # Immutable by policy: an existing dist tag means this version was
+          # already published, and silently overwriting it would change what
+          # stations flash for a version they have already seen.
+          if gh release view "$dist_tag" --repo "$DIST_REPO" >/dev/null 2>&1; then
+            echo "::error::${DIST_REPO} already has a release tagged ${dist_tag}." >&2
+            echo "::error::Cut a new version rather than replacing a published one." >&2
+            exit 1
+          fi
+
+          gh release create "$dist_tag" \
+            --repo "$DIST_REPO" \
+            --title "$product $RELEASE_TAG" \
+            --notes "Built artefacts for ${SOURCE_REPO}@${RELEASE_TAG}. Source is not published here." \
+            "${assets[@]}"
+
+          printf 'Published %s to %s\n' "$dist_tag" "$DIST_REPO"

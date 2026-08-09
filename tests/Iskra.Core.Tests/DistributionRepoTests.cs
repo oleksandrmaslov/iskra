@@ -58,19 +58,42 @@ public sealed class DistributionRepoTests
     }
 
     [Fact]
-    public void The_tag_and_asset_still_identify_the_exact_artefact()
+    public void A_source_repo_keeps_the_plain_version_tag()
     {
-        // Redirecting the repo must not disturb which bytes get downloaded.
         var catalog = CatalogGenerator.Build(
             [Sidecar("ci-clop", "1.0.3")],
+            owner: "oleksandrmaslov",
+            generatedAtUtc: DateTime.UtcNow);
+
+        var source = catalog.Products[0].Releases[0].ElfSource!;
+        Assert.Equal("v1.0.3", source.Tag);
+        Assert.Equal("ci-clop_v1.0.3_PY32F002Ax5.elf", source.Asset);
+    }
+
+    [Fact]
+    public void A_distribution_repo_namespaces_the_tag_per_product()
+    {
+        // Two products at the same version must not share one tag: re-cutting
+        // either release would otherwise destroy the other's assets.
+        var catalog = CatalogGenerator.Build(
+            [Sidecar("ci-clop", "1.0.3"), Sidecar("venovisor", "1.0.3")],
             owner: "oleksandrmaslov",
             generatedAtUtc: DateTime.UtcNow,
             revoked: null,
             distributionRepo: "oleksandrmaslov/iskra-firmware");
 
-        var source = catalog.Products[0].Releases[0].ElfSource!;
-        Assert.Equal("v1.0.3", source.Tag);
-        Assert.Equal("ci-clop_v1.0.3_PY32F002Ax5.elf", source.Asset);
+        var tags = catalog.Products
+            .SelectMany(p => p.Releases)
+            .Select(r => r.ElfSource!.Tag)
+            .ToList();
+
+        Assert.Equal(tags.Count, tags.Distinct().Count());
+        Assert.Contains("ci-clop-v1.0.3", tags);
+        Assert.Contains("venovisor-v1.0.3", tags);
+
+        // The artefact name is unchanged, so the download still resolves.
+        var ciClop = catalog.Products.Single(p => p.ProductId == "ci-clop").Releases[0];
+        Assert.Equal("ci-clop_v1.0.3_PY32F002Ax5.elf", ciClop.ElfSource!.Asset);
     }
 
     [Theory]

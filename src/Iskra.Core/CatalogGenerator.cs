@@ -206,7 +206,14 @@ public static class CatalogGenerator
             Notes:        s.Notes,
             ElfSource:    new GitHubReleaseRef(
                               Repo:  distributionRepo ?? $"{owner}/{s.ProductId}-firmware",
-                              Tag:   $"v{s.Version}",
+                              // A per-product source repo owns its tag namespace, so
+                              // plain "v1.0.3" is unambiguous there. A shared
+                              // distribution repo is not: two products releasing the
+                              // same version would land on one tag, and re-cutting
+                              // either release would destroy the other's assets.
+                              Tag:   distributionRepo is null
+                                         ? $"v{s.Version}"
+                                         : $"{s.ProductId}-v{s.Version}",
                               Asset: asset),
             FirmwareKind: s.FirmwareKind);
     }

@@ -33,6 +33,7 @@ concurrency:
 
 env:
   OWNER: oleksandrmaslov
+  DIST_REPO: oleksandrmaslov/iskra-firmware
   # Immutable reviewed iskra-app revision. Update intentionally after reviewing
   # generator/signing changes; never point the signing path at a mutable branch.
   ISKRA_APP_REF: 5da22c88f2ebddc48694e667fb2796f3dffa785a
@@ -153,6 +154,20 @@ jobs:
           if [ -f revoked.json ]; then
             extra_args+=(--revoked revoked.json)
           fi
+          # Point every elf_source at the distribution repo rather than at
+          # the per-product source repos. Discovery above still reads
+          # target.json from the source releases using the bot token (that is
+          # maintainer infrastructure), but what operators are told to
+          # download is the distribution copy - the only repo they can read.
+          #
+          # The independent hashing above hashes the source-repo assets. The
+          # publish workflow uploads those same bytes to the distribution
+          # repo, so the digests agree. Were a copy ever to diverge, stations
+          # would refuse it with E_FW_HASH_MISMATCH rather than flash it.
+          if [ -n "${DIST_REPO:-}" ]; then
+            extra_args+=(--dist-repo "$DIST_REPO")
+          fi
+
           dotnet run --project iskra-app/src/Iskra.Cli --no-restore -- \
             --generate-catalog \
             --from-targets targets \

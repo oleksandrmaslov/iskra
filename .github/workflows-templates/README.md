@@ -6,6 +6,7 @@ Copying or changing a template here does not update the satellite repositories.
 | File | Destination | Purpose |
 |---|---|---|
 | `notify-iskra-catalog.yml` | each approved firmware repo | Dispatch a release notification without evaluating release metadata as shell code |
+| `publish-to-iskra-firmware.yml` | each approved firmware repo | Copy built artefacts into the shared distribution repo so operators can be granted binaries without source |
 | `regenerate-catalog.yml` | `oleksandrmaslov/iskra-catalog` | Independently verify allowlisted firmware, build an unsigned catalog, then require review before signing |
 | `firmware-repos.txt.example` | `iskra-catalog/firmware-repos.txt` | Explicit firmware repository allowlist |
 | `rebuild-logs-db.yml` | `oleksandrmaslov/iskra-logs` | Rebuild the current lab SQLite mirror from station JSONL |
@@ -51,6 +52,36 @@ For every repository listed in `firmware-repos.txt`:
 
 The notification only wakes the catalog workflow. It does not bypass the
 allowlist, byte verification, immutable-version check, or signing approval.
+
+## Firmware distribution deployment
+
+Operators must be able to flash without being given firmware source. GitHub read
+access is repository-wide - there is no "releases only" permission - so the
+separation is a separate repository: `oleksandrmaslov/iskra-firmware` holds only
+built artefacts, published as releases.
+
+For every repository listed in `firmware-repos.txt`:
+
+1. Copy `publish-to-iskra-firmware.yml` to `.github/workflows/`.
+2. Create a fine-grained token whose repository access is **only**
+   `iskra-firmware`, with `Contents: Read and write`. Scope it no wider - a token
+   that could also write to firmware source would let a compromised distribution
+   step reach back into it.
+3. Store it as `ISKRA_FIRMWARE_PUBLISH_TOKEN` in that firmware repository.
+4. Install the `iskra-flasher` GitHub App on `iskra-firmware` **only**, and
+   remove it from the source repositories.
+
+The workflow refuses to overwrite an existing distribution tag. A published
+version is immutable: silently replacing it would change what stations flash for
+a version they have already seen.
+
+Distribution tags are namespaced `<product>-v<version>` because one repository
+serves every product, and two products can legitimately share a version number.
+`regenerate-catalog.yml` emits matching `elf_source` values via `--dist-repo`.
+
+Approving an operator is then adding their GitHub account as a **Read**
+collaborator on `iskra-firmware`; revoking is removing them. See
+[`docs/FIRMWARE_ACCESS.md`](../../docs/FIRMWARE_ACCESS.md).
 
 ## Catalog smoke test
 
