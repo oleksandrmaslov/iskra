@@ -199,7 +199,7 @@ $env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
 dotnet test
 ```
 
-Historical sprint handoff details live in `CLAUDE.md`; new work and acceptance
+Historical sprint detail lives in the git history and `CHANGELOG.md`; new work and acceptance
 criteria live in `ROADMAP.md`.
 
 ## License

@@ -1,7 +1,7 @@
 # Iskra roadmap
 
-This is the canonical forward plan. `AGENTS.md` and `CLAUDE.md` retain the
-historical sprint handoff; new goals and acceptance gates live here.
+This is the canonical forward plan. `CHANGELOG.md` records what shipped; new
+goals and acceptance gates live here.
 
 ## Current position
 

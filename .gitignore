@@ -78,3 +78,12 @@ installer/deps/
 release/
 *.msi
 *.wixpdb
+
+# Local AI-assistant context. Kept on disk so sessions still work, but not
+# published: they carry this machine's paths and internal working notes, and
+# are of no use to anyone reading the repository.
+AGENTS.md
+CLAUDE.md
+.claude/
+.codex/
+.agents/
