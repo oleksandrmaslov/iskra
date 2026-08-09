@@ -15,9 +15,12 @@ public sealed class CatalogGeneratorException : Exception
 /// <c>elf_source.repo</c> = <c>&lt;owner&gt;/&lt;product_id&gt;-firmware</c>,
 /// <c>elf_source.tag</c> = <c>v&lt;version&gt;</c>,
 /// <c>elf_source.asset</c> = same as <c>elf_filename</c>.</para>
-/// <para>Per-product fields: <c>display_name</c> = sidecar value if any, else
-/// title-cased product_id. <c>default_release</c> = highest version per
-/// product, ranked by <see cref="SemVerCompare"/>.</para>
+/// <para>Target fields must agree across sidecars. A finite allowlist corrects
+/// known ci-clop release identities whose immutable historical sidecars said
+/// 32 KiB even though the PY32F002Ax5 linker target has always been 20 KiB.
+/// Every other target difference remains an error. <c>display_name</c> falls
+/// back to the title-cased product_id and <c>default_release</c> is the highest
+/// version by <see cref="SemVerCompare"/>.</para>
 /// </summary>
 public static class CatalogGenerator
 {
@@ -85,15 +88,17 @@ public static class CatalogGenerator
         var products = new List<Product>(byProduct.Count);
         foreach (var (productId, list) in byProduct.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
         {
-            // All sidecars under one product must agree on target stack.
-            EnsureTargetStackConsistent(productId, list);
+            // Apply only reviewed, identity-bound corrections before checking
+            // that hardware and flashing policy do not drift between releases.
+            var corrected = list.Select(ApplyKnownTargetMetadataCorrection).ToList();
+            EnsureTargetStackConsistent(productId, corrected);
 
-            var canonical = list[0];
-            var releases = list
+            var canonical = corrected[0];
+            var releases = corrected
                 .OrderBy(s => s, SemVerComparer.Instance)
                 .Select(s => ToRelease(s, owner, distributionRepo))
                 .ToList();
-            var latest = list.OrderByDescending(s => s, SemVerComparer.Instance).First();
+            var latest = corrected.OrderByDescending(s => s, SemVerComparer.Instance).First();
 
             var displayName = !string.IsNullOrWhiteSpace(canonical.DisplayName)
                 ? canonical.DisplayName
@@ -218,6 +223,34 @@ public static class CatalogGenerator
             FirmwareKind: s.FirmwareKind);
     }
 
+    private static TargetSidecar ApplyKnownTargetMetadataCorrection(TargetSidecar s)
+    {
+        if (!string.Equals(s.ProductId, "ci-clop", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(s.PartNumber, "PY32F002Ax5", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(s.BmpMatch, "PY32Fxxx", StringComparison.OrdinalIgnoreCase) ||
+            !IsKnownCiClopLegacyRelease(s.Version, s.ElfSha256))
+            return s;
+
+        return s.FlashKb switch
+        {
+            20 => s,
+            32 => s with { FlashKb = 20 },
+            _ => throw new CatalogGeneratorException(
+                $"{s.ProductId} v{s.Version}: known legacy release has unexpected flash_kb {s.FlashKb}")
+        };
+    }
+
+    private static bool IsKnownCiClopLegacyRelease(string version, string sha256) =>
+        (string.Equals(version, "1.0.0", StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(sha256, "4514acf573a17487db6ccf52b9e4ef2840bf59c4d743789ee6715eaf5655f2cd",
+             StringComparison.OrdinalIgnoreCase)) ||
+        (string.Equals(version, "1.0.2", StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(sha256, "60743a9c3ef6f40e6b707a2b4f8b201875c7954fe52fdf752f4864296ed3dfeb",
+             StringComparison.OrdinalIgnoreCase)) ||
+        (string.Equals(version, "1.0.3", StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(sha256, "403355ab8371c624af5c5cd5b01109c2734a6e31c81a89b18bbab8b9ea23423f",
+             StringComparison.OrdinalIgnoreCase));
+
     private static void EnsureTargetStackConsistent(string productId, List<TargetSidecar> list)
     {
         var first = list[0];
@@ -244,6 +277,15 @@ public static class CatalogGenerator
             if (s.TimeoutSeconds != first.TimeoutSeconds)
                 throw new CatalogGeneratorException(
                     $"{productId}: sidecars disagree on timeout_s ({first.TimeoutSeconds} vs {s.TimeoutSeconds})");
+            if (s.FlashOrigin != first.FlashOrigin)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on flash_origin ({first.FlashOrigin} vs {s.FlashOrigin})");
+            if (s.RamOrigin != first.RamOrigin)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on ram_origin ({first.RamOrigin} vs {s.RamOrigin})");
+            if (s.RamKb != first.RamKb)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on ram_kb ({first.RamKb} vs {s.RamKb})");
         }
     }
 

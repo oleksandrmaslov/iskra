@@ -6,6 +6,10 @@ public class CatalogGeneratorTests
 {
     private const string Sha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     private const string Sha2 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    private const string CiClopV100Sha = "4514acf573a17487db6ccf52b9e4ef2840bf59c4d743789ee6715eaf5655f2cd";
+    private const string CiClopV102Sha = "60743a9c3ef6f40e6b707a2b4f8b201875c7954fe52fdf752f4864296ed3dfeb";
+    private const string CiClopV103Sha = "403355ab8371c624af5c5cd5b01109c2734a6e31c81a89b18bbab8b9ea23423f";
+    private const string CiClopV104Sha = "e6d14dde8002d9526685a27cd4d62e7b60d4c755c46cce473c74cb591129036b";
 
     private static TargetSidecar Sidecar(
         string productId = "ci-clop", string version = "1.0.0",
@@ -16,9 +20,13 @@ public class CatalogGeneratorTests
         int? frequencyHz = null,
         PowerMode? powerMode = null,
         bool? connectReset = null,
-        int? timeoutSeconds = null) =>
+        int? timeoutSeconds = null,
+        ulong? flashOrigin = null,
+        ulong? ramOrigin = null,
+        int? ramKb = null) =>
         new(productId, version, partNumber, bmpMatch, flashKb, sha, displayName, null, notes,
-            firmwareKind, frequencyHz, powerMode, connectReset, timeoutSeconds);
+            firmwareKind, frequencyHz, powerMode, connectReset, timeoutSeconds,
+            flashOrigin, ramOrigin, ramKb);
 
     private static readonly DateTime FixedNow = new(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
 
@@ -141,17 +149,59 @@ public class CatalogGeneratorTests
         Assert.Equal("owner/headlamp-firmware", headlamp.Releases[0].ElfSource!.Repo);
     }
 
-    [Fact]
-    public void Same_product_with_inconsistent_target_throws()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Published_ci_clop_flash_metadata_is_corrected_regardless_of_input_order(
+        bool reverseInput)
     {
         var sidecars = new[]
         {
-            Sidecar(version: "1.0.0", flashKb: 32),
-            Sidecar(version: "1.0.1", flashKb: 64, sha: Sha2),
+            Sidecar(version: "1.0.0", flashKb: 32, sha: CiClopV100Sha),
+            // v1.0.1 published the same stale v1.0.0 sidecar and is deduplicated.
+            Sidecar(version: "1.0.0", flashKb: 32, sha: CiClopV100Sha),
+            Sidecar(version: "1.0.2", flashKb: 32, sha: CiClopV102Sha),
+            Sidecar(version: "1.0.3", flashKb: 32, sha: CiClopV103Sha),
+            Sidecar(version: "1.0.4", flashKb: 20, sha: CiClopV104Sha),
+        };
+        if (reverseInput)
+            Array.Reverse(sidecars);
+
+        var c = CatalogGenerator.Build(sidecars, "owner", FixedNow);
+        var p = c.Products[0];
+
+        Assert.Equal("1.0.4", p.DefaultRelease);
+        Assert.Equal(20, p.Target.FlashKb);
+        Assert.Equal(new[] { "1.0.0", "1.0.2", "1.0.3", "1.0.4" },
+            p.Releases.Select(r => r.Version).ToArray());
+        Assert.Equal(new[] { CiClopV100Sha, CiClopV102Sha, CiClopV103Sha, CiClopV104Sha },
+            p.Releases.Select(r => r.ElfSha256).ToArray());
+    }
+
+    [Fact]
+    public void Unknown_release_cannot_use_legacy_flash_correction()
+    {
+        var sidecars = new[]
+        {
+            Sidecar(version: "1.0.3", flashKb: 32, sha: Sha),
+            Sidecar(version: "1.0.4", flashKb: 20, sha: CiClopV104Sha),
         };
         var ex = Assert.Throws<CatalogGeneratorException>(
             () => CatalogGenerator.Build(sidecars, "owner", FixedNow));
         Assert.Contains("disagree on flash_kb", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(16)]
+    [InlineData(64)]
+    public void Known_legacy_release_rejects_unexpected_flash_metadata(int flashKb)
+    {
+        var ex = Assert.Throws<CatalogGeneratorException>(() =>
+            CatalogGenerator.Build(
+                new[] { Sidecar(version: "1.0.3", flashKb: flashKb, sha: CiClopV103Sha) },
+                "owner",
+                FixedNow));
+        Assert.Contains("unexpected flash_kb", ex.Message);
     }
 
     [Fact]
@@ -167,6 +217,23 @@ public class CatalogGeneratorTests
         Assert.Contains("frequency_hz", ex.Message);
     }
 
+    [Theory]
+    [InlineData("flash_origin")]
+    [InlineData("ram_origin")]
+    [InlineData("ram_kb")]
+    public void Same_product_with_inconsistent_memory_map_throws(string field)
+    {
+        var first = Sidecar(version: "1.0.0", flashOrigin: 0x08000000, ramOrigin: 0x20000000, ramKb: 3);
+        var second = Sidecar(version: "1.0.1", sha: Sha2,
+            flashOrigin: field == "flash_origin" ? 0x08001000UL : 0x08000000UL,
+            ramOrigin: field == "ram_origin" ? 0x20001000UL : 0x20000000UL,
+            ramKb: field == "ram_kb" ? 4 : 3);
+
+        var ex = Assert.Throws<CatalogGeneratorException>(
+            () => CatalogGenerator.Build(new[] { first, second }, "owner", FixedNow));
+        Assert.Contains(field, ex.Message);
+    }
+
     [Fact]
     public void Duplicate_identical_sidecar_is_deduped_silently()
     {
@@ -180,6 +247,16 @@ public class CatalogGeneratorTests
     {
         var a = Sidecar(version: "1.0.0", sha: Sha);
         var b = Sidecar(version: "1.0.0", sha: Sha2);
+        var ex = Assert.Throws<CatalogGeneratorException>(
+            () => CatalogGenerator.Build(new[] { a, b }, "owner", FixedNow));
+        Assert.Contains("conflicting sidecars", ex.Message);
+    }
+
+    [Fact]
+    public void Duplicate_version_with_conflicting_target_metadata_throws()
+    {
+        var a = Sidecar(version: "1.0.0", flashKb: 32, sha: Sha);
+        var b = Sidecar(version: "1.0.0", flashKb: 20, sha: Sha);
         var ex = Assert.Throws<CatalogGeneratorException>(
             () => CatalogGenerator.Build(new[] { a, b }, "owner", FixedNow));
         Assert.Contains("conflicting sidecars", ex.Message);
