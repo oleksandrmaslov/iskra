@@ -57,7 +57,7 @@ allowlist, byte verification, immutable-version check, or signing approval.
 
 Operators must be able to flash without being given firmware source. GitHub read
 access is repository-wide - there is no "releases only" permission - so the
-separation is a separate repository: `oleksandrmaslov/iskra-firmware` holds only
+separation is a separate repository: `Energy-for-Ukraine/iskra-firmware` holds only
 built artefacts, published as releases.
 
 For every repository listed in `firmware-repos.txt`:

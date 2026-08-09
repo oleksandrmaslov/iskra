@@ -25,7 +25,7 @@ operator's token can reach points at them.
 
 ## Wiring it up
 
-**1. Create the distribution repo.** `oleksandrmaslov/iskra-firmware`, private,
+**1. Create the distribution repo.** `Energy-for-Ukraine/iskra-firmware`, private,
 empty. No source, no history — only releases.
 
 **2. Publish artefacts there from CI.** Each `<product>-firmware` release
@@ -40,7 +40,7 @@ Iskra.Cli --generate-catalog \
   --from-targets <dir> \
   --out catalog.json \
   --owner oleksandrmaslov \
-  --dist-repo oleksandrmaslov/iskra-firmware \
+  --dist-repo Energy-for-Ukraine/iskra-firmware \
   --strict-tag-match
 ```
 
@@ -53,7 +53,7 @@ firmware download.
 The command prints a confirmation line so a CI log shows which repo was baked in:
 
 ```
-· firmware served from oleksandrmaslov/iskra-firmware (source repos not referenced)
+· firmware served from Energy-for-Ukraine/iskra-firmware (source repos not referenced)
 ```
 
 **4. Install the `iskra-flasher` App on `iskra-firmware` only.** Remove it from

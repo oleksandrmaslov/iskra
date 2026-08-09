@@ -12,7 +12,7 @@
 #
 # WHAT IT DOES
 # On `release: published` in this repo, it re-uploads that release's assets to
-#   oleksandrmaslov/iskra-firmware
+#   Energy-for-Ukraine/iskra-firmware
 # under the tag  <product-id>-v<version>  (namespaced, because one distribution
 # repo serves every product and two products can share a version number).
 #
@@ -51,7 +51,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_ID: ${{ github.event.release.id }}
           GH_TOKEN: ${{ github.token }}
-          DIST_REPO: oleksandrmaslov/iskra-firmware
+          DIST_REPO: Energy-for-Ukraine/iskra-firmware
         run: |
           set -euo pipefail
 

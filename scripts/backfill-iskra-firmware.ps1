@@ -26,7 +26,7 @@
 param(
     [string] $Catalog = "$env:LOCALAPPDATA\Iskra\catalog\latest.json",
     [string] $Owner = 'oleksandrmaslov',
-    [string] $DistRepo = 'oleksandrmaslov/iskra-firmware',
+    [string] $DistRepo = 'Energy-for-Ukraine/iskra-firmware',
     [switch] $Execute
 )
 

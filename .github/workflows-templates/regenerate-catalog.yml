@@ -33,7 +33,7 @@ concurrency:
 
 env:
   OWNER: oleksandrmaslov
-  DIST_REPO: oleksandrmaslov/iskra-firmware
+  DIST_REPO: Energy-for-Ukraine/iskra-firmware
   # Immutable reviewed iskra-app revision. Update intentionally after reviewing
   # generator/signing changes; never point the signing path at a mutable branch.
   ISKRA_APP_REF: 5da22c88f2ebddc48694e667fb2796f3dffa785a
