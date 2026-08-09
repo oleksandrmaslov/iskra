@@ -187,6 +187,14 @@ public sealed class FlashWorkflow
             return FailureWithLog(request, product, release, batch,
                 "E_AUTH_EXPIRED", "GitHub refresh token expired");
         }
+        catch (GitHubRepoAccessDeniedException ex)
+        {
+            // Distinct from a download failure: nothing about the network or
+            // the artefact is wrong, this account simply is not approved for
+            // the firmware repository.
+            return FailureWithLog(request, product, release, batch,
+                "E_NO_REPO_ACCESS", ex.Message);
+        }
         catch (GitHubAssetNotFoundException ex)
         {
             return FailureWithLog(request, product, release, batch,

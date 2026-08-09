@@ -39,6 +39,7 @@ public static class OperatorText
                 ["E_AUTH_EXPIRED"] = "Сесія GitHub застаріла (>6 міс). Увійдіть знову у Налаштуваннях.",
                 ["E_FW_DOWNLOAD_FAILED"] = "Не вдалося завантажити прошивку з GitHub. Перевірте мережу.",
                 ["E_ASSET_NOT_FOUND"] = "У релізі GitHub немає очікуваного файлу прошивки. Зверніться до інженера.",
+                ["E_NO_REPO_ACCESS"] = "Цей акаунт GitHub не має доступу до репозиторію прошивок. Попросіть супроводжувача надати доступ, або увійдіть іншим акаунтом.",
                 ["E_RELEASE_REVOKED"] = "Цю версію прошивки відкликано в каталозі. Оновіть каталог і виберіть іншу версію.",
             },
             [IskraLanguages.English] = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -68,6 +69,7 @@ public static class OperatorText
                 ["E_AUTH_EXPIRED"] = "The GitHub session has expired (>6 months). Sign in again in Settings.",
                 ["E_FW_DOWNLOAD_FAILED"] = "The firmware could not be downloaded from GitHub. Check the network connection.",
                 ["E_ASSET_NOT_FOUND"] = "The GitHub release does not contain the expected firmware file. Contact an engineer.",
+                ["E_NO_REPO_ACCESS"] = "This GitHub account does not have access to the firmware repository. Ask the maintainer to grant access, or sign in with an approved account.",
                 ["E_RELEASE_REVOKED"] = "This firmware version has been revoked in the catalog. Update the catalog and select another version.",
             },
             [IskraLanguages.German] = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -97,6 +99,7 @@ public static class OperatorText
                 ["E_AUTH_EXPIRED"] = "Die GitHub-Sitzung ist abgelaufen (>6 Monate). Melden Sie sich in den Einstellungen erneut an.",
                 ["E_FW_DOWNLOAD_FAILED"] = "Die Firmware konnte nicht von GitHub heruntergeladen werden. Prüfen Sie die Netzwerkverbindung.",
                 ["E_ASSET_NOT_FOUND"] = "Das GitHub-Release enthält nicht die erwartete Firmwaredatei. Wenden Sie sich an einen Techniker.",
+                ["E_NO_REPO_ACCESS"] = "Dieses GitHub-Konto hat keinen Zugriff auf das Firmware-Repository. Bitten Sie den Betreuer um Zugriff oder melden Sie sich mit einem freigegebenen Konto an.",
                 ["E_RELEASE_REVOKED"] = "Diese Firmwareversion wurde im Katalog gesperrt. Aktualisieren Sie den Katalog und wählen Sie eine andere Version.",
             },
         };

@@ -24,15 +24,42 @@ public static class CatalogGenerator
     /// <param name="sidecars">All known target.json sidecars across products and versions.</param>
     /// <param name="owner">GitHub owner / org for <c>elf_source.repo</c> derivation.</param>
     /// <param name="generatedAtUtc">Stamps <c>catalog.generated_at</c>.</param>
+    /// <param name="revoked">Releases the catalog must refuse to flash.</param>
+    /// <param name="distributionRepo">
+    /// Optional <c>owner/repo</c> that publishes the built firmware artefacts.
+    ///
+    /// <para>When set, every <c>elf_source.repo</c> points here instead of at
+    /// the per-product source repository. That is what lets an operator be
+    /// granted the flashable binaries without being granted the firmware
+    /// source: GitHub read access is repository-wide and cannot be narrowed to
+    /// "releases only", so the separation has to be a separate repository.</para>
+    ///
+    /// <para>Omit it to keep the historical
+    /// <c>&lt;owner&gt;/&lt;product_id&gt;-firmware</c> convention.</para>
+    /// </param>
     public static Catalog Build(
         IEnumerable<TargetSidecar> sidecars,
         string owner,
         DateTime generatedAtUtc,
-        IReadOnlyList<RevokedRelease>? revoked = null)
+        IReadOnlyList<RevokedRelease>? revoked = null,
+        string? distributionRepo = null)
     {
         if (sidecars is null) throw new ArgumentNullException(nameof(sidecars));
         if (string.IsNullOrWhiteSpace(owner))
             throw new ArgumentException("owner required", nameof(owner));
+        if (distributionRepo is not null)
+        {
+            distributionRepo = distributionRepo.Trim();
+            // A malformed value here would silently redirect every station's
+            // firmware download, so it is rejected rather than normalised.
+            var parts = distributionRepo.Split('/');
+            if (parts.Length != 2 ||
+                string.IsNullOrWhiteSpace(parts[0]) ||
+                string.IsNullOrWhiteSpace(parts[1]))
+                throw new ArgumentException(
+                    $"distributionRepo must be 'owner/repo', got '{distributionRepo}'",
+                    nameof(distributionRepo));
+        }
 
         var byProduct = new Dictionary<string, List<TargetSidecar>>(StringComparer.OrdinalIgnoreCase);
         foreach (var s in sidecars)
@@ -64,7 +91,7 @@ public static class CatalogGenerator
             var canonical = list[0];
             var releases = list
                 .OrderBy(s => s, SemVerComparer.Instance)
-                .Select(s => ToRelease(s, owner))
+                .Select(s => ToRelease(s, owner, distributionRepo))
                 .ToList();
             var latest = list.OrderByDescending(s => s, SemVerComparer.Instance).First();
 
@@ -167,7 +194,7 @@ public static class CatalogGenerator
         return result;
     }
 
-    private static FirmwareRelease ToRelease(TargetSidecar s, string owner)
+    private static FirmwareRelease ToRelease(TargetSidecar s, string owner, string? distributionRepo)
     {
         var asset = $"{s.ProductId}_v{s.Version}_{s.PartNumber}.{ExtensionFor(s.FirmwareKind)}";
         return new FirmwareRelease(
@@ -178,7 +205,7 @@ public static class CatalogGenerator
             ReleasedAt:   (s.ReleasedAt ?? DateTime.UtcNow).ToUniversalTime(),
             Notes:        s.Notes,
             ElfSource:    new GitHubReleaseRef(
-                              Repo:  $"{owner}/{s.ProductId}-firmware",
+                              Repo:  distributionRepo ?? $"{owner}/{s.ProductId}-firmware",
                               Tag:   $"v{s.Version}",
                               Asset: asset),
             FirmwareKind: s.FirmwareKind);

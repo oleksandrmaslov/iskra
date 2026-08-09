@@ -109,6 +109,10 @@ public sealed class FirmwareCache
                 src.Repo, src.Tag, src.Asset, token, ct).ConfigureAwait(false);
         }
         catch (GitHubAssetNotFoundException) { throw; }
+        // Must stay unwrapped: an approval problem wrapped as a cache failure
+        // would reach the workflow as a generic download error and tell the
+        // operator to check the network.
+        catch (GitHubRepoAccessDeniedException) { throw; }
         catch (GitHubApiException ex)
         {
             throw new FirmwareCacheException(

@@ -58,13 +58,37 @@ public class GitHubReleaseAssetClientTests
         Assert.Equal("missing.elf", ex.Asset);
     }
 
-    [Fact]
-    public async Task GetAssetDownloadUrl_throws_ApiException_on_404_release()
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, 404)]
+    [InlineData(HttpStatusCode.Forbidden, 403)]
+    [InlineData(HttpStatusCode.Unauthorized, 401)]
+    public async Task GetAssetDownloadUrl_reports_an_access_problem_not_a_transport_failure(
+        HttpStatusCode status, int expected)
     {
-        var h = new StubHandler(JsonResp("{\"message\":\"Not Found\"}", HttpStatusCode.NotFound));
+        // GitHub answers 404 rather than 403 for a private repo the caller
+        // cannot see, so all three mean "this account is not approved" far more
+        // often than they mean "the network is broken". Reporting them as a
+        // generic API/download failure sends the operator to check the network.
+        var h = new StubHandler(JsonResp("{\"message\":\"Not Found\"}", status));
+
+        var ex = await Assert.ThrowsAsync<GitHubRepoAccessDeniedException>(() =>
+            NewClient(h).GetAssetDownloadUrlAsync("o/r", "v9.9.9", "x.elf", "tok"));
+
+        Assert.Equal(expected, ex.StatusCode);
+        Assert.Equal("o/r", ex.Repo);
+        Assert.Equal("v9.9.9", ex.Tag);
+    }
+
+    [Fact]
+    public async Task GetAssetDownloadUrl_still_reports_a_real_server_error_as_an_api_error()
+    {
+        // A 5xx is genuinely not an approval problem and must stay distinct.
+        var h = new StubHandler(JsonResp("{\"message\":\"boom\"}", HttpStatusCode.InternalServerError));
+
         var ex = await Assert.ThrowsAsync<GitHubApiException>(() =>
             NewClient(h).GetAssetDownloadUrlAsync("o/r", "v9.9.9", "x.elf", "tok"));
-        Assert.Equal(404, ex.StatusCode);
+
+        Assert.Equal(500, ex.StatusCode);
     }
 
     [Fact]

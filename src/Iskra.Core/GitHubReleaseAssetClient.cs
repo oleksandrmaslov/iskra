@@ -24,6 +24,32 @@ public sealed class GitHubApiException : Exception
 }
 
 /// <summary>
+/// The signed-in account cannot see this firmware repository.
+///
+/// <para>GitHub deliberately answers 404 rather than 403 for a private
+/// repository the caller has no access to, so it does not leak whether the
+/// repository exists. That makes "you are not approved for this firmware" and
+/// "this release tag is gone" indistinguishable at the HTTP layer — but both
+/// are an access/approval question for the maintainer, and neither is a
+/// network fault. Without this distinction the operator is told to check the
+/// network, which is the wrong thing to go and do.</para>
+/// </summary>
+public sealed class GitHubRepoAccessDeniedException : Exception
+{
+    public string Repo { get; }
+    public string Tag { get; }
+    public int StatusCode { get; }
+
+    public GitHubRepoAccessDeniedException(string repo, string tag, int statusCode, string detail)
+        : base($"no access to {repo} release '{tag}' (HTTP {statusCode}): {detail}")
+    {
+        Repo = repo;
+        Tag = tag;
+        StatusCode = statusCode;
+    }
+}
+
+/// <summary>
 /// Pure HTTP layer for fetching GitHub release assets. No caching, no token
 /// management — caller passes a fresh access token per call.
 /// </summary>
@@ -62,8 +88,18 @@ public sealed class GitHubReleaseAssetClient
         var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         if (!resp.IsSuccessStatusCode)
-            throw new GitHubApiException((int)resp.StatusCode,
-                $"GET releases/tags/{tag} → {(int)resp.StatusCode} {resp.ReasonPhrase}: {Snip(body)}");
+        {
+            // 401/403 = token rejected or lacking the permission; 404 = the
+            // repository is invisible to this account, which for a private repo
+            // is what "not approved" looks like. All three are an approval
+            // question, not a transport failure.
+            var status = (int)resp.StatusCode;
+            if (status is 401 or 403 or 404)
+                throw new GitHubRepoAccessDeniedException(repo, tag, status, Snip(body));
+
+            throw new GitHubApiException(status,
+                $"GET releases/tags/{tag} → {status} {resp.ReasonPhrase}: {Snip(body)}");
+        }
 
         using var doc = JsonDocument.Parse(body);
         if (!doc.RootElement.TryGetProperty("assets", out var assetsEl) ||

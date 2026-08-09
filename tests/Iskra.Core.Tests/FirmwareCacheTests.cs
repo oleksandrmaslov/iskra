@@ -243,10 +243,26 @@ public class FirmwareCacheTests : IDisposable
     }
 
     [Fact]
-    public async Task Api_404_listing_release_wraps_as_FirmwareCacheException()
+    public async Task Api_404_listing_release_surfaces_as_an_access_problem_not_a_cache_failure()
     {
+        // Wrapping this as a cache failure would reach FlashWorkflow through
+        // its generic handler and become E_FW_DOWNLOAD_FAILED, telling the
+        // operator to check the network when the real cause is that this
+        // account is not approved for the firmware repository.
         var (cache, _, _) = NewCache(
             JsonResp("{\"message\":\"Not Found\"}", HttpStatusCode.NotFound));
+        var sha = new string('a', 64);
+
+        var ex = await Assert.ThrowsAsync<GitHubRepoAccessDeniedException>(() =>
+            cache.GetOrDownloadAsync(Src, sha));
+        Assert.Equal(404, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task Api_500_listing_release_still_wraps_as_FirmwareCacheException()
+    {
+        var (cache, _, _) = NewCache(
+            JsonResp("{\"message\":\"boom\"}", HttpStatusCode.InternalServerError));
         var sha = new string('a', 64);
 
         var ex = await Assert.ThrowsAsync<FirmwareCacheException>(() =>

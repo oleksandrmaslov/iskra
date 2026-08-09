@@ -142,6 +142,12 @@ if (resolution.Release?.IsRemote == true && !args.Contains("--elf"))
         Console.Error.WriteLine(CliText.Get("Auth.Expired"));
         return 5;
     }
+    catch (GitHubRepoAccessDeniedException ex)
+    {
+        Console.Error.WriteLine(CliText.Get("Firmware.NoRepoAccess", ex.Repo));
+        Console.Error.WriteLine(CliText.Get("Common.ErrorDetails", ex.Message));
+        return 5;
+    }
     catch (GitHubAssetNotFoundException ex)
     {
         Console.Error.WriteLine(CliText.Get("Firmware.AssetMissing", ex.Message));
@@ -567,6 +573,14 @@ static int GenerateCatalog(string[] args)
         ? args[revokedIdx + 1]
         : null;
 
+    // Points every elf_source at one artefact repository instead of at each
+    // product's source repository, so operators can be approved for the
+    // flashable binaries without being approved for the firmware source.
+    int distIdx = Array.IndexOf(args, "--dist-repo");
+    string? distRepo = distIdx >= 0 && distIdx + 1 < args.Length
+        ? args[distIdx + 1]
+        : null;
+
     var targetsDir = args[from + 1];
     var outPath    = args[outIdx + 1];
 
@@ -580,7 +594,8 @@ static int GenerateCatalog(string[] args)
     catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
 
     Catalog catalog;
-    try { catalog = CatalogGenerator.Build(sidecars, owner, DateTime.UtcNow, revoked); }
+    try { catalog = CatalogGenerator.Build(sidecars, owner, DateTime.UtcNow, revoked, distRepo); }
+    catch (ArgumentException ex)         { Console.Error.WriteLine(ex.Message); return 2; }
     catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
     catch (CatalogParseException ex)     { Console.Error.WriteLine($"generated catalog failed validation: {ex.Message}"); return 2; }
 
@@ -590,6 +605,8 @@ static int GenerateCatalog(string[] args)
     Console.WriteLine($"  {catalog.Products.Count} product(s), {catalog.Products.Sum(p => p.Releases.Count)} release(s)");
     if (revoked.Count > 0)
         Console.WriteLine($"  · {revoked.Count} revoked release(s)");
+    if (distRepo is not null)
+        Console.WriteLine($"  · firmware served from {distRepo} (source repos not referenced)");
     foreach (var p in catalog.Products)
         Console.WriteLine($"  · {p.ProductId} → default v{p.DefaultRelease} ({p.Releases.Count} release(s))");
     return 0;

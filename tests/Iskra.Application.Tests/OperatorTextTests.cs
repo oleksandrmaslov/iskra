@@ -13,11 +13,12 @@ public class OperatorTextTests
     {
         var expected = OperatorText.ErrorCodes(IskraLanguages.Ukrainian).Order().ToArray();
 
-        Assert.Equal(26, expected.Length);
+        Assert.Equal(27, expected.Length);
         Assert.Contains("E_BATCH_REQUIRED", expected);
         Assert.Contains("E_RELEASE_REVOKED", expected);
         Assert.Contains("E_FW_TOO_LARGE", expected);
         Assert.Contains("E_FW_ADDRESS_RANGE", expected);
+        Assert.Contains("E_NO_REPO_ACCESS", expected);
 
         foreach (var language in Languages)
             Assert.Equal(expected, OperatorText.ErrorCodes(language).Order().ToArray());
