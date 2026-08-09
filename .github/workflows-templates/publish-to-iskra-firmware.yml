@@ -16,25 +16,40 @@
 # under the tag  <product-id>-v<version>  (namespaced, because one distribution
 # repo serves every product and two products can share a version number).
 #
-# REQUIRED SECRET in this firmware repo:
-#   ISKRA_FIRMWARE_PUBLISH_TOKEN   fine-grained PAT, resource owner
-#                                  oleksandrmaslov, repository access limited to
-#                                  iskra-firmware ONLY, permission
-#                                  "Contents: Read and write".
+# It can also be run manually against an existing tag via the Actions tab, so
+# the publish path can be proven before a real release depends on it.
 #
-#   Create at https://github.com/settings/personal-access-tokens/new
-#   Then: Settings -> Secrets and variables -> Actions -> New repository secret
+# AUTHENTICATION
+# A short-lived GitHub App installation token, minted per run. Nothing
+# long-lived is stored, and there is no PAT expiry date to be surprised by.
 #
-#   Scope it to iskra-firmware alone. A token that can also write here would let
-#   a compromised distribution step reach back into firmware source.
+# REQUIRED SECRETS in this firmware repo:
+#   ISKRA_PUBLISH_APP_ID           the publishing App's numeric App ID
+#   ISKRA_PUBLISH_APP_PRIVATE_KEY  that App's .pem private key, whole file
+#
+# The publishing App MUST be a separate App from Iskra Flasher. Iskra Flasher is
+# what operators authorise through Device Flow, and a user token is bounded by
+# the App's permissions - so `contents: read` there is exactly what stops a
+# stolen operator token from tampering with firmware. Granting it write would
+# hand every approved operator the ability to overwrite production artefacts.
+#
+# Set up the publishing App with:
+#   Repository permissions: Contents = Read and write, Metadata = Read-only
+#   Installed on: Energy-for-Ukraine/iskra-firmware ONLY
 
 name: publish firmware to iskra-firmware
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag in this repo to publish (e.g. v1.0.3)'
+        required: true
+        type: string
 
-# Read-only against this repo. Writing to the distribution repo uses the PAT.
+# Read-only against this repo. Writing to the distribution repo uses the App token.
 permissions:
   contents: read
 
@@ -42,21 +57,35 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # Scoped to the distribution repo alone, and expires in an hour. A
+      # compromised run cannot reach back into firmware source.
+      - name: Mint a distribution-repo token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.ISKRA_PUBLISH_APP_ID }}
+          private-key: ${{ secrets.ISKRA_PUBLISH_APP_PRIVATE_KEY }}
+          owner: Energy-for-Ukraine
+          repositories: iskra-firmware
+
       - name: Copy release assets into the distribution repo
         env:
           # Release metadata is data, never shell source. Everything below is
           # passed through the environment and validated before use.
-          PUBLISH_TOKEN: ${{ secrets.ISKRA_FIRMWARE_PUBLISH_TOKEN }}
+          DIST_TOKEN: ${{ steps.app-token.outputs.token }}
           SOURCE_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
           GH_TOKEN: ${{ github.token }}
           DIST_REPO: Energy-for-Ukraine/iskra-firmware
         run: |
           set -euo pipefail
 
-          if [ -z "${PUBLISH_TOKEN:-}" ]; then
-            echo "::error::ISKRA_FIRMWARE_PUBLISH_TOKEN is not set" >&2
+          if [ -z "${DIST_TOKEN:-}" ]; then
+            echo "::error::could not mint a distribution token; check ISKRA_PUBLISH_APP_ID / ISKRA_PUBLISH_APP_PRIVATE_KEY" >&2
+            exit 1
+          fi
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            echo "::error::no release tag supplied" >&2
             exit 1
           fi
 
@@ -122,15 +151,16 @@ jobs:
           printf 'Publishing %d artefact(s) plus target.json\n' "$firmware_count"
 
           # Switch to the distribution-repo token only for the write steps.
-          export GH_TOKEN="$PUBLISH_TOKEN"
+          export GH_TOKEN="$DIST_TOKEN"
 
           # Immutable by policy: an existing dist tag means this version was
           # already published, and silently overwriting it would change what
-          # stations flash for a version they have already seen.
+          # stations flash for a version they have already seen. This also makes
+          # a manual re-run safe - it stops rather than clobbering.
           if gh release view "$dist_tag" --repo "$DIST_REPO" >/dev/null 2>&1; then
-            echo "::error::${DIST_REPO} already has a release tagged ${dist_tag}." >&2
-            echo "::error::Cut a new version rather than replacing a published one." >&2
-            exit 1
+            echo "::notice::${DIST_REPO} already has ${dist_tag}; nothing to do." >&2
+            echo "::notice::Cut a new version rather than replacing a published one." >&2
+            exit 0
           fi
 
           gh release create "$dist_tag" \
