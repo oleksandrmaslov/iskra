@@ -9,6 +9,7 @@ public enum CatalogSessionStatus
     ExplicitPathMissing,
     SideloadRequiresLabMode,
     TrustRejected,
+    RollbackRejected,
     ParseError,
     IoError,
     UnexpectedError,
@@ -45,11 +46,12 @@ public sealed class CatalogSession : ICatalogSession
     private readonly Func<AppSettings, IEnumerable<string>> _fallbackCandidates;
     private readonly Func<string, bool> _fileExists;
     private readonly Func<string, bool> _directoryExists;
-    private readonly Func<string, bool, CatalogTrustResult> _verifyCatalog;
-    private readonly Func<string, Catalog> _parseCatalog;
+    private readonly Func<string, bool, CatalogFileVerificationResult> _readAndVerifyCatalog;
+    private readonly Func<ReadOnlyMemory<byte>, Catalog> _parseCatalog;
     private readonly Func<string, Catalog> _buildSideload;
     private readonly Func<bool> _unsignedLabModeEnabled;
     private readonly Func<string, string> _normalizePath;
+    private readonly Func<Catalog, CatalogActivationResult> _activateCatalog;
 
     public CatalogSessionResult Current { get; private set; } = NotFound(
         "Catalog has not been loaded yet.");
@@ -58,21 +60,24 @@ public sealed class CatalogSession : ICatalogSession
         Func<AppSettings, IEnumerable<string>>? fallbackCandidates = null,
         Func<string, bool>? fileExists = null,
         Func<string, bool>? directoryExists = null,
-        Func<string, bool, CatalogTrustResult>? verifyCatalog = null,
-        Func<string, Catalog>? parseCatalog = null,
+        Func<string, bool, CatalogFileVerificationResult>? readAndVerifyCatalog = null,
+        Func<ReadOnlyMemory<byte>, Catalog>? parseCatalog = null,
         Func<string, Catalog>? buildSideload = null,
         Func<bool>? unsignedLabModeEnabled = null,
-        Func<string, string>? normalizePath = null)
+        Func<string, string>? normalizePath = null,
+        Func<Catalog, CatalogActivationResult>? activateCatalog = null)
     {
         _fallbackCandidates = fallbackCandidates ?? DefaultFallbackCandidates;
         _fileExists = fileExists ?? File.Exists;
         _directoryExists = directoryExists ?? Directory.Exists;
-        _verifyCatalog = verifyCatalog ?? ((path, requireSigned) =>
-            CatalogTrust.VerifyCatalogFile(path, requireSigned));
-        _parseCatalog = parseCatalog ?? CatalogJson.ParseFile;
+        _readAndVerifyCatalog = readAndVerifyCatalog ?? ((path, requireSigned) =>
+            CatalogTrust.ReadAndVerifyCatalogFile(path, requireSigned));
+        _parseCatalog = parseCatalog ?? (bytes => CatalogJson.Parse(bytes.Span));
         _buildSideload = buildSideload ?? (path => SideloadCatalogBuilder.BuildFromDirectory(path));
         _unsignedLabModeEnabled = unsignedLabModeEnabled ?? CatalogTrust.IsUnsignedLabModeEnabled;
         _normalizePath = normalizePath ?? Path.GetFullPath;
+        _activateCatalog = activateCatalog ?? (catalog =>
+            CatalogActivationPolicy.ValidateAndAdvance(catalog.GeneratedAt));
     }
 
     public CatalogSessionResult Load(AppSettings settings)
@@ -179,7 +184,8 @@ public sealed class CatalogSession : ICatalogSession
         // A persisted false setting alone cannot enable unsigned input. Without
         // the process-level lab switch we still ask Core to require a signature.
         var requireSigned = !labAllowsUnsigned;
-        var trust = _verifyCatalog(path, requireSigned);
+        var verification = _readAndVerifyCatalog(path, requireSigned);
+        var trust = verification.TrustResult;
         var accepted = trust == CatalogTrustResult.Verified
             || (labAllowsUnsigned && trust == CatalogTrustResult.UnsignedAllowed);
         if (!accepted)
@@ -196,7 +202,33 @@ public sealed class CatalogSession : ICatalogSession
 
         try
         {
-            var catalog = _parseCatalog(path);
+            if (verification.CatalogBytes is not { } catalogBytes)
+            {
+                return Failure(
+                    CatalogSessionStatus.IoError,
+                    path,
+                    "The accepted catalog snapshot did not contain catalog bytes.");
+            }
+
+            // Parse the captured buffer that the trust decision covered. Never
+            // reopen the path after signature verification.
+            var catalog = _parseCatalog(catalogBytes);
+            if (trust == CatalogTrustResult.Verified)
+            {
+                CatalogJson.ValidateTrustedArtifactPaths(catalog);
+                var activation = _activateCatalog(catalog);
+                if (!activation.IsAccepted)
+                {
+                    return new CatalogSessionResult(
+                        CatalogSessionStatus.RollbackRejected,
+                        null,
+                        path,
+                        Path.GetDirectoryName(path),
+                        trust,
+                        false,
+                        activation.Diagnostic ?? activation.Status.ToString());
+                }
+            }
             return Ready(catalog, path, Path.GetDirectoryName(path), trust, isSideload: false);
         }
         catch (CatalogParseException ex)

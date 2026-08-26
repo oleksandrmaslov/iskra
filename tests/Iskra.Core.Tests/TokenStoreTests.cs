@@ -16,6 +16,9 @@ public class TokenStoreTests : IDisposable
 
     public TokenStoreTests()
     {
+        if (!OperatingSystem.IsWindows())
+            throw Xunit.Sdk.SkipException.ForSkip("DPAPI token-store tests require Windows");
+
         _path = Path.Combine(Path.GetTempPath(),
             $"iskra-tokenstore-{Guid.NewGuid():N}.bin");
     }
@@ -119,6 +122,17 @@ public class TokenStoreTests : IDisposable
     }
 
     [Fact]
+    public void Load_rejects_an_oversized_encrypted_blob()
+    {
+        File.WriteAllBytes(_path, new byte[TokenStore.MaxEncryptedTokenBytes + 1]);
+
+        var ex = Assert.Throws<TokenStoreException>(() => NewStore().Load());
+
+        Assert.Contains("could not read", ex.Message);
+        Assert.IsType<FileSizeLimitExceededException>(ex.InnerException);
+    }
+
+    [Fact]
     public void Save_rejects_tokens_with_empty_access_token()
     {
         var store = NewStore();
@@ -159,6 +173,9 @@ public class TokenStoreTests : IDisposable
         var store = NewStore();
         store.Save(SampleTokens());
         Assert.False(File.Exists(_path + ".tmp"));
+        Assert.Empty(Directory.GetFiles(
+            Path.GetDirectoryName(_path)!,
+            Path.GetFileName(_path) + ".*.tmp"));
     }
 
     [Fact]

@@ -16,7 +16,8 @@ public sealed class FlashWorkflowTests
     {
         const int headerSize = 52;
         const int entrySize = 32;
-        var bytes = new byte[headerSize + entrySize];
+        var dataOffset = headerSize + entrySize;
+        var bytes = new byte[checked(dataOffset + (int)length)];
 
         bytes[0] = 0x7F; bytes[1] = (byte)'E'; bytes[2] = (byte)'L'; bytes[3] = (byte)'F';
         bytes[4] = 1; // ELF32
@@ -30,6 +31,7 @@ public sealed class FlashWorkflowTests
 
         var entry = bytes.AsSpan(headerSize);
         BinaryPrimitives.WriteUInt32LittleEndian(entry, 1);                      // p_type = PT_LOAD
+        BinaryPrimitives.WriteUInt32LittleEndian(entry[4..], (uint)dataOffset);  // p_offset
         BinaryPrimitives.WriteUInt32LittleEndian(entry[8..], loadAddress);       // p_vaddr
         BinaryPrimitives.WriteUInt32LittleEndian(entry[12..], loadAddress);      // p_paddr
         BinaryPrimitives.WriteUInt32LittleEndian(entry[16..], length);           // p_filesz
@@ -209,6 +211,27 @@ public sealed class FlashWorkflowTests
     }
 
     [Fact]
+    public async Task Verified_flash_is_reported_failed_when_durable_audit_write_fails()
+    {
+        using var scope = new TempScope();
+        var firmware = scope.WriteFirmware(ValidElf);
+        var gdb = new FakeGdbProcess();
+        var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
+        var request = scope.Request(firmware);
+        request.Settings.DbPath = Path.Combine(scope.DirectoryPath, "audit.db");
+        gdb.BeforeReturn = () => Directory.CreateDirectory(request.Settings.DbPath);
+
+        var result = await workflow.ExecuteAsync(request);
+
+        Assert.Equal(1, gdb.FlashCalls);
+        Assert.Equal(FlashWorkflowStatus.Failed, result.Status);
+        Assert.False(result.IsPass);
+        Assert.False(result.AttemptLogged);
+        Assert.Equal("E_AUDIT_WRITE_FAILED", result.Outcome.ErrorCode);
+        Assert.Contains("flashed and verified", result.Outcome.ErrorMessage);
+    }
+
+    [Fact]
     public async Task Conflicting_batch_is_refused_before_firmware_validation_or_gdb()
     {
         using var scope = new TempScope();
@@ -381,6 +404,41 @@ public sealed class FlashWorkflowTests
         public int LastFrequencyHz { get; private set; }
         public bool LastConnectUnderReset { get; private set; }
         public TimeSpan LastFlashTimeout { get; private set; }
+        public Action? BeforeReturn { get; set; }
+
+        public override Task<GdbGuardedRunResult> RunGuardedAsync(
+            string endpoint,
+            PowerMode power,
+            int frequencyHz,
+            bool connectUnderReset,
+            string firmwarePath,
+            TimeSpan scanTimeout,
+            TimeSpan flashTimeout,
+            Func<GdbRunResult, bool> scanGate,
+            Action<GdbLine>? onLine = null,
+            CancellationToken ct = default)
+        {
+            ScanCalls++;
+            LastPower = power;
+            LastFrequencyHz = frequencyHz;
+            LastConnectUnderReset = connectUnderReset;
+            var scan = Result(
+                "Available Targets:",
+                "No. Att Driver",
+                " 1      PY32Fxxx M0+");
+            foreach (var line in scan.Output) onLine?.Invoke(line);
+            if (!scanGate(scan))
+                return Task.FromResult(new GdbGuardedRunResult(scan, null));
+
+            FlashCalls++;
+            LastFlashTimeout = flashTimeout;
+            var flash = Result(
+                "Loading section .text, size 0x8 lma 0x8000000",
+                "Section .text, range 0x8000000 -- 0x8000008: matched.");
+            foreach (var line in flash.Output) onLine?.Invoke(line);
+            BeforeReturn?.Invoke();
+            return Task.FromResult(new GdbGuardedRunResult(scan, flash));
+        }
 
         public override Task<GdbRunResult> RunScanAsync(
             string comPort,

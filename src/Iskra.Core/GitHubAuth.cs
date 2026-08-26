@@ -51,6 +51,7 @@ public sealed record TokenResponse(
 /// </summary>
 public sealed class GitHubDeviceFlow
 {
+    public const int MaxResponseBytes = 64 * 1024;
     public const string DeviceCodeEndpoint = "https://github.com/login/device/code";
     public const string TokenEndpoint      = "https://github.com/login/oauth/access_token";
     public const string DeviceGrantType    = "urn:ietf:params:oauth:grant-type:device_code";
@@ -185,8 +186,10 @@ public sealed class GitHubDeviceFlow
             fields.Select(f => new KeyValuePair<string, string>(f.Key, f.Value)));
         using var req = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = form };
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-        var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        using var resp = await _http.SendAsync(
+            req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        var body = await BoundedHttpContent.ReadUtf8StringAsync(
+            resp.Content, MaxResponseBytes, ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
             throw new GitHubAuthException(
                 $"{endpoint} returned {(int)resp.StatusCode} {resp.ReasonPhrase}: {body}");

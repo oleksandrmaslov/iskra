@@ -24,7 +24,7 @@
 #
 # Requires:
 #   * .NET SDK 10.0.301 on PATH (or LOCALAPPDATA install; `global.json` pins it)
-#   * `wix` global dotnet tool (install once: `dotnet tool install --global wix`)
+#   * WiX is restored at the exact version in .config/dotnet-tools.json
 #   * curl.exe (built into supported Windows 10/11 images)
 #
 # Usage:
@@ -47,10 +47,18 @@ Set-Location $repoRoot
 # EXEs can never ship different compilers under the same claim.
 . (Join-Path $PSScriptRoot "arm-toolchain.pins.ps1")
 
-$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH;$env:USERPROFILE\.dotnet\tools"
-$dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
-if (-not (Test-Path -LiteralPath $dotnet)) {
-    throw "The repository SDK host was not found at $dotnet"
+$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
+$dotnet = $null
+if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    $perUserDotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
+    if (Test-Path -LiteralPath $perUserDotnet) { $dotnet = $perUserDotnet }
+}
+if ($null -eq $dotnet) {
+    $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($null -ne $dotnetCommand) { $dotnet = $dotnetCommand.Source }
+}
+if ($null -eq $dotnet) {
+    throw "dotnet was not found; install the SDK pinned by global.json"
 }
 
 function Get-Sha256([string] $Path) {
@@ -58,19 +66,27 @@ function Get-Sha256([string] $Path) {
 }
 
 function Test-ExpectedHash([string] $Path, [string] $ExpectedSha256) {
-    if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) { return $true }
+    if ($ExpectedSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "expected SHA-256 pin must be exactly 64 hexadecimal characters"
+    }
     return (Get-Sha256 $Path) -eq $ExpectedSha256.ToLowerInvariant()
 }
 
 function Add-WixExtension([string] $ExtensionId) {
-    & wix extension list --global 2>&1 | Out-String | Set-Variable -Name extList
+    & $dotnet tool run wix -- extension list --global 2>&1 | Out-String | Set-Variable -Name extList
     if ($LASTEXITCODE -ne 0) { throw "wix extension list failed (exit $LASTEXITCODE)" }
 
-    if ($extList -notmatch [regex]::Escape($ExtensionId)) {
-        wix extension add --global "$ExtensionId/5.0.2" | Out-Host
+    $exact = "$ExtensionId 5.0.2"
+    $extensionLines = @($extList -split "\r?\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($exact -notin $extensionLines) {
+        if ($extList -match "(?m)^$([regex]::Escape($ExtensionId))\s+") {
+            & $dotnet tool run wix -- extension remove --global $ExtensionId | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "wix extension remove $ExtensionId failed (exit $LASTEXITCODE)" }
+        }
+        & $dotnet tool run wix -- extension add --global "$ExtensionId/5.0.2" | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "wix extension add $ExtensionId failed (exit $LASTEXITCODE)" }
     } else {
-        Write-Host "  ($ExtensionId already installed)"
+        Write-Host "  ($exact already installed)"
     }
 }
 
@@ -85,6 +101,7 @@ function Invoke-CurlDownload([string] $Url, [string] $Destination) {
 }
 
 function Resolve-ArmToolchainInstaller {
+    $callerProvidedInstaller = -not [string]::IsNullOrWhiteSpace($ArmToolchainInstaller)
     if ([string]::IsNullOrWhiteSpace($ArmToolchainInstaller)) {
         $depsDir = Join-Path $PSScriptRoot "deps"
         New-Item -ItemType Directory -Force -Path $depsDir | Out-Null
@@ -97,8 +114,15 @@ function Resolve-ArmToolchainInstaller {
             return (Resolve-Path -LiteralPath $ArmToolchainInstaller).Path
         }
 
+        if ($callerProvidedInstaller) {
+            throw "caller-provided Arm toolchain MSI hash mismatch: $ArmToolchainInstaller"
+        }
         Write-Host "  cached toolchain MSI hash mismatch; re-downloading" -ForegroundColor Yellow
         Remove-Item -LiteralPath $ArmToolchainInstaller -Force
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ArmToolchainUrl)) {
+        throw "Arm toolchain MSI missing and ArmToolchainUrl is empty: $ArmToolchainInstaller"
     }
 
     $tmp = "$ArmToolchainInstaller.tmp"
@@ -128,6 +152,12 @@ function Remove-GeneratedDirectory([string] $Path) {
 }
 
 Write-Host "[1/8] locked solution restore" -ForegroundColor Cyan
+& $dotnet tool restore | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "repository tool restore failed (exit $LASTEXITCODE)" }
+$wixVersion = (& $dotnet tool run wix -- --version).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $wixVersion.StartsWith("5.0.2+", [StringComparison]::Ordinal)) {
+    throw "expected repository WiX 5.0.2, got '$wixVersion'"
+}
 & $dotnet restore Iskra.sln --locked-mode --nologo | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "locked solution restore failed (exit $LASTEXITCODE)" }
 
@@ -179,7 +209,7 @@ $outDir = Join-Path $PSScriptRoot "out"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $msiPath = Join-Path $outDir "Iskra-Avalonia-$Version-x64.msi"
 
-wix build `
+& $dotnet tool run wix -- build `
     (Join-Path $PSScriptRoot "Product.Avalonia.wxs") `
     -d "AppVersion=$Version" `
     -d "AvaloniaPublishDir=$publishDir" `
@@ -207,7 +237,7 @@ $armToolchainMsi = Resolve-ArmToolchainInstaller
 Write-Host "[8/8] wix build bundle -> installer/out/Iskra-Avalonia-$Version-setup-x64.exe" -ForegroundColor Cyan
 $bundlePath = Join-Path $outDir "Iskra-Avalonia-$Version-setup-x64.exe"
 
-wix build `
+& $dotnet tool run wix -- build `
     (Join-Path $PSScriptRoot "Bundle.Avalonia.wxs") `
     -d "AppVersion=$Version" `
     -d "IskraMsi=$msiPath" `

@@ -99,6 +99,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _historyWorkflow = historyWorkflow ?? throw new ArgumentNullException(nameof(historyWorkflow));
         _readinessService = readinessService ?? throw new ArgumentNullException(nameof(readinessService));
         _flashWorkflow = flashWorkflow ?? throw new ArgumentNullException(nameof(flashWorkflow));
+        _tokenStore = PlatformTokenStoreFactory.Create();
+        _authWorkflow = new AuthWorkflow(_tokenStore);
         _settings = _settingsWorkflow.Load();
         _operatorName = _settings.LastOperator ?? string.Empty;
         _batchId = _settings.BatchesEnabled ? _settings.LastBatch ?? string.Empty : string.Empty;

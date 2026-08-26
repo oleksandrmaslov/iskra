@@ -2,9 +2,16 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64;osx-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64;linux-x64;linux-arm64;osx-arm64;osx-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Unsigned catalogs are compiled out of Release by default. Maintainers
+         can build an explicitly labelled lab binary with
+         -p:IskraEnableLabCatalogs=true; the runtime environment switch is
+         only a second confirmation inside such a build. -->
+    <IskraEnableLabCatalogs Condition="'$(IskraEnableLabCatalogs)' == '' and '$(Configuration)' == 'Debug'">true</IskraEnableLabCatalogs>
+    <IskraEnableLabCatalogs Condition="'$(IskraEnableLabCatalogs)' == ''">false</IskraEnableLabCatalogs>
+    <DefineConstants Condition="'$(IskraEnableLabCatalogs)' == 'true'">$(DefineConstants);ISKRA_LAB_CATALOGS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +22,10 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Iskra.Core.Tests" />
   </ItemGroup>
 
 </Project>

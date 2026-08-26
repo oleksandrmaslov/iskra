@@ -10,9 +10,17 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-$dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
-if (-not (Test-Path -LiteralPath $dotnet)) {
-    throw "The repository SDK host was not found at $dotnet"
+$dotnet = $null
+if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    $perUserDotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
+    if (Test-Path -LiteralPath $perUserDotnet) { $dotnet = $perUserDotnet }
+}
+if ($null -eq $dotnet) {
+    $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($null -ne $dotnetCommand) { $dotnet = $dotnetCommand.Source }
+}
+if ($null -eq $dotnet) {
+    throw "dotnet was not found; install the SDK pinned by global.json"
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {

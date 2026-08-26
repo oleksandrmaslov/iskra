@@ -143,12 +143,12 @@ public static class CatalogGenerator
             return Array.Empty<RevokedRelease>();
         try
         {
-            var json = File.ReadAllText(path);
+            var json = BoundedFileReader.ReadUtf8String(path, CatalogJson.MaxCatalogBytes);
             var list = System.Text.Json.JsonSerializer.Deserialize<List<RevokedRelease>>(
                 json, CatalogJson.DefaultOptions);
             return list ?? new List<RevokedRelease>();
         }
-        catch (System.Text.Json.JsonException ex)
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or FileSizeLimitExceededException)
         {
             throw new CatalogGeneratorException($"{path}: invalid revoked.json — {ex.Message}", ex);
         }

@@ -66,7 +66,7 @@ public class CatalogResolverTests
     }
 
     [Fact]
-    public void Explicit_target_overrides_catalog()
+    public void Production_mode_rejects_explicit_target_override()
     {
         var args = new[]
         {
@@ -75,14 +75,13 @@ public class CatalogResolverTests
             "--operator", "x", "--batch", "y",
         };
         var r = CatalogResolver.ResolveWithCatalog(args, SampleCatalog(), @"C:\fw");
-        Assert.True(r.Ok);
-        Assert.Equal("STM32F1", GetFlag(r.ResolvedArgs!, "--target"));
-        // catalog still fills the rest
-        Assert.Equal("32", GetFlag(r.ResolvedArgs!, "--flash-kb"));
+        Assert.False(r.Ok);
+        Assert.Contains("--target", r.Error);
+        Assert.Contains("production mode", r.Error);
     }
 
     [Fact]
-    public void Explicit_elf_overrides_catalog_elf_path()
+    public void Production_mode_rejects_explicit_elf_override()
     {
         var args = new[]
         {
@@ -91,8 +90,62 @@ public class CatalogResolverTests
             "--operator", "x", "--batch", "y",
         };
         var r = CatalogResolver.ResolveWithCatalog(args, SampleCatalog(), @"C:\fw");
-        Assert.True(r.Ok);
+        Assert.False(r.Ok);
+        Assert.Contains("--elf", r.Error);
+        Assert.Contains("production mode", r.Error);
+    }
+
+    [Theory]
+    [InlineData("--target", "STM32F1")]
+    [InlineData("--flash-kb", "64")]
+    [InlineData("--firmware-sha256", "abcdef")]
+    [InlineData("--firmware-kind", "hex")]
+    [InlineData("--elf", "override.elf")]
+    [InlineData("--freq", "1000000")]
+    [InlineData("--power", "external")]
+    [InlineData("--connect-reset", null)]
+    [InlineData("--timeout", "15")]
+    [InlineData("--flash-origin", "0x08000000")]
+    [InlineData("--ram-origin", "0x20000000")]
+    [InlineData("--ram-kb", "8")]
+    public void Production_mode_rejects_every_catalog_controlled_flag(
+        string flag,
+        string? value)
+    {
+        var args = new List<string>
+        {
+            "--product", "ci-clop", "--operator", "x", "--batch", "y",
+            flag,
+        };
+        if (value is not null)
+            args.Add(value);
+
+        var r = CatalogResolver.ResolveWithCatalog(
+            args.ToArray(), SampleCatalog(), @"C:\fw");
+
+        Assert.False(r.Ok);
+        Assert.Contains(flag, r.Error);
+        Assert.Contains("production mode", r.Error);
+    }
+
+    [Fact]
+    public void Lab_manual_gate_allows_explicit_catalog_overrides()
+    {
+        var args = new[]
+        {
+            "--product", "ci-clop",
+            "--target", "STM32F1",
+            "--elf", @"D:\override.elf",
+            "--operator", "x", "--batch", "y",
+        };
+
+        var r = CatalogResolver.ResolveWithCatalog(
+            args, SampleCatalog(), @"C:\fw", allowCatalogOverrides: true);
+
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal("STM32F1", GetFlag(r.ResolvedArgs!, "--target"));
         Assert.Equal(@"D:\override.elf", GetFlag(r.ResolvedArgs!, "--elf"));
+        Assert.Equal("32", GetFlag(r.ResolvedArgs!, "--flash-kb"));
     }
 
     [Fact]
@@ -134,7 +187,7 @@ public class CatalogResolverTests
     }
 
     [Fact]
-    public void Explicit_flash_knobs_override_target_overrides()
+    public void Lab_manual_gate_allows_explicit_flash_knob_overrides()
     {
         var catalog = new Catalog(
             SchemaVersion: 1,
@@ -159,7 +212,8 @@ public class CatalogResolverTests
             "--freq", "1000000", "--power", "external", "--timeout", "15",
         };
 
-        var r = CatalogResolver.ResolveWithCatalog(args, catalog, @"C:\fw");
+        var r = CatalogResolver.ResolveWithCatalog(
+            args, catalog, @"C:\fw", allowCatalogOverrides: true);
 
         Assert.True(r.Ok);
         Assert.Equal("1000000", GetFlag(r.ResolvedArgs!, "--freq"));
@@ -274,7 +328,7 @@ public class CatalogResolverTests
     }
 
     [Fact]
-    public void Remote_release_with_explicit_elf_passes_through()
+    public void Lab_manual_gate_allows_remote_release_with_explicit_elf()
     {
         var remote = new FirmwareRelease("2.0.0", "ci-clop_v2.0.0_PY32F002Ax5.elf",
             "abcdef0000000000000000000000000000000000000000000000000000000002",
@@ -287,7 +341,8 @@ public class CatalogResolverTests
             "--elf", @"D:\dev-build.elf",
             "--operator", "x", "--batch", "y",
         };
-        var r = CatalogResolver.ResolveWithCatalog(args, SampleCatalog(extraReleases: remote), @"C:\fw");
+        var r = CatalogResolver.ResolveWithCatalog(
+            args, SampleCatalog(extraReleases: remote), @"C:\fw", allowCatalogOverrides: true);
         Assert.True(r.Ok);
         Assert.Equal(@"D:\dev-build.elf", GetFlag(r.ResolvedArgs!, "--elf"));
         Assert.Equal("abcdef0000000000000000000000000000000000000000000000000000000002",

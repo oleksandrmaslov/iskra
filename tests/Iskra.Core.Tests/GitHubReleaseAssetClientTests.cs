@@ -108,6 +108,23 @@ public class GitHubReleaseAssetClientTests
     }
 
     [Fact]
+    public async Task DownloadAsset_refuses_content_over_the_explicit_limit()
+    {
+        var bytes = Enumerable.Repeat((byte)0xA5, 257).ToArray();
+        var h = new StubHandler(BinaryResp(bytes));
+        var dest = new MemoryStream();
+
+        await Assert.ThrowsAsync<HttpContentSizeLimitException>(() =>
+            NewClient(h).DownloadAssetAsync(
+                "https://api.github.com/repos/o/r/releases/assets/222",
+                "tok",
+                dest,
+                maximumBytes: 256));
+
+        Assert.Empty(dest.ToArray());
+    }
+
+    [Fact]
     public async Task DownloadAsset_throws_on_non_2xx()
     {
         var h = new StubHandler(JsonResp("{\"message\":\"Bad token\"}", HttpStatusCode.Unauthorized));

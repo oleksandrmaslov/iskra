@@ -1,206 +1,171 @@
 # Iskra
 
-Factory flashing tool for ARM Cortex-M targets supported by Black Magic Probe.
-It drives the probe through `arm-none-eabi-gdb`, validates signed firmware
-catalog metadata, and logs every flash attempt to SQLite.
+Iskra is a factory flashing tool for ARM Cortex-M targets supported by Black
+Magic Probe. It verifies a signed firmware catalog, checks firmware integrity
+and memory ranges, drives a guarded `gdb` transaction, and records every attempt
+in SQLite.
 
-> **Status (2026-07-12):** the Windows WPF app, CLI, catalog/signature flow,
-> logging, and installer are in place. The UI-neutral application layer and a
-> safe, read-only Avalonia preview now build beside WPF. The audited build
-> remains lab-ready rather than factory-production-ready until the gates in
-> [`ROADMAP.md`](ROADMAP.md) are closed.
+> **Status (2026-08-26): 2.2.0 engineering release, not factory-approved.**
+> WPF remains the supported Windows variant. The Avalonia app and CLI now build
+> for Windows, Linux, and macOS and share the same flash workflow, but production
+> signing, clean-machine/HIL evidence, catalog-key rotation, board identity, and
+> append-only central audit logging remain release gates. See
+> [`docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md`](docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md)
+> and [`docs/RELEASE_EVIDENCE_2.2.0.md`](docs/RELEASE_EVIDENCE_2.2.0.md).
 
-Release history and upgrade notes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+Release history is in [`CHANGELOG.md`](CHANGELOG.md); forward gates are in
+[`ROADMAP.md`](ROADMAP.md).
 
-## Repository layout
+## Architecture
 
 ```text
-Iskra.sln
-src/
-  Iskra.Core/        Target-agnostic flashing and trust engine
-  Iskra.Application/ UI-neutral workflows and shared application policy
-  Iskra.Cli/         Console flasher
-  Iskra.Wpf/         Shipping Windows operator UI
-  Iskra.Desktop/     Avalonia cross-platform preview (no flashing yet)
-tests/
-  Iskra.Core.Tests/        xUnit tests for the Core library
-  Iskra.Application.Tests/ xUnit tests for shared application policy
-installer/
-  Product.wxs        App MSI
-  Bundle.wxs         Factory setup bundle
+WPF (Windows)     Avalonia (Win/Linux/macOS)     CLI
+       \                    |                    /
+        +----------- Iskra.Application --------+
+        | workflows, readiness, settings, history, auth |
+        +--------------------+-------------------+
+                             |
+                         Iskra.Core
+       signed catalog, rollback floor, firmware validation,
+       guarded GDB/MI session, SQLite log, GitHub clients
+                             |
+                  Black Magic Probe + target
 ```
 
-## Current Windows app prerequisites
+Repository layout:
 
-- Windows 10 / 11
-- .NET SDK 10.0.301 for development builds (pinned by `global.json`)
-- ARM GNU Toolchain for development runs, unless using the setup bundle
-- A Black Magic Probe attached to the target board
+```text
+src/Iskra.Core/          Trust, firmware, GDB, storage, platform adapters
+src/Iskra.Application/   UI-neutral operator workflows and policy
+src/Iskra.Wpf/           Supported Windows operator UI
+src/Iskra.Desktop/       Cross-platform Avalonia operator UI
+src/Iskra.Cli/           Cross-platform console application
+tests/                   Core, Application, and headless Avalonia suites
+installer/               WiX, Linux, macOS, and portable bundle builders
+```
 
-The Windows/Linux/macOS Avalonia migration, platform adapters, release order,
-and final security gates are tracked in [`ROADMAP.md`](ROADMAP.md).
-Requirements for the new owner-provided logos and brand system are in
-[`docs/BRANDING_ASSET_REQUIREMENTS.md`](docs/BRANDING_ASSET_REQUIREMENTS.md).
+The flash path fails closed: a verified catalog session and exactly one probe
+are required; revoked releases, bad hashes, invalid ELF/HEX maps, target
+mismatches, and audit-write failures cannot report PASS. GDB scans and attaches
+to the physical target before the application gate; it does not open or load the
+firmware until that gate accepts the target.
 
-## Current desktop UIs
+## Platform support
 
-`Iskra.Wpf` remains a supported production-path Windows UI throughout Sprint 8;
-Avalonia is being developed beside it rather than replacing or deleting it.
-Settings now save
-automatically when the operator leaves the Settings tab or closes the window;
-the header shows unsaved, saved, and save-error states. Probe readiness has an
-explicit refresh action, and flashing stays blocked unless exactly one BMP is
-detected.
+| Platform | UI/package path | Secure GitHub token store | Current acceptance |
+|---|---|---|---|
+| Windows x64 | WPF and Avalonia; MSI/Burn setup | DPAPI machine store | Code/tests and local packaging; renewed HIL and Authenticode pending |
+| Linux x64/arm64 | Avalonia + CLI; portable tar and native `.deb` | Secret Service via `secret-tool` | Code/cross-publish complete; native clean-machine, udev, keyring, and HIL pending |
+| macOS arm64/x64 | Avalonia `.app` + CLI; tar/zip/DMG | Login Keychain via `/usr/bin/security` | Code/cross-publish complete; native signing/notarization, USB identity, Keychain, and HIL pending |
 
-Batch mode is disabled by default for the current unbatched workflow. An opt-in
-toggle sits beside the cloud-log `.pem` configuration. With batches disabled,
-the hidden batch text is ignored, attempts use a blank batch ID, and no batch
-reservation is created. The existing digest-based lock remains available when
-the setting is enabled.
+There is no plaintext credential fallback. Missing or locked platform credential
+services disable sign-in and private firmware acquisition. Linux packages use a
+least-privilege udev rule (`0660`, `uaccess`) rather than world-writable serial
+devices. macOS probe discovery currently uses `/dev/cu.usbmodem*`; stable IOKit
+VID/PID/serial identity is still an acceptance gap.
 
-`Iskra.Desktop` is the localized four-tab Avalonia alpha. It consumes shared
-catalog/readiness policy and shows real read-only recent history. Its title and
-header identify the alpha boundary, and flashing remains disabled until
-workflow tests and hardware-in-the-loop parity exist. The language selector is
-the only settings write and reloads the latest settings before saving, avoiding
-stale cross-UI overwrites. It does not replace WPF.
+Operator presentation supports Ukrainian (default), English, and German in WPF,
+Avalonia, and CLI (`--lang uk|en|de`). Protocol values, CLI flags, hashes, error
+codes, logs, and raw GDB output remain English/ASCII.
 
-The WPF flash screen now consumes the UI-neutral `FlashWorkflow`, which owns
-the complete fail-closed transaction from catalog/revocation and optional batch
-reservation through firmware integrity, two-phase GDB execution, and SQLite
-attempt logging. This keeps WPF supported while allowing Avalonia to adopt the
-same tested transaction later.
+## Build and test
+
+The repository pins .NET SDK 10.0.301 in [`global.json`](global.json), uses
+locked NuGet dependency graphs, and pins WiX in
+[`dotnet-tools.json`](.config/dotnet-tools.json).
 
 ```powershell
 $dotnet = "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe"
-& $dotnet run --project src\Iskra.Desktop
+& $dotnet restore Iskra.sln --locked-mode
+& $dotnet build Iskra.sln -c Release --no-restore -warnaserror
+& $dotnet test Iskra.sln -c Release --no-build --no-restore
+& $dotnet list Iskra.sln package --vulnerable --include-transitive --no-restore
 ```
 
-The repository now targets .NET 10 and pins SDK 10.0.301 through `global.json`.
-`Iskra.Desktop` uses Avalonia 12.1.0. This runtime/UI-toolkit migration does not
-by itself establish Windows/Linux/macOS visual, packaging, workflow, or HIL
-parity; WPF remains the shipping operator UI until those gates pass.
-
-## Languages and standalone executables
-
-Operator presentation supports Ukrainian (default), English, and German.
-Select the language in WPF/Avalonia settings, or use `Iskra.Cli --lang
-uk|en|de ...`. Error codes, logs, CLI flags, hashes, catalog metadata, and raw
-GDB diagnostics remain language-neutral.
-
-Build the supported WPF app, CLI, and explicitly named read-only Avalonia alpha
-as a self-contained Windows x64 engineering bundle with:
+Run the Avalonia app:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\installer\build-localized-exes.ps1 `
-  -Version 1.4.0 `
-  -AvaloniaVersion 1.4.0-alpha.1
+& $dotnet run --project src/Iskra.Desktop
 ```
 
-Outputs are written under `artifacts/Iskra-<version>-win-x64/` as `Iskra.exe`,
-`Iskra.Cli.exe`, and `Iskra.Avalonia.Alpha.exe`, with the signed example
-catalog, bundle manifest, SHA-256 manifest, `.zip`, and sibling `.zip.sha256`.
-This script creates an unsigned local engineering release; Authenticode signing
-and Sprint 9 acceptance remain separate release gates.
-
-## Installer
-
-Build the factory installer bundle:
+Run station diagnostics:
 
 ```powershell
-pwsh ./installer/build-installer.ps1 -Version 1.4.0
+& $dotnet run --project src/Iskra.Cli -- --doctor
 ```
 
-Use `installer/out/Iskra-<ver>-setup-x64.exe` on operator stations. It checks
-for Windows 10/11 x64, detects an existing `arm-none-eabi-gdb.exe`, and installs
-the embedded Arm GNU Toolchain 15.2.rel1 before Iskra when GDB is missing. The
-sibling `Iskra-<ver>-x64.msi` is app-only: it uses an MSI-native x64 Windows
-compatibility check and blocks a fresh install if `arm-none-eabi-gdb.exe` is not
-already installed. Use the setup EXE for new factory PCs.
+## Engineering release artifacts
 
-The installer build restores committed package locks, verifies the pinned Arm
-GNU Toolchain 15.2.rel1 MSI SHA-256, and emits
-`Iskra-<ver>-SHA256SUMS.txt` beside the setup EXE, app-only MSI, and preinstall
-check. The WiX installer contains the supported WPF app and CLI; the Avalonia
-alpha remains an explicitly separate engineering executable until parity and
-HIL acceptance.
-
-The build also emits `installer/out/Iskra-<ver>-preinstall-check.ps1`. Run it
-before setup on a new station:
+Build a self-contained Windows x64 bundle containing WPF, Avalonia, and CLI:
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\Iskra-1.2.3-preinstall-check.ps1
+pwsh ./installer/build-localized-exes.ps1 -Version 2.2.0
 ```
 
-After setup, run:
+Build the WPF and side-by-side Avalonia Windows installers:
 
 ```powershell
-"C:\Program Files\Iskra\Iskra.Cli.exe" --doctor
+pwsh ./installer/build-installer.ps1 -Version 2.2.0
+pwsh ./installer/build-avalonia-installer.ps1 -Version 2.2.0
 ```
 
-### Station checklist
-
-Pre-install:
-
-- [ ] Windows 10/11 x64.
-- [ ] At least 3 GB free on the system drive.
-- [ ] Installer can run elevated as administrator.
-- [ ] `Iskra-<ver>-setup-x64.exe` is present.
-- [ ] Black Magic Probe is available for final station acceptance.
-- [ ] GitHub/network access is available if firmware comes from private GitHub releases.
-
-Installer installs:
-
-- [ ] Setup EXE: checks Windows 10/11 x64 before install.
-- [ ] Setup EXE: installs Arm GNU Toolchain 15.2.rel1 when `arm-none-eabi-gdb.exe` is missing.
-- [ ] MSI: blocks app install when `arm-none-eabi-gdb.exe` is missing.
-- [ ] Iskra WPF app and `Iskra.Cli.exe`.
-- [ ] Bundled `examples/catalog.json` and `examples/catalog.json.sig`.
-- [ ] Installed `check-station.ps1` for later diagnostics.
-
-Post-install acceptance:
-
-- [ ] `Iskra.Cli --doctor` reports no failures.
-- [ ] `Iskra.Cli --login` succeeds if private GitHub firmware is used.
-- [ ] The WPF status strip shows `gdb` found and one BMP GDB COM port.
-- [ ] A known-good board flashes once before handing the station to operators.
-
-## Build
+Build deterministic portable Linux/macOS bundles from any host:
 
 ```powershell
-$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
-dotnet build
+pwsh ./installer/build-unix-bundles.ps1 -Version 2.2.0 -AllowDirty
 ```
 
-## Run the CLI
+Native `.deb` and macOS DMG creation must run on matching native hosts:
 
-```powershell
-dotnet run --project src/Iskra.Cli -- `
-  --catalog examples/catalog.json `
-  --product ci-clop `
-  --elf .\path\to\app.elf `
-  --port \\.\COM30 `
-  --power probe `
-  --freq 1000000 `
-  --connect-reset `
-  --operator jdoe `
-  --batch Lot-2026-05-25-A
+```bash
+# Linux x64 or arm64
+ISKRA_ALLOW_UNSIGNED=1 bash installer/build-linux-package.sh 2.2.0
+
+# macOS arm64 or x64
+ISKRA_ALLOW_UNSIGNED=1 bash installer/build-macos-package.sh 2.2.0
 ```
+
+`ISKRA_ALLOW_UNSIGNED=1` is for clearly labelled engineering artifacts only.
+Official Linux builds require a GPG key for the digest manifest. Official macOS
+builds require a Developer ID identity and notarization profile. Tagged Windows
+publication is intentionally blocked until Authenticode and timestamping are
+configured. The required environment, secrets, and fail-closed policy are
+documented in [`docs/RELEASE_SIGNING.md`](docs/RELEASE_SIGNING.md).
+
+The CI matrix builds/tests Windows x64, Ubuntu x64/arm64, and macOS arm64/x64
+natively. The release workflow creates native packages only on the corresponding
+OS/architecture and refuses missing release signing credentials.
+
+## Catalog and lab mode
 
 Signed catalogs are required by default. Unsigned sideloading requires both
-`--allow-unsigned-catalog` and the explicit lab-only environment variable
-`ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1`; raw `--elf` mode additionally requires
-`--allow-manual-flash`. Never set the variable on an operator station.
+`--allow-unsigned-catalog` and `ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1`; manual
+firmware overrides also require `--allow-manual-flash`. These switches are
+compiled out of ordinary Release binaries and require an explicitly
+lab-enabled build. Signed-catalog target, hash, and firmware overrides require
+the same explicit lab/manual gate and must never be enabled on an operator
+station.
 
-## Test
+## Factory acceptance gates
 
-```powershell
-$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
-dotnet test
-```
+Do not deploy this candidate to a production batch until all stop-ship items in
+the audit are closed. The critical remaining items are:
 
-Historical sprint detail lives in the git history and `CHANGELOG.md`; new work and acceptance
-criteria live in `ROADMAP.md`.
+- rotate the embedded development catalog key to an offline/HSM-controlled
+  production key and deploy reviewer-gated catalog signing;
+- Authenticode-sign Windows artifacts, sign the Linux release manifest/repo,
+  and Developer-ID-sign plus notarize the macOS app and DMG;
+- replace mutable shared-key GitHub log shipping with per-station authenticated,
+  append-only/tamper-evident ingestion;
+- add trustworthy per-product board identity, not only MCU-family matching;
+- complete clean-machine install, secure-store, USB identity/permissions,
+  wrong-board, offline, rollback/recovery, and HIL tests on every supported OS
+  and architecture;
+- repeat the 50-consecutive-PASS bench run with signed release artifacts after
+  the guarded GDB transaction changes.
+
+WPF remains available and maintained during this acceptance process. Avalonia
+does not remove or silently replace it.
 
 ## License
 

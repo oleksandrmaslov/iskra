@@ -53,9 +53,9 @@ public sealed record FlashWorkflowResult(
 }
 
 /// <summary>
-/// Platform-specific remote firmware acquisition. The WPF implementation uses
-/// the Windows token store; future Avalonia implementations can use Keychain or
-/// libsecret without adding those OS dependencies to this project.
+/// Platform-specific remote firmware acquisition. WPF keeps its Windows DPAPI
+/// adapter; Avalonia composes the shared platform store factory for DPAPI,
+/// Linux Secret Service, or macOS Keychain without adding UI dependencies here.
 /// </summary>
 public interface IRemoteFirmwareProvider
 {
@@ -135,7 +135,15 @@ public sealed class FlashWorkflow
             return FailureWithLog(request, product, release, batch, "E_RELEASE_REVOKED", message);
         }
 
-        var databasePath = ResolveDatabasePath(request.Settings);
+        string databasePath;
+        try
+        {
+            databasePath = ResolveDatabasePath(request.Settings);
+        }
+        catch (Exception ex)
+        {
+            return Blocked("E_AUDIT_PATH_INVALID", ex.Message, product, release, batch);
+        }
         if (batchPolicy.ShouldReserve)
         {
             progress?.Report(new FlashWorkflowProgress(FlashWorkflowStage.ReservingBatch));
@@ -288,7 +296,17 @@ public sealed class FlashWorkflow
                 timeout: TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds)),
                 onLine: onGdbLine,
                 ct: cancellationToken).ConfigureAwait(false);
-            var logged = TryLogAttempt(request, product, release, batch, outcome);
+            var logged = TryLogAttempt(request, product, release, batch, outcome, out var logError);
+            if (outcome.IsPass && !logged)
+            {
+                outcome = new FlashOutcome(
+                    FlashResult.Fail,
+                    "E_AUDIT_WRITE_FAILED",
+                    $"firmware was flashed and verified, but the audit record could not be persisted: {logError}",
+                    outcome.DetectedTarget,
+                    outcome.Duration,
+                    outcome.GdbTail);
+            }
             return new FlashWorkflowResult(
                 outcome.IsPass ? FlashWorkflowStatus.Passed : FlashWorkflowStatus.Failed,
                 outcome,
@@ -343,7 +361,7 @@ public sealed class FlashWorkflow
         string? firmwarePath = null)
     {
         var outcome = FailOutcome(code, message);
-        var logged = TryLogAttempt(request, product, release, batch, outcome);
+        var logged = TryLogAttempt(request, product, release, batch, outcome, out _);
         return new FlashWorkflowResult(
             FlashWorkflowStatus.Failed,
             outcome,
@@ -379,7 +397,8 @@ public sealed class FlashWorkflow
         Product product,
         FirmwareRelease release,
         string batch,
-        FlashOutcome outcome)
+        FlashOutcome outcome,
+        out string? error)
     {
         try
         {
@@ -411,12 +430,12 @@ public sealed class FlashWorkflow
                 // revoked release) must never create a lock as a logging side
                 // effect; accepted batch requests are already durable here.
                 reserveBatchLock: false);
+            error = null;
             return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // A failed audit write must not hide the primary flash outcome or
-            // crash a frontend. The result exposes AttemptLogged for telemetry.
+            error = ex.Message;
             return false;
         }
     }

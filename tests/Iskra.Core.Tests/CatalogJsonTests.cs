@@ -15,7 +15,8 @@ public class CatalogJsonTests
               "target": {
                 "bmp_match": "PY32Fxxx",
                 "part_number": "PY32F002Ax5",
-                "flash_kb": 32
+                "flash_kb": 32,
+                "flash_origin": "0x08000000"
               },
               "releases": [
                 {
@@ -169,7 +170,7 @@ public class CatalogJsonTests
             {
               "product_id": "ci-clop",
               "display_name": "CI-CLOP",
-              "target": { "bmp_match": "PY32Fxxx", "part_number": "PY32F002Ax5", "flash_kb": 32 },
+              "target": { "bmp_match": "PY32Fxxx", "part_number": "PY32F002Ax5", "flash_kb": 32, "flash_origin": "0x08000000" },
               "releases": [
                 {
                   "version": "1.0.0",
@@ -201,6 +202,49 @@ public class CatalogJsonTests
         Assert.Equal("oleksandrmaslov/ci-clop-firmware", r.ElfSource!.Repo);
         Assert.Equal("v1.0.0", r.ElfSource.Tag);
         Assert.Equal("ci-clop_v1.0.0_PY32F002Ax5.elf", r.ElfSource.Asset);
+    }
+
+    [Theory]
+    [InlineData("../firmware.elf")]
+    [InlineData("subdir/firmware.elf")]
+    [InlineData("C:/firmware.elf")]
+    public void Trusted_catalog_rejects_non_leaf_firmware_paths(string filename)
+    {
+        var catalog = CatalogJson.Parse(ValidJson.Replace(
+            "ci-clop_v1.0.0_PY32F002Ax5.elf",
+            filename));
+
+        var ex = Assert.Throws<CatalogParseException>(() =>
+            CatalogJson.ValidateTrustedArtifactPaths(catalog));
+
+        Assert.Contains("portable leaf name", ex.Message);
+    }
+
+    [Fact]
+    public void Trusted_catalog_requires_an_absolute_flash_window()
+    {
+        var parsed = CatalogJson.Parse(ValidJson);
+        var product = parsed.Products.Single();
+        var catalog = parsed with
+        {
+            Products = [product with { Target = product.Target with { FlashOrigin = null } }],
+        };
+
+        var ex = Assert.Throws<CatalogParseException>(() =>
+            CatalogJson.ValidateTrustedArtifactPaths(catalog));
+
+        Assert.Contains("flash_origin", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("\"tag\":   \"v1.0.0\"", "\"tag\":   \"release/v1.0.0\"")]
+    [InlineData("\"asset\": \"ci-clop_v1.0.0_PY32F002Ax5.elf\"", "\"asset\": \"dir/fw.elf\"")]
+    public void Trusted_remote_source_rejects_cache_path_segments(string find, string replace)
+    {
+        var catalog = CatalogJson.Parse(RemoteSourceJson.Replace(find, replace));
+
+        Assert.Throws<CatalogParseException>(() =>
+            CatalogJson.ValidateTrustedArtifactPaths(catalog));
     }
 
     [Fact]

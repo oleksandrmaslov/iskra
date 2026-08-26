@@ -328,32 +328,52 @@ public class FlashStateMachineTests
         Assert.Equal("E_TIMEOUT", outcome!.ErrorCode);
     }
 
+    [Fact]
+    public void ClassifyScan_reports_guard_phase_attach_failure()
+    {
+        var outcome = FlashStateMachine.ClassifyScan(Run(
+        [
+            "Available Targets:",
+            "No. Att Driver",
+            " 1      PY32Fxxx M0+",
+            "Cannot attach target #1 (GDB/MI attach failed)",
+        ], exitCode: 1), "PY32Fxxx");
+
+        Assert.NotNull(outcome);
+        Assert.Equal("E_ATTACH_FAILED", outcome!.ErrorCode);
+    }
+
     // RunAsync end-to-end: scan + retry-on-busy + flash, via a fake GdbProcess.
 
     private sealed class FakeGdbProcess : GdbProcess
     {
         public Queue<GdbRunResult> ScanResults { get; } = new();
         public Queue<GdbRunResult> FlashResults { get; } = new();
+        public int GuardedCalls { get; private set; }
         public int ScanCalls { get; private set; }
         public int FlashCalls { get; private set; }
+        public bool ReturnNoFlashAfterAcceptedGate { get; set; }
 
         public FakeGdbProcess() : base("dummy-gdb-path") { }
 
-        public override Task<GdbRunResult> RunScanAsync(
-            string comPort, PowerMode power, int frequencyHz, bool connectUnderReset,
-            TimeSpan timeout, Action<GdbLine>? onLine = null, CancellationToken ct = default)
-        {
-            ScanCalls++;
-            return Task.FromResult(ScanResults.Dequeue());
-        }
-
-        public override Task<GdbRunResult> RunFlashAsync(
-            string comPort, PowerMode power, int frequencyHz, bool connectUnderReset,
-            string elfPath, TimeSpan timeout, Action<GdbLine>? onLine = null,
+        public override Task<GdbGuardedRunResult> RunGuardedAsync(
+            string endpoint, PowerMode power, int frequencyHz, bool connectUnderReset,
+            string firmwarePath, TimeSpan scanTimeout, TimeSpan flashTimeout,
+            Func<GdbRunResult, bool> scanGate, Action<GdbLine>? onLine = null,
             CancellationToken ct = default)
         {
+            GuardedCalls++;
+            ScanCalls++;
+            var scan = ScanResults.Dequeue();
+            foreach (var line in scan.Output) onLine?.Invoke(line);
+
+            if (!scanGate(scan) || ReturnNoFlashAfterAcceptedGate)
+                return Task.FromResult(new GdbGuardedRunResult(scan, null));
+
             FlashCalls++;
-            return Task.FromResult(FlashResults.Dequeue());
+            var flash = FlashResults.Dequeue();
+            foreach (var line in flash.Output) onLine?.Invoke(line);
+            return Task.FromResult(new GdbGuardedRunResult(scan, flash));
         }
     }
 
@@ -380,11 +400,12 @@ public class FlashStateMachineTests
         var fake = new FakeGdbProcess();
         fake.ScanResults.Enqueue(Run(new[] { "Access is denied." }, exitCode: 1, duration: TimeSpan.FromMilliseconds(100)));
         fake.ScanResults.Enqueue(Run(ScanOnlyHappy, duration: TimeSpan.FromMilliseconds(200)));
-        fake.FlashResults.Enqueue(Run(RealBmpPy32Output, duration: TimeSpan.FromMilliseconds(3000)));
+        fake.FlashResults.Enqueue(Run(RealBmpPy32Output.Skip(6), duration: TimeSpan.FromMilliseconds(3000)));
 
         var outcome = await FlashStateMachine.RunAsync(fake, MakeOptions(), TimeSpan.FromSeconds(15));
 
         Assert.True(outcome.IsPass);
+        Assert.Equal(2, fake.GuardedCalls);
         Assert.Equal(2, fake.ScanCalls);
         Assert.Equal(1, fake.FlashCalls);
         // Duration = scan1 + scan2 + flash
@@ -403,6 +424,7 @@ public class FlashStateMachineTests
 
         Assert.False(outcome.IsPass);
         Assert.Equal("E_PROBE_BUSY", outcome.ErrorCode);
+        Assert.Equal(2, fake.GuardedCalls);
         Assert.Equal(2, fake.ScanCalls);
         Assert.Equal(0, fake.FlashCalls); // never even attempted
     }
@@ -424,6 +446,7 @@ public class FlashStateMachineTests
         var outcome = await FlashStateMachine.RunAsync(fake, MakeOptions(), TimeSpan.FromSeconds(15));
 
         Assert.Equal("E_TARGET_MISMATCH", outcome.ErrorCode);
+        Assert.Equal(1, fake.GuardedCalls);
         Assert.Equal(1, fake.ScanCalls);
         Assert.Equal(0, fake.FlashCalls);
     }
@@ -445,6 +468,7 @@ public class FlashStateMachineTests
             fake, MakeOptions(), TimeSpan.FromSeconds(15));
 
         Assert.Equal("E_MULTIPLE_TARGETS", outcome.ErrorCode);
+        Assert.Equal(1, fake.GuardedCalls);
         Assert.Equal(0, fake.FlashCalls);
     }
 
@@ -459,7 +483,63 @@ public class FlashStateMachineTests
             probeBusyRetries: 0);
 
         Assert.Equal("E_PROBE_BUSY", outcome.ErrorCode);
+        Assert.Equal(1, fake.GuardedCalls);
         Assert.Equal(1, fake.ScanCalls);
         Assert.Equal(0, fake.FlashCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_never_requests_flash_when_guard_rejects_target()
+    {
+        var fake = new FakeGdbProcess();
+        fake.ScanResults.Enqueue(Run(new[]
+        {
+            "Available Targets:",
+            "No. Att Driver",
+            " 1      STM32F103",
+            "",
+        }));
+        // If the state machine accidentally accepts this scan, the fake would
+        // try to dequeue a missing flash result and the test would also fail.
+
+        var outcome = await FlashStateMachine.RunAsync(
+            fake, MakeOptions(), TimeSpan.FromSeconds(15));
+
+        Assert.Equal("E_TARGET_MISMATCH", outcome.ErrorCode);
+        Assert.Equal(1, fake.GuardedCalls);
+        Assert.Equal(0, fake.FlashCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_fails_closed_when_held_session_ends_after_accepted_gate()
+    {
+        var fake = new FakeGdbProcess { ReturnNoFlashAfterAcceptedGate = true };
+        fake.ScanResults.Enqueue(Run(ScanOnlyHappy));
+
+        var outcome = await FlashStateMachine.RunAsync(
+            fake, MakeOptions(), TimeSpan.FromSeconds(15));
+
+        Assert.Equal("E_GDB_CRASHED", outcome.ErrorCode);
+        Assert.Equal(0, fake.FlashCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_forwards_scan_and_flash_progress_once()
+    {
+        var fake = new FakeGdbProcess();
+        fake.ScanResults.Enqueue(Run(ScanOnlyHappy));
+        fake.FlashResults.Enqueue(Run(RealBmpPy32Output.Skip(6)));
+        var progress = new List<string>();
+
+        var outcome = await FlashStateMachine.RunAsync(
+            fake,
+            MakeOptions(),
+            TimeSpan.FromSeconds(15),
+            line => progress.Add(line.Text));
+
+        Assert.True(outcome.IsPass);
+        Assert.Equal(1, progress.Count(line => line == "Available Targets:"));
+        Assert.Contains("Loading section .text, size 0x2e74 lma 0x80000c0", progress);
+        Assert.Contains("Section .text, range 0x80000c0 -- 0x8002f34: matched.", progress);
     }
 }

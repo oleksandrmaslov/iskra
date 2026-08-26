@@ -149,7 +149,9 @@ public sealed class RemoteCatalogClient
                 ReadFileLimited(SignaturePath, MaxSignatureBytes)).Trim();
             var sig = Convert.FromBase64String(sigText);
             if (!CatalogSignature.Verify(bytes, sig, _verificationPublicKey)) return null;
-            return CatalogJson.Parse(System.Text.Encoding.UTF8.GetString(bytes));
+            var catalog = CatalogJson.Parse(bytes);
+            CatalogJson.ValidateTrustedArtifactPaths(catalog);
+            return catalog;
         }
         catch (Exception ex) when (ex is IOException
             or UnauthorizedAccessException
@@ -184,7 +186,13 @@ public sealed class RemoteCatalogClient
         // 1) GET /repos/{owner}/{repo}/releases/latest
         var url = $"{ApiBaseUrl}/repos/{_owner}/{_repo}/releases/latest";
         HttpResponseMessage resp;
-        try { resp = await _http.SendAsync(NewApiRequest(HttpMethod.Get, url), ct).ConfigureAwait(false); }
+        try
+        {
+            resp = await _http.SendAsync(
+                NewApiRequest(HttpMethod.Get, url),
+                HttpCompletionOption.ResponseHeadersRead,
+                ct).ConfigureAwait(false);
+        }
         catch (HttpRequestException ex) { return Failure(RemoteCatalogStatus.NetworkError, ex.Message); }
 
         using (resp)
@@ -276,7 +284,11 @@ public sealed class RemoteCatalogClient
 
             // 4) Parse — refuse to commit an unparseable catalog.
             Catalog catalog;
-            try { catalog = CatalogJson.Parse(System.Text.Encoding.UTF8.GetString(catalogBytes)); }
+            try
+            {
+                catalog = CatalogJson.Parse(catalogBytes);
+                CatalogJson.ValidateTrustedArtifactPaths(catalog);
+            }
             catch (CatalogParseException ex) { return Failure(RemoteCatalogStatus.ParseError, ex.Message); }
 
             // 4a) Anti-rollback: the catalog body itself is signed, so its
@@ -284,22 +296,19 @@ public sealed class RemoteCatalogClient
             // the most recently committed catalog — protects against an
             // attacker re-serving an older signed catalog (e.g. one whose
             // revocation list hasn't yet blocked a since-revoked release).
-            var floor = CachedGeneratedAt();
-            var incoming = catalog.GeneratedAt.ToUniversalTime();
-            if (incoming > DateTime.UtcNow.AddHours(24))
+            var activation = CatalogActivationPolicy.ValidateAndAdvance(
+                catalog.GeneratedAt,
+                GeneratedAtPath,
+                requireNewer: true);
+            if (!activation.IsAccepted)
                 return Failure(RemoteCatalogStatus.RollbackRejected,
-                    $"catalog generated_at {incoming:O} is implausibly far in the future");
-            if (floor != DateTime.MinValue && incoming <= floor)
-                return Failure(RemoteCatalogStatus.RollbackRejected,
-                    $"catalog generated_at {incoming:O} <= cached floor {floor:O} (rollback refused)");
+                    activation.Diagnostic ?? activation.Status.ToString());
 
             // 5) Atomic commit: write .tmp files then rename.
             Directory.CreateDirectory(_cacheDir);
             WriteAtomic(CatalogPath,   catalogBytes);
             WriteAtomic(SignaturePath, sigBytes);
             WriteAtomic(TagPath,       System.Text.Encoding.UTF8.GetBytes(tagName));
-            WriteAtomic(GeneratedAtPath,
-                System.Text.Encoding.UTF8.GetBytes(incoming.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
 
             return new RemoteCatalogResult(
                 Catalog: catalog, LocalCatalogPath: CatalogPath, LocalSignaturePath: SignaturePath,

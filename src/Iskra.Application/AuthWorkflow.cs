@@ -8,7 +8,7 @@ public enum AuthStatus
     SecureStoreUnavailable,
     /// <summary>The build carries no GitHub App client ID.</summary>
     ClientNotConfigured,
-    /// <summary>Credentials exist on disk but could not be decrypted.</summary>
+    /// <summary>The native store failed at runtime or its credential payload is invalid.</summary>
     TokenStoreCorrupt,
     NotSignedIn,
     /// <summary>The refresh token has expired; a new sign-in is required.</summary>
@@ -43,10 +43,11 @@ public sealed record AuthSnapshot(
 /// Classifies the station's stored GitHub credentials for presentation, shared
 /// by WPF and Avalonia so both frontends agree on what "signed in" means.
 ///
-/// <para>The store is injected rather than constructed: it is Windows-only
-/// today, and a platform without an encrypted implementation must pass
-/// <c>null</c> and get <see cref="AuthStatus.SecureStoreUnavailable"/> instead of
-/// a plaintext fallback.</para>
+/// <para>The store is injected rather than constructed. Frontends use
+/// <see cref="PlatformTokenStoreFactory"/> for DPAPI, Linux Secret Service, or
+/// macOS Keychain; a platform without an encrypted implementation passes
+/// <c>null</c> and gets <see cref="AuthStatus.SecureStoreUnavailable"/> instead
+/// of a plaintext fallback.</para>
 /// </summary>
 public sealed class AuthWorkflow
 {

@@ -926,6 +926,7 @@ public partial class MainWindow : Window
                     SettingsField.BmpFrequencyHz => T("Settings.FrequencyInvalid"),
                     SettingsField.TimeoutSeconds => T("Settings.TimeoutInvalid"),
                     SettingsField.LogShipIntervalMinutes => T("Settings.IntervalInvalid"),
+                    SettingsField.DbPath => save.Diagnostic ?? T("Settings.LogFile"),
                     _ => save.Diagnostic ?? T("Common.Unknown"),
                 };
                 throw new InvalidOperationException(message);

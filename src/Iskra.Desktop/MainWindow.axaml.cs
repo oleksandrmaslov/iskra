@@ -15,6 +15,7 @@ public sealed partial class MainWindow : Window
 
     private MainWindowViewModel? _viewModel;
     private int _previousTabIndex;
+    private bool _closeWarningOpen;
 
     public MainWindow()
     {
@@ -101,8 +102,40 @@ public sealed partial class MainWindow : Window
         _previousTabIndex = MainTabs.SelectedIndex;
     }
 
-    private void OnWindowClosing(object? sender, WindowClosingEventArgs e) =>
-        _viewModel?.SaveSettingsIfDirty();
+    private async void OnWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (_viewModel is null) return;
+
+        // A close request must never tear down gdb halfway through a write. This
+        // mirrors the shipping WPF frontend: keep the station alive until the
+        // guarded scan/load/verify transaction reaches a terminal result.
+        if (_viewModel.IsFlashing)
+        {
+            e.Cancel = true;
+            if (_closeWarningOpen) return;
+
+            _closeWarningOpen = true;
+            try
+            {
+                await new MessageWindow(
+                    _viewModel.Text.FlashRunning,
+                    _viewModel.Text.CloseDuringFlash).ShowDialog(this);
+            }
+            finally
+            {
+                _closeWarningOpen = false;
+            }
+            return;
+        }
+
+        // Invalid or unwritable settings remain visible instead of being
+        // silently lost on exit.
+        if (!_viewModel.SaveSettingsIfDirty())
+        {
+            e.Cancel = true;
+            MainTabs.SelectedIndex = SettingsTabIndex;
+        }
+    }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

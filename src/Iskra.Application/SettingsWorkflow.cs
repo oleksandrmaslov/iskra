@@ -20,6 +20,7 @@ public enum SettingsField
     BmpFrequencyHz,
     TimeoutSeconds,
     LogShipIntervalMinutes,
+    DbPath,
 }
 
 public enum SettingsSaveStatus
@@ -170,9 +171,9 @@ public sealed class SettingsWorkflow
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(draft);
 
-        if (!TryPositiveInt(draft.BmpFrequencyHz, out var frequency))
+        if (!TryIntRange(draft.BmpFrequencyHz, FlashOptions.MaxBmpFrequencyHz, out var frequency))
             return Invalid(SettingsField.BmpFrequencyHz);
-        if (!TryPositiveInt(draft.TimeoutSeconds, out var timeout))
+        if (!TryIntRange(draft.TimeoutSeconds, FlashOptions.MaxTimeoutSeconds, out var timeout))
             return Invalid(SettingsField.TimeoutSeconds);
         if (!TryPositiveInt(draft.LogShipIntervalMinutes, out var interval))
             return Invalid(SettingsField.LogShipIntervalMinutes);
@@ -190,7 +191,21 @@ public sealed class SettingsWorkflow
         candidate.Power = draft.Power;
         candidate.ConnectUnderReset = draft.ConnectUnderReset;
         candidate.TimeoutSeconds = timeout;
-        candidate.DbPath = NullIfWhiteSpace(draft.DbPath);
+        var requestedDbPath = NullIfWhiteSpace(draft.DbPath);
+        try
+        {
+            candidate.DbPath = requestedDbPath is null
+                ? null
+                : AuditDatabasePathPolicy.ValidateAndNormalize(requestedDbPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return new SettingsSaveResult(
+                SettingsSaveStatus.ValidationFailed,
+                null,
+                SettingsField.DbPath,
+                ex.Message);
+        }
         candidate.StationId = string.IsNullOrWhiteSpace(draft.StationId)
             ? Environment.MachineName
             : draft.StationId.Trim();
@@ -215,6 +230,9 @@ public sealed class SettingsWorkflow
     private static bool TryPositiveInt(string? value, out int parsed) =>
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed)
         && parsed > 0;
+
+    private static bool TryIntRange(string? value, int maximum, out int parsed) =>
+        TryPositiveInt(value, out parsed) && parsed <= maximum;
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

@@ -80,12 +80,63 @@ public sealed class FirmwareRangeTests : IDisposable
         Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
     }
 
+    [Theory]
+    [InlineData(2, 1, 40, "ELF32")]
+    [InlineData(1, 2, 40, "little-endian")]
+    [InlineData(1, 1, 62, "not ARM")]
+    public void Rejects_non_cortex_m_elf_identity(
+        byte elfClass,
+        byte encoding,
+        ushort machine,
+        string expectedDiagnostic)
+    {
+        var path = WriteElf32([(0x08000000u, 0x100u)]);
+        var bytes = File.ReadAllBytes(path);
+        bytes[4] = elfClass;
+        bytes[5] = encoding;
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(18), machine);
+        File.WriteAllBytes(path, bytes);
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Elf);
+
+        Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
+        Assert.Contains(expectedDiagnostic, image.Diagnostic);
+    }
+
+    [Fact]
+    public void Rejects_a_load_segment_whose_file_bytes_are_truncated()
+    {
+        var path = WriteElf32([(0x08000000u, 0x100u)]);
+        using (var stream = File.Open(path, FileMode.Open, FileAccess.Write))
+            stream.SetLength(stream.Length - 1);
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Elf);
+
+        Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
+        Assert.Contains("past end of file", image.Diagnostic);
+    }
+
     [Fact]
     public void Reports_missing_file_without_throwing()
     {
         var image = FirmwareImage.Read(Path.Combine(Path.GetTempPath(), "no-such-iskra.elf"), FirmwareKind.Elf);
 
         Assert.Equal(FirmwareImageStatus.NotFound, image.Status);
+    }
+
+    [Fact]
+    public void Rejects_a_firmware_file_over_the_global_safety_limit()
+    {
+        var path = NewTempFile(".elf");
+        using (var stream = File.Open(path, FileMode.Create, FileAccess.Write))
+            stream.SetLength(FirmwareImage.MaxFirmwareFileBytes + 1);
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Elf);
+
+        Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
+        Assert.Contains("safety limit", image.Diagnostic);
+        Assert.Equal(FirmwarePreflight.CheckResult.InvalidFormat,
+            FirmwarePreflight.Check(path, FirmwareKind.Elf));
     }
 
     // ============================================================
@@ -136,6 +187,36 @@ public sealed class FirmwareRangeTests : IDisposable
 
         Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
         Assert.Contains("EOF", image.Diagnostic);
+    }
+
+    [Fact]
+    public void Rejects_an_overlong_hex_record()
+    {
+        var path = NewTempFile(".hex");
+        File.WriteAllText(path, ":" + new string('0', 522));
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Hex);
+
+        Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
+        Assert.Contains("record limit", image.Diagnostic);
+        Assert.Equal(FirmwarePreflight.CheckResult.InvalidFormat,
+            FirmwarePreflight.Check(path, FirmwareKind.Hex));
+    }
+
+    [Fact]
+    public void Rejects_a_hex_record_that_crosses_the_32_bit_address_boundary()
+    {
+        var hex = new StringBuilder();
+        hex.AppendLine(HexRecord(0x0000, 0x04, [0xFF, 0xFF]));
+        hex.AppendLine(HexRecord(0xFFFF, 0x00, [0xAA, 0xBB]));
+        hex.AppendLine(HexRecord(0x0000, 0x01, []));
+        var path = NewTempFile(".hex");
+        File.WriteAllText(path, hex.ToString());
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Hex);
+
+        Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
+        Assert.Contains("32-bit", image.Diagnostic);
     }
 
     // ============================================================
@@ -372,18 +453,21 @@ public sealed class FirmwareRangeTests : IDisposable
         const int headerSize = 52;
         const int entrySize = 32;
         var table = new byte[entrySize * segments.Length];
+        var dataOffset = checked(headerSize + table.Length);
+        var nextDataOffset = dataOffset;
         for (var i = 0; i < segments.Length; i++)
         {
             var e = table.AsSpan(i * entrySize);
             BinaryPrimitives.WriteUInt32LittleEndian(e, 1);                      // p_type = PT_LOAD
-            BinaryPrimitives.WriteUInt32LittleEndian(e[4..], 0);                 // p_offset
+            BinaryPrimitives.WriteUInt32LittleEndian(e[4..], (uint)nextDataOffset);// p_offset
             BinaryPrimitives.WriteUInt32LittleEndian(e[8..], segments[i].Paddr); // p_vaddr
             BinaryPrimitives.WriteUInt32LittleEndian(e[12..], segments[i].Paddr);// p_paddr
             BinaryPrimitives.WriteUInt32LittleEndian(e[16..], segments[i].Filesz);
             BinaryPrimitives.WriteUInt32LittleEndian(e[20..], segments[i].Filesz);
+            nextDataOffset = checked(nextDataOffset + (int)segments[i].Filesz);
         }
 
-        var bytes = new byte[headerSize + table.Length];
+        var bytes = new byte[nextDataOffset];
         bytes[0] = 0x7F; bytes[1] = (byte)'E'; bytes[2] = (byte)'L'; bytes[3] = (byte)'F';
         bytes[4] = 1; // ELF32
         bytes[5] = 1; // little endian

@@ -55,6 +55,9 @@ public sealed class GitHubRepoAccessDeniedException : Exception
 /// </summary>
 public sealed class GitHubReleaseAssetClient
 {
+    public const int MaxReleaseMetadataBytes = 2 * 1024 * 1024;
+    public const int MaxErrorBodyBytes = 64 * 1024;
+    public const long MaxFirmwareAssetBytes = 64L * 1024 * 1024;
     public const string ApiBaseUrl   = "https://api.github.com";
     public const string ApiAccept    = "application/vnd.github+json";
     public const string ApiVersion   = "2022-11-28";
@@ -84,8 +87,10 @@ public sealed class GitHubReleaseAssetClient
 
         var url = $"{ApiBaseUrl}/repos/{repo}/releases/tags/{Uri.EscapeDataString(tag)}";
         using var req = NewApiRequest(HttpMethod.Get, url, accessToken);
-        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-        var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        using var resp = await _http.SendAsync(
+            req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        var body = await BoundedHttpContent.ReadUtf8StringAsync(
+            resp.Content, MaxReleaseMetadataBytes, ct).ConfigureAwait(false);
 
         if (!resp.IsSuccessStatusCode)
         {
@@ -123,13 +128,18 @@ public sealed class GitHubReleaseAssetClient
     /// we don't write to the final cache path until SHA-256 verifies.
     /// </summary>
     public async Task DownloadAssetAsync(
-        string assetApiUrl, string accessToken, Stream destination, CancellationToken ct = default)
+        string assetApiUrl,
+        string accessToken,
+        Stream destination,
+        CancellationToken ct = default,
+        long maximumBytes = MaxFirmwareAssetBytes)
     {
         if (string.IsNullOrWhiteSpace(assetApiUrl))
             throw new ArgumentException("assetApiUrl required", nameof(assetApiUrl));
         if (destination is null) throw new ArgumentNullException(nameof(destination));
         if (string.IsNullOrWhiteSpace(accessToken))
             throw new ArgumentException("accessToken required", nameof(accessToken));
+        if (maximumBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
 
         using var req = new HttpRequestMessage(HttpMethod.Get, assetApiUrl);
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -141,11 +151,13 @@ public sealed class GitHubReleaseAssetClient
             .ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
         {
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var body = await BoundedHttpContent.ReadUtf8StringAsync(
+                resp.Content, MaxErrorBodyBytes, ct).ConfigureAwait(false);
             throw new GitHubApiException((int)resp.StatusCode,
                 $"GET {assetApiUrl} → {(int)resp.StatusCode} {resp.ReasonPhrase}: {Snip(body)}");
         }
-        await resp.Content.CopyToAsync(destination, ct).ConfigureAwait(false);
+        await BoundedHttpContent.CopyToAsync(
+            resp.Content, destination, maximumBytes, ct).ConfigureAwait(false);
     }
 
     private HttpRequestMessage NewApiRequest(HttpMethod method, string url, string accessToken)

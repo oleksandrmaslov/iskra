@@ -132,6 +132,22 @@ public class GitHubAppAuthTests
     }
 
     [Fact]
+    public async Task Get_installation_token_rejects_an_oversized_response()
+    {
+        var (load, _) = MakeRsaPair();
+        var handler = new StubHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(new string('x',
+                GitHubAppInstallationTokenProvider.MaxTokenResponseBytes + 1)),
+        });
+        var sut = new GitHubAppInstallationTokenProvider(
+            new HttpClient(handler), AppId, InstallationId, load);
+
+        await Assert.ThrowsAsync<HttpContentSizeLimitException>(() =>
+            sut.GetInstallationTokenAsync());
+    }
+
+    [Fact]
     public void Load_pem_key_throws_when_file_missing()
     {
         var path = Path.Combine(Path.GetTempPath(), $"no-such-key-{Guid.NewGuid():N}.pem");

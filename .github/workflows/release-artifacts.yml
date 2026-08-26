@@ -1,0 +1,314 @@
+name: Build release artifacts
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer release number, without a leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+
+jobs:
+  linux:
+    name: ${{ matrix.rid }} (.deb + portable tar)
+    runs-on: ${{ matrix.os }}
+    environment: release-signing
+    timeout-minutes: 60
+    env:
+      ISKRA_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
+      ISKRA_ALLOW_UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+      ISKRA_LINUX_SIGNING_KEY_ID: ${{ secrets.ISKRA_LINUX_SIGNING_KEY_ID }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install repository SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.301
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Resolve and validate version
+        id: release
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          $version = $env:REQUESTED_VERSION.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+            throw "invalid release version: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Test portable stack on the native runner
+        shell: pwsh
+        run: |
+          $tests = @(
+            "tests/Iskra.Core.Tests/Iskra.Core.Tests.csproj",
+            "tests/Iskra.Application.Tests/Iskra.Application.Tests.csproj",
+            "tests/Iskra.Desktop.Tests/Iskra.Desktop.Tests.csproj"
+          )
+          foreach ($project in $tests) {
+            dotnet restore $project --locked-mode --nologo
+            if ($LASTEXITCODE -ne 0) { throw "locked restore failed: $project" }
+            dotnet test $project -c Release -r "${{ matrix.rid }}" --no-restore --nologo -warnaserror
+            if ($LASTEXITCODE -ne 0) { throw "native tests failed: $project" }
+          }
+
+      - name: Import Linux release signing key
+        shell: bash
+        env:
+          ISKRA_LINUX_SIGNING_PRIVATE_KEY: ${{ secrets.ISKRA_LINUX_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ "$ISKRA_REQUIRE_TAG" == 1 ]] &&
+             { [[ -z "$ISKRA_LINUX_SIGNING_KEY_ID" ]] || [[ -z "$ISKRA_LINUX_SIGNING_PRIVATE_KEY" ]]; }; then
+            echo "Tagged Linux releases require both signing-key secrets." >&2
+            exit 1
+          fi
+          if [[ -n "$ISKRA_LINUX_SIGNING_PRIVATE_KEY" ]]; then
+            printf '%s' "$ISKRA_LINUX_SIGNING_PRIVATE_KEY" | gpg --batch --import
+            gpg --batch --list-secret-keys "$ISKRA_LINUX_SIGNING_KEY_ID" >/dev/null
+          fi
+
+      - name: Build native Linux package
+        shell: bash
+        run: bash installer/build-linux-package.sh "${{ steps.release.outputs.version }}" "${{ matrix.rid }}"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.tar.gz
+            artifacts/iskra_${{ steps.release.outputs.version }}_*.deb
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-native-SHA256SUMS.txt
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-native-SHA256SUMS.txt.asc
+
+  macos:
+    name: ${{ matrix.rid }} (.app/DMG + portable archives)
+    runs-on: ${{ matrix.os }}
+    environment: release-signing
+    timeout-minutes: 60
+    env:
+      ISKRA_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
+      ISKRA_ALLOW_UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+      ISKRA_MACOS_SIGNING_IDENTITY: ${{ secrets.ISKRA_MACOS_SIGNING_IDENTITY }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            rid: osx-arm64
+          - os: macos-15-intel
+            rid: osx-x64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install repository SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.301
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Resolve and validate version
+        id: release
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          $version = $env:REQUESTED_VERSION.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+            throw "invalid release version: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Test portable stack on the native runner
+        shell: pwsh
+        run: |
+          $tests = @(
+            "tests/Iskra.Core.Tests/Iskra.Core.Tests.csproj",
+            "tests/Iskra.Application.Tests/Iskra.Application.Tests.csproj",
+            "tests/Iskra.Desktop.Tests/Iskra.Desktop.Tests.csproj"
+          )
+          foreach ($project in $tests) {
+            dotnet restore $project --locked-mode --nologo
+            if ($LASTEXITCODE -ne 0) { throw "locked restore failed: $project" }
+            dotnet test $project -c Release -r "${{ matrix.rid }}" --no-restore --nologo -warnaserror
+            if ($LASTEXITCODE -ne 0) { throw "native tests failed: $project" }
+          }
+
+      - name: Provision temporary Apple signing keychain
+        shell: bash
+        env:
+          ISKRA_MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.ISKRA_MACOS_CERTIFICATE_P12_BASE64 }}
+          ISKRA_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.ISKRA_MACOS_CERTIFICATE_PASSWORD }}
+          ISKRA_MACOS_NOTARY_APPLE_ID: ${{ secrets.ISKRA_MACOS_NOTARY_APPLE_ID }}
+          ISKRA_MACOS_NOTARY_TEAM_ID: ${{ secrets.ISKRA_MACOS_NOTARY_TEAM_ID }}
+          ISKRA_MACOS_NOTARY_APP_PASSWORD: ${{ secrets.ISKRA_MACOS_NOTARY_APP_PASSWORD }}
+        run: |
+          required=(
+            ISKRA_MACOS_SIGNING_IDENTITY
+            ISKRA_MACOS_CERTIFICATE_P12_BASE64
+            ISKRA_MACOS_CERTIFICATE_PASSWORD
+            ISKRA_MACOS_NOTARY_APPLE_ID
+            ISKRA_MACOS_NOTARY_TEAM_ID
+            ISKRA_MACOS_NOTARY_APP_PASSWORD
+          )
+          if [[ "$ISKRA_REQUIRE_TAG" == 1 ]]; then
+            for name in "${required[@]}"; do
+              [[ -n ${!name:-} ]] || { echo "Tagged macOS releases require $name." >&2; exit 1; }
+            done
+          fi
+
+          if [[ -n "$ISKRA_MACOS_CERTIFICATE_P12_BASE64" ]]; then
+            certificate_path="$RUNNER_TEMP/iskra-developer-id.p12"
+            keychain_path="$RUNNER_TEMP/iskra-signing.keychain-db"
+            keychain_password=$(openssl rand -hex 32)
+            printf '%s' "$ISKRA_MACOS_CERTIFICATE_P12_BASE64" | base64 --decode -o "$certificate_path"
+
+            security create-keychain -p "$keychain_password" "$keychain_path"
+            security set-keychain-settings -lut 21600 "$keychain_path"
+            security unlock-keychain -p "$keychain_password" "$keychain_path"
+            security import "$certificate_path" -P "$ISKRA_MACOS_CERTIFICATE_PASSWORD" \
+              -A -t cert -f pkcs12 -k "$keychain_path"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: \
+              -s -k "$keychain_password" "$keychain_path"
+            security default-keychain -d user -s "$keychain_path"
+            security list-keychains -d user -s "$keychain_path"
+            security find-identity -v -p codesigning "$keychain_path"
+
+            profile="iskra-ci-notary"
+            xcrun notarytool store-credentials "$profile" \
+              --apple-id "$ISKRA_MACOS_NOTARY_APPLE_ID" \
+              --team-id "$ISKRA_MACOS_NOTARY_TEAM_ID" \
+              --password "$ISKRA_MACOS_NOTARY_APP_PASSWORD"
+
+            echo "ISKRA_MACOS_NOTARY_PROFILE=$profile" >> "$GITHUB_ENV"
+            echo "ISKRA_TEMP_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+            rm -f "$certificate_path"
+          fi
+
+      - name: Build native macOS package
+        shell: bash
+        run: bash installer/build-macos-package.sh "${{ steps.release.outputs.version }}" "${{ matrix.rid }}"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.tar.gz
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.zip
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.dmg
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-native-SHA256SUMS.txt
+
+      - name: Remove temporary Apple keychain
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n ${ISKRA_TEMP_KEYCHAIN:-} ]]; then
+            security delete-keychain "$ISKRA_TEMP_KEYCHAIN" || true
+          fi
+
+  windows:
+    name: Windows x64 (WPF + Avalonia installers)
+    runs-on: windows-2025
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install repository SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.301
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Resolve and validate version
+        id: release
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          $version = $env:REQUESTED_VERSION.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Windows Installer requires a numeric three-part version: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Restore repository-pinned tools
+        shell: pwsh
+        run: dotnet tool restore
+
+      - name: Verify Windows release source
+        shell: pwsh
+        run: |
+          dotnet restore Iskra.sln --locked-mode --nologo
+          if ($LASTEXITCODE -ne 0) { throw "locked solution restore failed" }
+          dotnet build Iskra.sln -c Release --no-restore --nologo -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw "release build failed" }
+          dotnet test Iskra.sln -c Release --no-build --no-restore --nologo
+          if ($LASTEXITCODE -ne 0) { throw "release tests failed" }
+
+          $audit = (& dotnet list Iskra.sln package --vulnerable --include-transitive --no-restore --format json) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "NuGet vulnerability audit failed" }
+          $audit | Write-Host
+          if ($audit -match '"vulnerabilities"\s*:') {
+            throw "NuGet reported one or more vulnerable dependencies"
+          }
+
+      - name: Refuse unsigned tagged Windows releases
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          throw "Tagged Windows release publication is blocked until the Authenticode/timestamp pipeline is configured. Use workflow_dispatch only for labelled engineering artifacts."
+
+      - name: Build WPF and Avalonia setup bundles
+        shell: pwsh
+        run: |
+          ./installer/build-installer.ps1 -Version "${{ steps.release.outputs.version }}"
+          ./installer/build-avalonia-installer.ps1 -Version "${{ steps.release.outputs.version }}"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Iskra-${{ steps.release.outputs.version }}-win-x64
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            installer/out/Iskra-${{ steps.release.outputs.version }}-x64.msi
+            installer/out/Iskra-${{ steps.release.outputs.version }}-setup-x64.exe
+            installer/out/Iskra-${{ steps.release.outputs.version }}-preinstall-check.ps1
+            installer/out/Iskra-${{ steps.release.outputs.version }}-SHA256SUMS.txt
+            installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-x64.msi
+            installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-setup-x64.exe
+            installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-SHA256SUMS.txt

@@ -165,14 +165,26 @@ public class LogShipperTests
     }
 
     [Fact]
-    public void Sanitize_keeps_safe_chars_and_replaces_others_with_underscore()
+    public void Sanitize_keeps_plain_safe_ids_and_hashes_every_normalized_value()
     {
         Assert.Equal("BENCH-1",     LogShipper.SanitizePathSegment("BENCH-1"));
-        Assert.Equal("Station_42",  LogShipper.SanitizePathSegment("Station 42"));
         Assert.Equal("a.b_c-d",     LogShipper.SanitizePathSegment("a.b_c-d"));
-        Assert.Equal("a_b_c_",      LogShipper.SanitizePathSegment("a/b\\c?"));
-        Assert.Equal("unknown",     LogShipper.SanitizePathSegment(""));
-        Assert.Equal("unknown",     LogShipper.SanitizePathSegment("   "));
+
+        var normalized = LogShipper.SanitizePathSegment("Station 42");
+        Assert.StartsWith("Station_42~", normalized);
+        Assert.Equal(75, normalized.Length);
+        Assert.DoesNotContain('/', normalized);
+        Assert.DoesNotContain('\\', normalized);
+
+        Assert.NotEqual(
+            LogShipper.SanitizePathSegment("a/b"),
+            LogShipper.SanitizePathSegment("a_b"));
+        Assert.NotEqual(".", LogShipper.SanitizePathSegment("."));
+        Assert.NotEqual("..", LogShipper.SanitizePathSegment(".."));
+        Assert.StartsWith("station~", LogShipper.SanitizePathSegment(""));
+        Assert.NotEqual(
+            LogShipper.SanitizePathSegment(""),
+            LogShipper.SanitizePathSegment("   "));
     }
 
     private static HttpResponseMessage TokenResponse(string token)

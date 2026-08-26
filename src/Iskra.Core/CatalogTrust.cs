@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Iskra.Core;
 
 public enum CatalogTrustResult
@@ -17,6 +19,16 @@ public enum CatalogTrustResult
 }
 
 /// <summary>
+/// One bounded catalog-file snapshot and the trust decision made over those
+/// exact bytes. <see cref="CatalogBytes"/> remains untrusted unless
+/// <see cref="TrustResult"/> is <see cref="CatalogTrustResult.Verified"/>, or
+/// the caller has explicitly enabled the unsigned lab policy.
+/// </summary>
+public sealed record CatalogFileVerificationResult(
+    CatalogTrustResult TrustResult,
+    ReadOnlyMemory<byte>? CatalogBytes);
+
+/// <summary>
 /// File-level trust policy for <c>catalog.json</c>. The signature is a
 /// base64-encoded Ed25519 signature over the raw catalog bytes, stored in a
 /// sibling file <c>catalog.json.sig</c>.
@@ -24,17 +36,35 @@ public enum CatalogTrustResult
 public static class CatalogTrust
 {
     /// <summary>
-    /// Explicit opt-in used only on development/lab stations to unlock
-    /// unsigned catalog and sideload controls. Production/operator processes
-    /// must leave this unset.
+    /// A base64 Ed25519 signature is 88 ASCII characters. The larger bound
+    /// permits a BOM and surrounding whitespace without allowing an unbounded
+    /// sidecar read.
+    /// </summary>
+    public const int MaxSignatureFileBytes = 1024;
+
+    /// <summary>
+    /// Second explicit opt-in used only by a binary compiled with
+    /// <c>IskraEnableLabCatalogs=true</c>. Release builds compile the feature
+    /// out, so an operator-controlled environment variable cannot bypass the
+    /// catalog trust root.
     /// </summary>
     public const string UnsignedLabModeEnvironmentVariable = "ISKRA_LAB_ALLOW_UNSIGNED_CATALOG";
 
+#if ISKRA_LAB_CATALOGS
+    public static bool UnsignedLabFeatureCompiled => true;
+#else
+    public static bool UnsignedLabFeatureCompiled => false;
+#endif
+
     public static bool IsUnsignedLabModeEnabled()
     {
+#if ISKRA_LAB_CATALOGS
         var value = Environment.GetEnvironmentVariable(UnsignedLabModeEnvironmentVariable);
         return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
             || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+#else
+        return false;
+#endif
     }
 
     /// <summary>
@@ -87,32 +117,92 @@ public static class CatalogTrust
         string catalogPath,
         bool requireSigned,
         byte[]? publicKey = null)
+        => ReadAndVerifyCatalogFile(catalogPath, requireSigned, publicKey).TrustResult;
+
+    /// <summary>
+    /// Captures a catalog once, within <see cref="CatalogJson.MaxCatalogBytes"/>,
+    /// and verifies the sibling signature over that same byte buffer. Callers
+    /// can subsequently deserialize <see cref="CatalogFileVerificationResult.CatalogBytes"/>
+    /// without reopening the path.
+    /// </summary>
+    public static CatalogFileVerificationResult ReadAndVerifyCatalogFile(
+        string catalogPath,
+        bool requireSigned,
+        byte[]? publicKey = null)
     {
         publicKey ??= EmbeddedPublicKey;
         var sigPath = SignaturePathFor(catalogPath);
-        var hasSig = File.Exists(sigPath);
-
-        if (!hasSig)
-            return requireSigned
-                ? CatalogTrustResult.UnsignedRejected
-                : CatalogTrustResult.UnsignedAllowed;
-
-        if (publicKey is null)
-            return CatalogTrustResult.NoPublicKeyConfigured;
 
         byte[] catalogBytes;
+        try
+        {
+            catalogBytes = BoundedFileReader.ReadAllBytes(
+                catalogPath,
+                CatalogJson.MaxCatalogBytes);
+        }
+        catch (IOException)
+        {
+            return new CatalogFileVerificationResult(CatalogTrustResult.IoError, null);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new CatalogFileVerificationResult(CatalogTrustResult.IoError, null);
+        }
+
+        var snapshot = new ReadOnlyMemory<byte>(catalogBytes);
+        if (!File.Exists(sigPath))
+        {
+            return new CatalogFileVerificationResult(
+                requireSigned
+                    ? CatalogTrustResult.UnsignedRejected
+                    : CatalogTrustResult.UnsignedAllowed,
+                snapshot);
+        }
+
+        if (publicKey is null)
+        {
+            return new CatalogFileVerificationResult(
+                CatalogTrustResult.NoPublicKeyConfigured,
+                snapshot);
+        }
+
+        byte[] encodedSignature;
+        try
+        {
+            encodedSignature = BoundedFileReader.ReadAllBytes(
+                sigPath,
+                MaxSignatureFileBytes);
+        }
+        catch (IOException)
+        {
+            return new CatalogFileVerificationResult(CatalogTrustResult.IoError, snapshot);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new CatalogFileVerificationResult(CatalogTrustResult.IoError, snapshot);
+        }
+
         byte[] sigBytes;
         try
         {
-            catalogBytes = File.ReadAllBytes(catalogPath);
-            sigBytes = Convert.FromBase64String(File.ReadAllText(sigPath).Trim());
+            var signatureText = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(encodedSignature)
+                .TrimStart('\uFEFF')
+                .Trim();
+            sigBytes = Convert.FromBase64String(signatureText);
         }
-        catch (IOException)        { return CatalogTrustResult.IoError; }
-        catch (FormatException)    { return CatalogTrustResult.BadSignature; }
-        catch (UnauthorizedAccessException) { return CatalogTrustResult.IoError; }
+        catch (DecoderFallbackException)
+        {
+            return new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, snapshot);
+        }
+        catch (FormatException)
+        {
+            return new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, snapshot);
+        }
 
         return CatalogSignature.Verify(catalogBytes, sigBytes, publicKey)
-            ? CatalogTrustResult.Verified
-            : CatalogTrustResult.BadSignature;
+            ? new CatalogFileVerificationResult(CatalogTrustResult.Verified, snapshot)
+            : new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, snapshot);
     }
 }

@@ -165,6 +165,8 @@ public sealed class AppSettings
 
 public static class AppSettingsStore
 {
+    public const int MaxSettingsBytes = 1024 * 1024;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -188,7 +190,7 @@ public static class AppSettingsStore
         AppSettings settings;
         try
         {
-            var json = File.ReadAllText(path);
+            var json = BoundedFileReader.ReadUtf8String(path, MaxSettingsBytes);
             settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
         }
         catch
@@ -217,7 +219,7 @@ public static class AppSettingsStore
     {
         path ??= DefaultPath;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var tmp = path + ".tmp";
+        var tmp = path + $".{Guid.NewGuid():N}.tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(settings, JsonOptions));
         try
         {

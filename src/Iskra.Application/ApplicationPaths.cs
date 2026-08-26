@@ -11,12 +11,19 @@ public static class ApplicationPaths
     public static string ResolveDatabasePath(AppSettings settings, bool ensureDirectory = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        if (!string.IsNullOrWhiteSpace(settings.DbPath)) return settings.DbPath;
-
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Iskra");
-        if (ensureDirectory) Directory.CreateDirectory(directory);
-        return Path.Combine(directory, "flash_log.db");
+        var requested = !string.IsNullOrWhiteSpace(settings.DbPath)
+            ? settings.DbPath
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Iskra",
+                "flash_log.db");
+        var path = AuditDatabasePathPolicy.ValidateAndNormalize(requested);
+        if (ensureDirectory)
+        {
+            var directory = Path.GetDirectoryName(path)
+                ?? throw new InvalidOperationException("audit database has no parent directory");
+            Directory.CreateDirectory(directory);
+        }
+        return path;
     }
 }

@@ -391,7 +391,8 @@ public sealed class MainWindowViewModelTests : IDisposable
     {
         const int headerSize = 52;
         const int entrySize = 32;
-        var bytes = new byte[headerSize + entrySize];
+        var dataOffset = headerSize + entrySize;
+        var bytes = new byte[checked(dataOffset + (int)length)];
         bytes[0] = 0x7F; bytes[1] = (byte)'E'; bytes[2] = (byte)'L'; bytes[3] = (byte)'F';
         bytes[4] = 1; bytes[5] = 1; bytes[6] = 1;
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(16), 2);
@@ -401,6 +402,7 @@ public sealed class MainWindowViewModelTests : IDisposable
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(44), 1);
         var entry = bytes.AsSpan(headerSize);
         BinaryPrimitives.WriteUInt32LittleEndian(entry, 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(entry[4..], (uint)dataOffset);
         BinaryPrimitives.WriteUInt32LittleEndian(entry[8..], loadAddress);
         BinaryPrimitives.WriteUInt32LittleEndian(entry[12..], loadAddress);
         BinaryPrimitives.WriteUInt32LittleEndian(entry[16..], length);
@@ -464,6 +466,32 @@ public sealed class MainWindowViewModelTests : IDisposable
     /// </summary>
     private sealed class FakeGdbProcess() : GdbProcess("fake-gdb")
     {
+        public override Task<GdbGuardedRunResult> RunGuardedAsync(
+            string endpoint,
+            PowerMode power,
+            int frequencyHz,
+            bool connectUnderReset,
+            string firmwarePath,
+            TimeSpan scanTimeout,
+            TimeSpan flashTimeout,
+            Func<GdbRunResult, bool> scanGate,
+            Action<GdbLine>? onLine = null,
+            CancellationToken ct = default)
+        {
+            var scan = Replay(onLine,
+                "Target voltage: 3.3V",
+                "Available Targets:",
+                "No. Att Driver",
+                " 1      PY32Fxxx M0+");
+            if (!scanGate(scan))
+                return Task.FromResult(new GdbGuardedRunResult(scan, null));
+
+            var flash = Replay(onLine,
+                "Loading section .text, size 0x400 lma 0x8000000",
+                "Section .text, range 0x8000000 -- 0x8000400: matched.");
+            return Task.FromResult(new GdbGuardedRunResult(scan, flash));
+        }
+
         public override Task<GdbRunResult> RunScanAsync(
             string comPort,
             PowerMode power,

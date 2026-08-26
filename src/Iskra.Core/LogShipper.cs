@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -39,6 +40,8 @@ public sealed record ShipReport(
 /// </summary>
 public sealed class LogShipper
 {
+    public const int MaxContentsResponseBytes = 32 * 1024 * 1024;
+    public const int MaxErrorResponseBytes = 64 * 1024;
     public const string ApiBaseUrl = "https://api.github.com";
     public const string ApiAccept  = "application/vnd.github+json";
     public const string ApiVersion = "2022-11-28";
@@ -124,12 +127,16 @@ public sealed class LogShipper
     {
         var url = BuildContentsUrl(path);
         using var req = NewApiRequest(HttpMethod.Get, url, token);
-        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+        using var resp = await _http.SendAsync(
+            req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
 
         if (resp.StatusCode == HttpStatusCode.NotFound)
             return (null, "");
 
-        var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var body = await BoundedHttpContent.ReadUtf8StringAsync(
+            resp.Content,
+            resp.IsSuccessStatusCode ? MaxContentsResponseBytes : MaxErrorResponseBytes,
+            ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
             throw new LogShipperException(
                 $"GET {url} -> {(int)resp.StatusCode} {resp.ReasonPhrase}: {Snip(body)}",
@@ -163,10 +170,12 @@ public sealed class LogShipper
 
         using var req = NewApiRequest(HttpMethod.Put, url, token);
         req.Content = new StringContent(json, Encoding.UTF8, "application/json");
-        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+        using var resp = await _http.SendAsync(
+            req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
         {
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var body = await BoundedHttpContent.ReadUtf8StringAsync(
+                resp.Content, MaxErrorResponseBytes, ct).ConfigureAwait(false);
             throw new LogShipperException(
                 $"PUT {url} -> {(int)resp.StatusCode} {resp.ReasonPhrase}: {Snip(body)}",
                 (int)resp.StatusCode);
@@ -186,20 +195,33 @@ public sealed class LogShipper
         return req;
     }
 
-    // Reduce the station id to a filesystem-safe path segment. Anything outside
-    // [a-zA-Z0-9._-] folds to '_'. Empty / whitespace -> "unknown".
+    // Preserve ordinary station IDs for readable paths. Any value that needs
+    // normalization (including '.', '..', or an overlong value) receives a
+    // SHA-256 suffix. This keeps the result traversal-safe and prevents two
+    // distinct station IDs such as "a/b" and "a_b" from sharing a log blob.
     public static string SanitizePathSegment(string s)
     {
-        if (string.IsNullOrWhiteSpace(s)) return "unknown";
-        var sb = new StringBuilder(s.Length);
+        ArgumentNullException.ThrowIfNull(s);
+        const int maxPlainLength = 80;
+        var alreadySafe = s.Length is > 0 and <= maxPlainLength
+            && s is not "." and not ".."
+            && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+        if (alreadySafe) return s;
+
+        var sb = new StringBuilder(Math.Min(s.Length, 48));
         foreach (var c in s)
         {
+            if (sb.Length == 48) break;
             if (char.IsAsciiLetterOrDigit(c) || c == '.' || c == '_' || c == '-')
                 sb.Append(c);
             else
                 sb.Append('_');
         }
-        return sb.ToString();
+        var prefix = sb.ToString().Trim('.');
+        if (string.IsNullOrWhiteSpace(prefix)) prefix = "station";
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)))
+            .ToLowerInvariant();
+        return $"{prefix}~{digest}";
     }
 
     private static string Snip(string s) => s.Length <= 200 ? s : s[..200] + "...";

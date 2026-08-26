@@ -42,16 +42,99 @@ public class AppUpdateClientTests
             }
             """));
 
-        var result = await NewClient(http).CheckLatestAsync("1.2.8");
+        var result = await NewClient(http).CheckLatestForRuntimeAsync("1.2.8", "win-x64");
 
         Assert.Equal(AppUpdateStatus.UpdateAvailable, result.Status);
         Assert.True(result.IsUpdateAvailable);
         Assert.Equal("1.2.9.0", result.LatestVersion);
         Assert.Equal("v1.2.9", result.TagName);
         Assert.Equal("https://github.example/iskra/releases/tag/v1.2.9", result.ReleaseUrl);
+        Assert.Equal("win-x64", result.RuntimeIdentifier);
+        Assert.Equal("https://github.example/download/setup.exe", result.PackageDownloadUrl);
+        Assert.Null(result.PortableDownloadUrl);
         Assert.Equal("https://github.example/download/setup.exe", result.SetupDownloadUrl);
         Assert.Equal("https://github.example/download/app.msi", result.MsiDownloadUrl);
         Assert.Equal(new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc), result.PublishedAtUtc);
+    }
+
+    [Theory]
+    [InlineData(
+        "linux-x64",
+        "https://github.example/download/linux-amd64.deb",
+        "https://github.example/download/linux-x64.tar.gz")]
+    [InlineData(
+        "linux-arm64",
+        "https://github.example/download/linux-arm64.deb",
+        "https://github.example/download/linux-arm64.tar.gz")]
+    [InlineData(
+        "osx-arm64",
+        "https://github.example/download/osx-arm64.dmg",
+        "https://github.example/download/osx-arm64.zip")]
+    [InlineData(
+        "osx-x64",
+        "https://github.example/download/osx-x64.dmg",
+        "https://github.example/download/osx-x64.zip")]
+    public async Task CheckLatestAsync_selects_only_the_exact_unix_runtime_assets(
+        string runtimeIdentifier,
+        string expectedPackage,
+        string expectedPortable)
+    {
+        using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, AllRuntimeAssets));
+
+        var result = await NewClient(http).CheckLatestForRuntimeAsync("1.2.8", runtimeIdentifier);
+
+        Assert.Equal(runtimeIdentifier, result.RuntimeIdentifier);
+        Assert.Equal(expectedPackage, result.PackageDownloadUrl);
+        Assert.Equal(expectedPortable, result.PortableDownloadUrl);
+        Assert.Null(result.SetupDownloadUrl);
+        Assert.Null(result.MsiDownloadUrl);
+    }
+
+    [Fact]
+    public async Task CheckLatestAsync_never_falls_back_to_another_runtime()
+    {
+        using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, """
+            {
+              "tag_name": "v1.2.9",
+              "html_url": "https://github.example/release",
+              "assets": [
+                {
+                  "name": "Iskra-1.2.9-linux-x64.tar.gz",
+                  "browser_download_url": "https://github.example/download/wrong-linux.tar.gz"
+                },
+                {
+                  "name": "Iskra-1.2.9-osx-arm64.dmg",
+                  "browser_download_url": "https://github.example/download/wrong-mac.dmg"
+                },
+                {
+                  "name": "Iskra-1.2.9-setup-x64.exe",
+                  "browser_download_url": "https://github.example/download/wrong-windows.exe"
+                }
+              ]
+            }
+            """));
+
+        var result = await NewClient(http).CheckLatestForRuntimeAsync("1.2.8", "linux-arm64");
+
+        Assert.True(result.IsUpdateAvailable);
+        Assert.Null(result.PackageDownloadUrl);
+        Assert.Null(result.PortableDownloadUrl);
+        Assert.Null(result.SetupDownloadUrl);
+        Assert.Null(result.MsiDownloadUrl);
+    }
+
+    [Fact]
+    public async Task CheckLatestAsync_unsupported_runtime_exposes_no_download()
+    {
+        using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, AllRuntimeAssets));
+
+        var result = await NewClient(http).CheckLatestForRuntimeAsync("1.2.8", "linux-riscv64");
+
+        Assert.Equal("unsupported", result.RuntimeIdentifier);
+        Assert.Null(result.PackageDownloadUrl);
+        Assert.Null(result.PortableDownloadUrl);
+        Assert.Null(result.SetupDownloadUrl);
+        Assert.Null(result.MsiDownloadUrl);
     }
 
     [Fact]
@@ -110,6 +193,51 @@ public class AppUpdateClientTests
     }
 
     private static AppUpdateClient NewClient(HttpClient http) => new(http, "o", "r");
+
+    private const string AllRuntimeAssets = """
+        {
+          "tag_name": "v1.2.9",
+          "html_url": "https://github.example/release",
+          "assets": [
+            {
+              "name": "Iskra-1.2.9-setup-x64.exe",
+              "browser_download_url": "https://github.example/download/windows.exe"
+            },
+            {
+              "name": "iskra_1.2.9_amd64.deb",
+              "browser_download_url": "https://github.example/download/linux-amd64.deb"
+            },
+            {
+              "name": "Iskra-1.2.9-linux-x64.tar.gz",
+              "browser_download_url": "https://github.example/download/linux-x64.tar.gz"
+            },
+            {
+              "name": "iskra_1.2.9_arm64.deb",
+              "browser_download_url": "https://github.example/download/linux-arm64.deb"
+            },
+            {
+              "name": "Iskra-1.2.9-linux-arm64.tar.gz",
+              "browser_download_url": "https://github.example/download/linux-arm64.tar.gz"
+            },
+            {
+              "name": "Iskra-1.2.9-osx-arm64.dmg",
+              "browser_download_url": "https://github.example/download/osx-arm64.dmg"
+            },
+            {
+              "name": "Iskra-1.2.9-osx-arm64.zip",
+              "browser_download_url": "https://github.example/download/osx-arm64.zip"
+            },
+            {
+              "name": "Iskra-1.2.9-osx-x64.dmg",
+              "browser_download_url": "https://github.example/download/osx-x64.dmg"
+            },
+            {
+              "name": "Iskra-1.2.9-osx-x64.zip",
+              "browser_download_url": "https://github.example/download/osx-x64.zip"
+            }
+          ]
+        }
+        """;
 
     private sealed class StaticHandler : HttpMessageHandler
     {

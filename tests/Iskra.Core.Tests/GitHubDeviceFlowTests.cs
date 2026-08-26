@@ -60,6 +60,16 @@ public class GitHubDeviceFlowTests
     }
 
     [Fact]
+    public async Task RequestDeviceCode_rejects_an_oversized_response()
+    {
+        var h = new StubHandler(JsonResp(new string('x', GitHubDeviceFlow.MaxResponseBytes + 1)));
+        var flow = Flow(h);
+
+        await Assert.ThrowsAsync<HttpContentSizeLimitException>(() =>
+            flow.RequestDeviceCodeAsync());
+    }
+
+    [Fact]
     public async Task RequestDeviceCode_throws_on_missing_field()
     {
         var bad = DeviceCodeOk.Replace("\"device_code\":      \"dev-123\",", "\"device_code\": \"\",");

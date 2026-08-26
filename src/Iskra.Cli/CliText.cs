@@ -109,7 +109,7 @@ internal static class CliText
         ["Flash.Success"] = "  ✓ ПРОШИВКА УСПІШНА  ({0:F0} мс)",
         ["Flash.Target"] = "  Ціль: {0}",
         ["Flash.Logged"] = "  (записано в журнал: id={0}, {1})",
-        ["Auth.StoreUnsupported"] = "Помилка: захищене сховище GitHub-токенів для цієї ОС ще не реалізовано. Не використовуйте незашифрований файл токенів.",
+        ["Auth.StoreUnsupported"] = "Помилка: захищене сховище облікових даних недоступне. У Linux установіть secret-tool і розблокуйте сховище ключів; у macOS розблокуйте Keychain.",
         ["Auth.ClientMissing"] = "Помилка: GitHub App Client ID не налаштовано (зверніться до розробника).",
         ["Auth.RequestCode"] = "Запит коду пристрою GitHub...",
         ["Auth.OpenBrowser"] = "  Відкрийте у браузері: {0}",
@@ -120,18 +120,18 @@ internal static class CliText
         ["Auth.GitHubError"] = "Помилка GitHub: {0}",
         ["Common.Cancelled"] = "Скасовано.",
         ["Auth.SaveFailed"] = "Помилка збереження токенів у {0}: {1}",
-        ["Auth.AdminHint"] = "Запустіть від імені адміністратора, якщо проблема в правах доступу до %PROGRAMDATA%.",
+        ["Auth.AdminHint"] = "Перевірте права %PROGRAMDATA% у Windows, сховище ключів Secret Service у Linux або Keychain у macOS.",
         ["Auth.Success"] = "✓ Авторизовано. Токени збережено: {0}",
         ["Auth.AccessHours"] = "  Access token дійсний ~{0} год.",
         ["Auth.RefreshDays"] = "  Refresh token дійсний ~{0} дн.",
-        ["Auth.StoreUnavailable"] = "GitHub-токени на цій ОС не зберігаються; захищене сховище ще не реалізовано.",
+        ["Auth.StoreUnavailable"] = "Захищене сховище облікових даних недоступне; незашифрований файл токенів не використовується.",
         ["Auth.AlreadyLoggedOut"] = "Токени не знайдено — вже не авторизовано.",
         ["Auth.DeleteFailed"] = "Помилка видалення {0}: {1}",
         ["Auth.Deleted"] = "Токени видалено: {0}",
-        ["Auth.StoreCorrupt"] = "Файл токенів пошкоджено: {0}",
+        ["Auth.StoreCorrupt"] = "Захищене сховище токенів недоступне або пошкоджене: {0}",
         ["Auth.Reauthenticate"] = "Видаліть і авторизуйтеся знову: Iskra.Cli --logout && Iskra.Cli --login",
         ["Auth.NotSignedIn"] = "Не авторизовано. Виконайте: Iskra.Cli --login",
-        ["Auth.File"] = "Файл:              {0}",
+        ["Auth.File"] = "Захищене сховище:  {0}",
         ["Auth.AccessUntil"] = "Access token до:   {0:yyyy-MM-dd HH:mm} UTC ({1})",
         ["Auth.RefreshUntil"] = "Refresh token до:  {0:yyyy-MM-dd HH:mm} UTC ({1})",
         ["Auth.CheckSkipped"] = "(пропускаю перевірку через GitHub — Client ID не налаштовано)",
@@ -156,7 +156,7 @@ internal static class CliText
         ["Logs.UploadError"] = "Помилка вивантаження: {0}",
         ["Logs.Uploaded"] = "✓ Вивантажено рядків: {0}; нових файлів: {1}; оновлено файлів: {2}.",
         ["Logs.Leftover"] = "  (Залишилось рядків: {0}. Запустіть знову, щоб дослати.)",
-        ["Firmware.PrivateUnsupported"] = "завантаження приватної прошивки потребує Keychain/libsecret; поки що використайте підписаний локальний каталог або sideload у лабораторії",
+        ["Firmware.PrivateUnsupported"] = "завантаження приватної прошивки потребує захищеного сховища ОС; у Linux установіть secret-tool, а в macOS розблокуйте Keychain",
         ["Probe.None"] = "Програматори не знайдено.",
         ["Probe.SearchDetail"] = "(шукали USB-пристрої VID 0x1D50 PID 0x6018 — Black Magic Probe)",
         ["Probe.Interfaces"] = "Знайдено інтерфейсів: {0}",
@@ -190,7 +190,7 @@ internal static class CliText
         ["Doctor.NotWritable"] = "немає доступу на запис",
         ["Doctor.NotSignedIn"] = "немає входу; виконайте Iskra.Cli --login перед завантаженням приватних прошивок",
         ["Doctor.RefreshExpired"] = "refresh token застарів; виконайте Iskra.Cli --login",
-        ["Doctor.SecureStoreMissing"] = "Keychain/libsecret adapter ще не реалізовано; приватні релізи недоступні",
+        ["Doctor.SecureStoreMissing"] = "захищене сховище недоступне; у Linux потрібен /usr/bin/secret-tool, у macOS — розблокований Keychain",
         ["Doctor.Pass"] = "Результат: PASS, попереджень: {0}.",
         ["Doctor.Fail"] = "Результат: FAIL, помилок: {0}, попереджень: {1}.",
         ["Help"] = UkrainianHelp,
@@ -247,7 +247,7 @@ internal static class CliText
             ["Flash.Success"] = "  ✓ FLASH SUCCESSFUL  ({0:F0} ms)",
             ["Flash.Target"] = "  Target: {0}",
             ["Flash.Logged"] = "  (written to log: id={0}, {1})",
-            ["Auth.StoreUnsupported"] = "Error: secure GitHub token storage is not implemented for this operating system. Do not use an unencrypted token file.",
+            ["Auth.StoreUnsupported"] = "Error: the secure credential store is unavailable. On Linux, install secret-tool and unlock the keyring; on macOS, unlock Keychain.",
             ["Auth.ClientMissing"] = "Error: the GitHub App Client ID is not configured (contact the developer).",
             ["Auth.RequestCode"] = "Requesting a GitHub device code...",
             ["Auth.OpenBrowser"] = "  Open in your browser: {0}",
@@ -258,18 +258,18 @@ internal static class CliText
             ["Auth.GitHubError"] = "GitHub error: {0}",
             ["Common.Cancelled"] = "Cancelled.",
             ["Auth.SaveFailed"] = "Could not save tokens to {0}: {1}",
-            ["Auth.AdminHint"] = "Run as administrator if the problem is access to %PROGRAMDATA%.",
+            ["Auth.AdminHint"] = "Check %PROGRAMDATA% permissions on Windows, the Secret Service keyring on Linux, or Keychain on macOS.",
             ["Auth.Success"] = "✓ Authorized. Tokens saved to: {0}",
             ["Auth.AccessHours"] = "  Access token valid for ~{0} h.",
             ["Auth.RefreshDays"] = "  Refresh token valid for ~{0} days.",
-            ["Auth.StoreUnavailable"] = "GitHub tokens are not stored on this operating system; secure storage is not implemented yet.",
+            ["Auth.StoreUnavailable"] = "The secure credential store is unavailable; no unencrypted token file will be used.",
             ["Auth.AlreadyLoggedOut"] = "No tokens found — already signed out.",
             ["Auth.DeleteFailed"] = "Could not delete {0}: {1}",
             ["Auth.Deleted"] = "Tokens deleted: {0}",
-            ["Auth.StoreCorrupt"] = "The token file is corrupt: {0}",
+            ["Auth.StoreCorrupt"] = "The secure token store is unavailable or corrupt: {0}",
             ["Auth.Reauthenticate"] = "Delete the tokens and sign in again: Iskra.Cli --logout && Iskra.Cli --login",
             ["Auth.NotSignedIn"] = "Not signed in. Run: Iskra.Cli --login",
-            ["Auth.File"] = "File:                 {0}",
+            ["Auth.File"] = "Secure store:         {0}",
             ["Auth.AccessUntil"] = "Access token until:   {0:yyyy-MM-dd HH:mm} UTC ({1})",
             ["Auth.RefreshUntil"] = "Refresh token until:  {0:yyyy-MM-dd HH:mm} UTC ({1})",
             ["Auth.CheckSkipped"] = "(skipping the GitHub check — Client ID is not configured)",
@@ -294,7 +294,7 @@ internal static class CliText
             ["Logs.UploadError"] = "Upload error: {0}",
             ["Logs.Uploaded"] = "✓ Rows uploaded: {0}; files created: {1}; files updated: {2}.",
             ["Logs.Leftover"] = "  (Rows remaining: {0}. Run the command again to send them.)",
-            ["Firmware.PrivateUnsupported"] = "downloading private firmware requires Keychain/libsecret; for now, use a signed local catalog or laboratory sideload",
+            ["Firmware.PrivateUnsupported"] = "downloading private firmware requires the OS secure store; install secret-tool on Linux or unlock Keychain on macOS",
             ["Probe.None"] = "No probes found.",
             ["Probe.SearchDetail"] = "(searched for USB devices VID 0x1D50 PID 0x6018 — Black Magic Probe)",
             ["Probe.Interfaces"] = "Interfaces found: {0}",
@@ -328,7 +328,7 @@ internal static class CliText
             ["Doctor.NotWritable"] = "not writable",
             ["Doctor.NotSignedIn"] = "not signed in; run Iskra.Cli --login before downloading private firmware",
             ["Doctor.RefreshExpired"] = "refresh token expired; run Iskra.Cli --login",
-            ["Doctor.SecureStoreMissing"] = "Keychain/libsecret adapter is not implemented; private releases are unavailable",
+            ["Doctor.SecureStoreMissing"] = "secure storage is unavailable; Linux needs /usr/bin/secret-tool and macOS needs an unlocked Keychain",
             ["Doctor.Pass"] = "Result: PASS, warnings: {0}.",
             ["Doctor.Fail"] = "Result: FAIL, errors: {0}, warnings: {1}.",
             ["Help"] = EnglishHelp,
@@ -387,7 +387,7 @@ internal static class CliText
             ["Flash.Success"] = "  ✓ FLASHEN ERFOLGREICH  ({0:F0} ms)",
             ["Flash.Target"] = "  Ziel: {0}",
             ["Flash.Logged"] = "  (in das Protokoll geschrieben: id={0}, {1})",
-            ["Auth.StoreUnsupported"] = "Fehler: Die sichere Speicherung von GitHub-Token ist für dieses Betriebssystem noch nicht implementiert. Verwenden Sie keine unverschlüsselte Tokendatei.",
+            ["Auth.StoreUnsupported"] = "Fehler: Der sichere Anmeldedatenspeicher ist nicht verfügbar. Unter Linux secret-tool installieren und den Schlüsselbund entsperren; unter macOS Keychain entsperren.",
             ["Auth.ClientMissing"] = "Fehler: Die GitHub-App-Client-ID ist nicht konfiguriert (wenden Sie sich an den Entwickler).",
             ["Auth.RequestCode"] = "GitHub-Gerätecode wird angefordert...",
             ["Auth.OpenBrowser"] = "  Im Browser öffnen: {0}",
@@ -398,18 +398,18 @@ internal static class CliText
             ["Auth.GitHubError"] = "GitHub-Fehler: {0}",
             ["Common.Cancelled"] = "Abgebrochen.",
             ["Auth.SaveFailed"] = "Die Token konnten nicht unter {0} gespeichert werden: {1}",
-            ["Auth.AdminHint"] = "Führen Sie die Anwendung als Administrator aus, wenn der Zugriff auf %PROGRAMDATA% das Problem verursacht.",
+            ["Auth.AdminHint"] = "Prüfen Sie unter Windows die %PROGRAMDATA%-Rechte, unter Linux den Secret-Service-Schlüsselbund oder unter macOS Keychain.",
             ["Auth.Success"] = "✓ Autorisiert. Token gespeichert unter: {0}",
             ["Auth.AccessHours"] = "  Access-Token ungefähr {0} Std. gültig.",
             ["Auth.RefreshDays"] = "  Refresh-Token ungefähr {0} Tage gültig.",
-            ["Auth.StoreUnavailable"] = "GitHub-Token werden auf diesem Betriebssystem nicht gespeichert; ein sicherer Speicher ist noch nicht implementiert.",
+            ["Auth.StoreUnavailable"] = "Der sichere Anmeldedatenspeicher ist nicht verfügbar; eine unverschlüsselte Tokendatei wird nicht verwendet.",
             ["Auth.AlreadyLoggedOut"] = "Keine Token gefunden — Sie sind bereits abgemeldet.",
             ["Auth.DeleteFailed"] = "{0} konnte nicht gelöscht werden: {1}",
             ["Auth.Deleted"] = "Token gelöscht: {0}",
-            ["Auth.StoreCorrupt"] = "Die Tokendatei ist beschädigt: {0}",
+            ["Auth.StoreCorrupt"] = "Der sichere Token-Speicher ist nicht verfügbar oder beschädigt: {0}",
             ["Auth.Reauthenticate"] = "Löschen Sie die Token und melden Sie sich erneut an: Iskra.Cli --logout && Iskra.Cli --login",
             ["Auth.NotSignedIn"] = "Nicht angemeldet. Führen Sie aus: Iskra.Cli --login",
-            ["Auth.File"] = "Datei:                {0}",
+            ["Auth.File"] = "Sicherer Speicher:    {0}",
             ["Auth.AccessUntil"] = "Access-Token bis:     {0:yyyy-MM-dd HH:mm} UTC ({1})",
             ["Auth.RefreshUntil"] = "Refresh-Token bis:    {0:yyyy-MM-dd HH:mm} UTC ({1})",
             ["Auth.CheckSkipped"] = "(GitHub-Prüfung wird übersprungen — die Client-ID ist nicht konfiguriert)",
@@ -434,7 +434,7 @@ internal static class CliText
             ["Logs.UploadError"] = "Upload-Fehler: {0}",
             ["Logs.Uploaded"] = "✓ Hochgeladene Zeilen: {0}; neue Dateien: {1}; aktualisierte Dateien: {2}.",
             ["Logs.Leftover"] = "  (Verbleibende Zeilen: {0}. Führen Sie den Befehl erneut aus.)",
-            ["Firmware.PrivateUnsupported"] = "das Herunterladen privater Firmware erfordert Keychain/libsecret; verwenden Sie vorerst einen signierten lokalen Katalog oder Sideload im Labor",
+            ["Firmware.PrivateUnsupported"] = "das Herunterladen privater Firmware erfordert den sicheren Betriebssystemspeicher; unter Linux secret-tool installieren oder unter macOS Keychain entsperren",
             ["Probe.None"] = "Keine Programmer gefunden.",
             ["Probe.SearchDetail"] = "(gesucht wurden USB-Geräte VID 0x1D50 PID 0x6018 — Black Magic Probe)",
             ["Probe.Interfaces"] = "Gefundene Schnittstellen: {0}",
@@ -468,7 +468,7 @@ internal static class CliText
             ["Doctor.NotWritable"] = "nicht beschreibbar",
             ["Doctor.NotSignedIn"] = "nicht angemeldet; führen Sie vor dem Herunterladen privater Firmware Iskra.Cli --login aus",
             ["Doctor.RefreshExpired"] = "Refresh-Token abgelaufen; führen Sie Iskra.Cli --login aus",
-            ["Doctor.SecureStoreMissing"] = "Keychain/libsecret ist noch nicht implementiert; private Releases sind nicht verfügbar",
+            ["Doctor.SecureStoreMissing"] = "der sichere Speicher ist nicht verfügbar; Linux benötigt /usr/bin/secret-tool und macOS einen entsperrten Keychain",
             ["Doctor.Pass"] = "Ergebnis: PASS, Warnungen: {0}.",
             ["Doctor.Fail"] = "Ergebnis: FAIL, Fehler: {0}, Warnungen: {1}.",
             ["Help"] = GermanHelp,
@@ -509,6 +509,8 @@ internal static class CliText
           Iskra.Cli --login          авторизація OAuth Device Flow
           Iskra.Cli --logout         видалити збережені токени
           Iskra.Cli --whoami         показати GitHub-користувача та строки дії
+          Linux: потрібні /usr/bin/secret-tool і розблоковане сховище ключів;
+          macOS: використовується Keychain поточного користувача.
 
         Хмарний журнал:
           Iskra.Cli --ship-logs-now [--key <pem>] [--db-path <db>]
@@ -516,8 +518,9 @@ internal static class CliText
 
         Безпека каталогу:
           Ed25519-підпис .sig поруч із catalog.json обов'язковий.
-          --allow-unsigned-catalog і --allow-manual-flash є лабораторними
-          перемикачами та також вимагають ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1.
+          --allow-unsigned-catalog і --allow-manual-flash доступні лише у
+          спеціальній лабораторній збірці та також вимагають
+          ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1. У Release вони вимкнені в коді.
 
         Обов'язкові без каталогу: --elf, --product, --target, --flash-kb,
         --operator, --batch.
@@ -564,6 +567,8 @@ internal static class CliText
           Iskra.Cli --login          OAuth Device Flow authentication
           Iskra.Cli --logout         delete saved tokens
           Iskra.Cli --whoami         show the GitHub user and token validity
+          Linux requires /usr/bin/secret-tool and an unlocked keyring;
+          macOS uses the current user's login Keychain.
 
         Cloud log:
           Iskra.Cli --ship-logs-now [--key <pem>] [--db-path <db>]
@@ -571,8 +576,9 @@ internal static class CliText
 
         Catalog security:
           An Ed25519 .sig beside catalog.json is required.
-          --allow-unsigned-catalog and --allow-manual-flash are laboratory
-          switches and also require ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1.
+          --allow-unsigned-catalog and --allow-manual-flash exist only in an
+          explicitly lab-enabled build and also require
+          ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1. Release compiles them out.
 
         Required without a catalog: --elf, --product, --target, --flash-kb,
         --operator, --batch.
@@ -618,6 +624,8 @@ internal static class CliText
           Iskra.Cli --login          OAuth Device Flow-Authentifizierung
           Iskra.Cli --logout         gespeicherte Token löschen
           Iskra.Cli --whoami         GitHub-Benutzer und Tokengültigkeit anzeigen
+          Linux benötigt /usr/bin/secret-tool und einen entsperrten Schlüsselbund;
+          macOS verwendet den Anmelde-Keychain des aktuellen Benutzers.
 
         Cloud-Protokoll:
           Iskra.Cli --ship-logs-now [--key <pem>] [--db-path <db>]
@@ -625,9 +633,9 @@ internal static class CliText
 
         Katalogsicherheit:
           Eine Ed25519-.sig-Datei neben catalog.json ist erforderlich.
-          --allow-unsigned-catalog und --allow-manual-flash sind ausschließlich
-          für das Labor vorgesehen und erfordern zusätzlich
-          ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1.
+          --allow-unsigned-catalog und --allow-manual-flash sind nur in einem
+          ausdrücklich laborfähigen Build vorhanden und erfordern zusätzlich
+          ISKRA_LAB_ALLOW_UNSIGNED_CATALOG=1. Im Release sind sie auskompiliert.
 
         Ohne Katalog erforderlich: --elf, --product, --target, --flash-kb,
         --operator, --batch.

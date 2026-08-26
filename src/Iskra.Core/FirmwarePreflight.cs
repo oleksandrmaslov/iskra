@@ -14,6 +14,14 @@ public static class FirmwarePreflight
         if (string.IsNullOrWhiteSpace(path)) return CheckResult.NotFound;
         if (!File.Exists(path)) return CheckResult.NotFound;
 
+        try
+        {
+            if (new FileInfo(path).Length > FirmwareImage.MaxFirmwareFileBytes)
+                return CheckResult.InvalidFormat;
+        }
+        catch (IOException) { return CheckResult.IoError; }
+        catch (UnauthorizedAccessException) { return CheckResult.IoError; }
+
         return kind switch
         {
             FirmwareKind.Elf => CheckElf(path),
@@ -46,6 +54,7 @@ public static class FirmwarePreflight
             string? line;
             while ((line = reader.ReadLine()) is not null)
             {
+                if (line.Length > 521) return CheckResult.InvalidFormat;
                 line = line.Trim();
                 if (line.Length == 0) continue;
                 if (!TryParseHexRecord(line, out var recordType, out var byteCount))

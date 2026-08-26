@@ -3,10 +3,11 @@ using System.Runtime.InteropServices;
 namespace Iskra.Core;
 
 /// <summary>
-/// Locates <c>arm-none-eabi-gdb</c> on the current machine. Search order:
+/// Locates a GDB executable capable of driving ARM Cortex-M targets. Search order:
 /// (1) explicit developer override, (2) standard Arm GNU Toolchain install
-/// directories on Windows, (3) PATH. Program Files precedes user-controlled
-/// PATH on production Windows stations.
+/// directories on Windows, (3) PATH. Linux also accepts the distribution
+/// <c>gdb-multiarch</c> package after preferring <c>arm-none-eabi-gdb</c>.
+/// Program Files precedes user-controlled PATH on production Windows stations.
 /// The production installer chains the Arm GNU Toolchain MSI, so one of the
 /// standard paths should exist immediately after setup.
 /// </summary>
@@ -19,12 +20,9 @@ public static class GdbDiscovery
         if (!string.IsNullOrWhiteSpace(explicitPath))
             return File.Exists(explicitPath) ? explicitPath : null;
 
-        var exe = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? ExeName + ".exe"
-            : ExeName;
-
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
+            var exe = ExeName + ".exe";
             foreach (var dir in WindowsToolchainRoots())
             {
                 var candidate = FindUnderToolchainRoot(dir, exe);
@@ -32,10 +30,29 @@ public static class GdbDiscovery
             }
         }
 
-        var fromPath = ProbePath(exe);
-        if (fromPath is not null) return fromPath;
+        var platform = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? OSPlatform.Windows
+            : RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
+                ? OSPlatform.Linux
+                : OSPlatform.OSX;
+
+        foreach (var executableName in ExecutableNamesFor(platform))
+        {
+            var fromPath = ProbePath(executableName);
+            if (fromPath is not null) return fromPath;
+        }
 
         return null;
+    }
+
+    internal static IReadOnlyList<string> ExecutableNamesFor(OSPlatform platform)
+    {
+        if (platform == OSPlatform.Windows)
+            return [ExeName + ".exe"];
+
+        return platform == OSPlatform.Linux
+            ? [ExeName, "gdb-multiarch"]
+            : [ExeName];
     }
 
     private static string? ProbePath(string exe)

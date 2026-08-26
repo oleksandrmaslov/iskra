@@ -24,6 +24,27 @@ public class CatalogTrustTests : IDisposable
     }
 
     [Fact]
+    public void Runtime_environment_cannot_enable_a_feature_compiled_out_of_release()
+    {
+        if (CatalogTrust.UnsignedLabFeatureCompiled)
+            return;
+
+        var previous = Environment.GetEnvironmentVariable(
+            CatalogTrust.UnsignedLabModeEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                CatalogTrust.UnsignedLabModeEnvironmentVariable, "1");
+            Assert.False(CatalogTrust.IsUnsignedLabModeEnabled());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                CatalogTrust.UnsignedLabModeEnvironmentVariable, previous);
+        }
+    }
+
+    [Fact]
     public void Verified_when_signature_matches_key()
     {
         var kp = CatalogSignature.GenerateKeypair();
@@ -33,6 +54,25 @@ public class CatalogTrustTests : IDisposable
 
         var result = CatalogTrust.VerifyCatalogFile(_catalogPath, requireSigned: false, publicKey: kp.PublicKey);
         Assert.Equal(CatalogTrustResult.Verified, result);
+    }
+
+    [Fact]
+    public void ReadAndVerify_returns_the_exact_buffer_covered_by_the_signature()
+    {
+        var kp = CatalogSignature.GenerateKeypair();
+        var verifiedBytes = File.ReadAllBytes(_catalogPath);
+        var sig = CatalogSignature.Sign(verifiedBytes, kp.PrivateKey);
+        File.WriteAllText(_sigPath, Convert.ToBase64String(sig));
+
+        var result = CatalogTrust.ReadAndVerifyCatalogFile(
+            _catalogPath,
+            requireSigned: true,
+            publicKey: kp.PublicKey);
+        File.WriteAllText(_catalogPath, "replacement");
+
+        Assert.Equal(CatalogTrustResult.Verified, result.TrustResult);
+        Assert.True(result.CatalogBytes.HasValue);
+        Assert.Equal(verifiedBytes, result.CatalogBytes.Value.ToArray());
     }
 
     [Fact]
@@ -101,6 +141,32 @@ public class CatalogTrustTests : IDisposable
         File.WriteAllText(_sigPath, "%%%not-base64%%%");
         var result = CatalogTrust.VerifyCatalogFile(_catalogPath, requireSigned: false, publicKey: kp.PublicKey);
         Assert.Equal(CatalogTrustResult.BadSignature, result);
+    }
+
+    [Fact]
+    public void Catalog_larger_than_the_strict_limit_is_not_loaded()
+    {
+        File.WriteAllBytes(_catalogPath, new byte[CatalogJson.MaxCatalogBytes + 1]);
+
+        var result = CatalogTrust.ReadAndVerifyCatalogFile(
+            _catalogPath,
+            requireSigned: false);
+
+        Assert.Equal(CatalogTrustResult.IoError, result.TrustResult);
+        Assert.False(result.CatalogBytes.HasValue);
+    }
+
+    [Fact]
+    public void Signature_sidecar_larger_than_the_strict_limit_is_not_loaded()
+    {
+        File.WriteAllBytes(_sigPath, new byte[CatalogTrust.MaxSignatureFileBytes + 1]);
+
+        var result = CatalogTrust.ReadAndVerifyCatalogFile(
+            _catalogPath,
+            requireSigned: true);
+
+        Assert.Equal(CatalogTrustResult.IoError, result.TrustResult);
+        Assert.True(result.CatalogBytes.HasValue);
     }
 
     [Fact]

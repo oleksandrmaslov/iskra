@@ -2,7 +2,11 @@
 
 All notable changes to Iskra are documented here.
 
-## [Unreleased]
+## [2.2.0] - 2026-08-26
+
+Engineering release only. This version is not factory-approved until the
+signing, catalog-key, append-only logging, board-identity, clean-machine, and HIL
+gates in the architecture/security audit are closed.
 
 ### Added
 
@@ -56,6 +60,23 @@ All notable changes to Iskra are documented here.
 - Added a full-screen mode to the Avalonia app: a header toggle, F11, and Escape
   to leave. Full screen is the intended factory-floor mode — only the PASS/FAIL
   band and the FLASH button, with no desktop behind them.
+- Added fail-closed secure credential adapters for portable clients: Linux
+  Secret Service through `/usr/bin/secret-tool` and the macOS login Keychain
+  through `/usr/bin/security`. Secrets are supplied on stdin, helper calls are
+  time-bounded, and there is no plaintext fallback.
+- Added activation-time catalog anti-rollback. Every verified catalog activated
+  from disk or the network now advances an interprocess-serialized, atomically
+  written `generated_at` floor; older catalogs, malformed floor state, and
+  implausibly future catalogs are rejected.
+- Added native CI definitions for Windows x64, Ubuntu x64/arm64, and macOS
+  arm64/x64 with locked restore, warning and vulnerability gates, native tests,
+  publish, and CLI smoke execution.
+- Added deterministic Linux/macOS portable archives, native Debian packaging
+  with a least-privilege BMP udev rule, and native macOS `.app`, zip, and DMG
+  packaging. Release paths fail closed when Linux signing or macOS Developer ID
+  and notarization credentials are absent.
+- Added the complete architecture/security audit and cross-platform acceptance
+  matrix in `docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md`.
 
 ### Changed
 
@@ -66,6 +87,50 @@ All notable changes to Iskra are documented here.
 - Gave buttons on the dark header and status strip an explicit light-on-dark
   style. The BMP "Check again" button was rendering Fluent's dark text on the
   dark strip and was effectively unreadable.
+- Replaced the scan/flash process handoff with one guarded GDB/MI session. It
+  takes an exclusive per-probe lock, scans and safely attaches the physical
+  target before the application gate, and opens/loads firmware only after the
+  gate accepts. Cancellation, timeout, gate rejection, and exceptions all make
+  a bounded attempt to terminate the complete process tree.
+- Made catalog verification and parsing consume the same bounded in-memory
+  snapshot, eliminating separate-read check/use races and oversized-file memory
+  exposure.
+- Hardened Cortex-M ELF parsing to little-endian ELF32 ARM `ET_EXEC`/`ET_DYN`,
+  bounded program headers, `filesz <= memsz`, and complete in-file PT_LOAD
+  payloads.
+- Bounded GitHub update/catalog metadata, API error bodies, and firmware asset
+  downloads. Firmware streams to disk with a 64 MiB ceiling and failed partial
+  files are removed.
+- Bounded HTTP consumers now request headers-only completion before applying
+  their read limits, preventing the HTTP stack from buffering a body ahead of
+  the application ceiling.
+- Signed catalogs now require an absolute `flash_origin`, persistent audit paths
+  reject in-memory/URI/device targets, HEX records cannot wrap the 32-bit address
+  space, and frequency/timeout inputs have defensive upper bounds.
+- Unsigned-catalog and manual-flash support is compiled out of ordinary Release
+  binaries and can only exist in an explicitly lab-enabled build.
+- Station IDs used in cloud-log paths now reject traversal names and retain a
+  hash suffix after normalization so distinct IDs cannot silently collide.
+- Exact runtime identifiers now select updates and packages for Linux x64/arm64
+  and macOS arm64/x64; architecture-family fallbacks are not accepted.
+- Installer builds restore the repository-local WiX manifest and exact pinned
+  extensions instead of depending on mutable global tools.
+
+### Security
+
+- Signed-catalog target, firmware, and hash overrides now require the explicit
+  manual-flash flag and lab environment gate together. Normal operator use
+  cannot replace signed values from command-line arguments.
+- A verified physical flash cannot report PASS when its mandatory SQLite audit
+  row cannot be persisted. WPF, Avalonia, and CLI return
+  `E_AUDIT_WRITE_FAILED` with localized operator guidance.
+- Tagged Windows artifact publication is intentionally refused until an
+  Authenticode and trusted-timestamp pipeline is configured. Manual workflow
+  runs produce labelled engineering artifacts only.
+- Tagged Linux and macOS packaging ignores unsigned engineering overrides and
+  fails closed without signing credentials; macOS publishing also requires
+  notarization. Release signing jobs use the reviewer-gated `release-signing`
+  environment.
 
 ### Fixed
 
@@ -73,6 +138,10 @@ All notable changes to Iskra are documented here.
   PASS/FAIL band. `Progress<T>` posts to the UI thread, so a late "Flashing…"
   could overwrite the verdict an operator relies on. Fixed in both Avalonia and
   WPF; found by the new headless tests.
+- Fixed Avalonia allowing the window to close during an active flash. Close is
+  now refused with a localized warning until the guarded transaction reaches a
+  terminal state. Invalid or unwritable settings likewise block exit instead of
+  being silently discarded.
 
 ### Notes
 

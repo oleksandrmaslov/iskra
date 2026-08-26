@@ -1,17 +1,18 @@
 namespace Iskra.Core;
 
 /// <summary>
-/// Two-phase factory-safe driver:
+/// Guarded factory-safe driver:
 /// <list type="number">
-///   <item><description><b>Scan</b> — gdb connects, runs <c>swdp_scan</c>, quits.
-///     No <c>attach</c>, no <c>load</c>. If the detected target family doesn't
+///   <item><description><b>Guard</b> — GDB connects, runs <c>swdp_scan</c>, and
+///     safely attaches target #1 to bind the physical device. No firmware is
+///     opened and no <c>load</c> runs. If the detected target family doesn't
 ///     match <c>TargetBmpMatch</c>, we bail out with <c>E_TARGET_MISMATCH</c>
 ///     before any flash write is attempted.</description></item>
-///   <item><description><b>Flash</b> — only reached when scan classified clean.
-///     Runs the canonical attach/load/compare-sections sequence.</description></item>
+///   <item><description><b>Flash</b> — only reached when the application gate
+///     classifies that scan as clean. The same attached target and GDB process
+///     then run the canonical file/load/compare-sections sequence.</description></item>
 /// </list>
-/// Each phase produces one <see cref="GdbRunResult"/>; the per-phase classifier
-/// is pure (no IO), making the test suite deterministic.
+/// The per-phase classifiers are pure (no IO), making the test suite deterministic.
 /// </summary>
 public static class FlashStateMachine
 {
@@ -31,54 +32,86 @@ public static class FlashStateMachine
         CancellationToken ct = default,
         int probeBusyRetries = 1)
     {
-        // Phase 1: scan only — bail safely before touching flash on a wrong board.
-        // On E_PROBE_BUSY, retry up to probeBusyRetries times — BMP occasionally
-        // fumbles a USB re-enumerate between consecutive flashes; a quick retry
-        // smooths that out without misclassifying real probe-conflict failures.
+        ArgumentNullException.ThrowIfNull(gdb);
+        ArgumentNullException.ThrowIfNull(options);
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (probeBusyRetries < 0) throw new ArgumentOutOfRangeException(nameof(probeBusyRetries));
+
+        // Every attempt is a held GDB/MI session. A busy pre-scan may start a
+        // fresh retry, but a successful swdp_scan is never disconnected and
+        // re-opened between classification and load.
         var scanTimeout = timeout < TimeSpan.FromSeconds(8) ? timeout : TimeSpan.FromSeconds(8);
         TimeSpan accumulatedScanDuration = TimeSpan.Zero;
-        GdbRunResult scanRun = null!;
-        FlashOutcome? scanOutcome;
         int attempt = 0;
         while (true)
         {
-            scanRun = await gdb.RunScanAsync(
+            FlashOutcome? gateOutcome = null;
+            var guardedRun = await gdb.RunGuardedAsync(
                 options.Port,
                 options.Power,
                 options.BmpFrequencyHz,
                 options.ConnectUnderReset,
+                options.ElfPath,
                 scanTimeout,
+                timeout,
+                scanRun =>
+                {
+                    gateOutcome = ClassifyScan(scanRun, options.TargetBmpMatch);
+                    return gateOutcome is null;
+                },
                 onLine,
                 ct).ConfigureAwait(false);
-            accumulatedScanDuration += scanRun.Duration;
+            accumulatedScanDuration += guardedRun.Scan.Duration;
 
-            scanOutcome = ClassifyScan(scanRun, options.TargetBmpMatch);
-            if (scanOutcome is null) break; // clean scan — proceed to flash
+            // GdbMiSession does not invoke the gate when a scan command itself
+            // fails or times out, so classify once more from the returned
+            // snapshot. This is pure and therefore must agree when the gate did
+            // run; either path fails closed.
+            var scanOutcome = gateOutcome ?? ClassifyScan(
+                guardedRun.Scan,
+                options.TargetBmpMatch);
+
+            if (guardedRun.Flash is not null)
+            {
+                if (scanOutcome is not null)
+                    return scanOutcome with { Duration = accumulatedScanDuration };
+
+                // Flash output is captured separately so UI progress remains
+                // phase-accurate. Classification still needs the target row
+                // from swdp_scan, so join snapshots without replaying callbacks.
+                var combined = new GdbRunResult(
+                    guardedRun.Flash.ExitCode,
+                    guardedRun.Flash.TimedOut,
+                    guardedRun.Flash.Duration,
+                    guardedRun.Scan.Output.Concat(guardedRun.Flash.Output).ToArray());
+                var outcome = Classify(combined, options.TargetBmpMatch);
+                return outcome with
+                {
+                    Duration = accumulatedScanDuration + guardedRun.Flash.Duration,
+                };
+            }
+
+            if (scanOutcome is null)
+            {
+                // A passed gate must yield a flash result. Treat a broken or
+                // prematurely exited session as a hard failure, never as a
+                // reason to launch an unguarded second process.
+                return Fail(
+                    "E_GDB_CRASHED",
+                    "gdb session ended after scan gate but before flash completed",
+                    null,
+                    accumulatedScanDuration,
+                    guardedRun.Scan.Tail());
+            }
+
+            // Only a confirmed busy condition is transient. Target mismatch,
+            // ambiguity, timeout, and every other failure return immediately.
             if (scanOutcome.ErrorCode != "E_PROBE_BUSY" || attempt >= probeBusyRetries)
                 return scanOutcome with { Duration = accumulatedScanDuration };
 
             attempt++;
-            try { await Task.Delay(ProbeBusyRetryDelay, ct).ConfigureAwait(false); }
-            catch (TaskCanceledException) { return scanOutcome with { Duration = accumulatedScanDuration }; }
+            await Task.Delay(ProbeBusyRetryDelay, ct).ConfigureAwait(false);
         }
-
-        // Phase 2: flash — only reached when scan passed.
-        var flashRun = await gdb.RunFlashAsync(
-            options.Port,
-            options.Power,
-            options.BmpFrequencyHz,
-            options.ConnectUnderReset,
-            options.ElfPath,
-            timeout,
-            onLine,
-            ct).ConfigureAwait(false);
-
-        var outcome = Classify(flashRun, options.TargetBmpMatch);
-        // Roll the scan duration into the reported wall-clock so logs reflect
-        // true end-to-end time. Tail stays from the flash phase (operators want
-        // verify lines), the scan run is captured live via onLine if the caller
-        // is logging.
-        return outcome with { Duration = accumulatedScanDuration + outcome.Duration };
     }
 
     /// <summary>
@@ -122,6 +155,13 @@ public static class FlashStateMachine
                 $"expected '{expectedBmpMatch}', detected '{detected}'",
                 detected, run.Duration, tail);
         }
+
+        var attachFail = events.FirstOrDefault(e => e.Kind == GdbEventKind.AttachFailed);
+        if (attachFail is not null)
+            return Fail("E_ATTACH_FAILED", attachFail.Detail, detected, run.Duration, tail);
+
+        if (run.ExitCode != 0)
+            return Fail("E_GDB_CRASHED", $"gdb scan failed with exit code {run.ExitCode}", detected, run.Duration, tail);
 
         return null;
     }

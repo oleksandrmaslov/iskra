@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -21,6 +22,9 @@ public sealed record AppUpdateCheckResult(
     string? TagName,
     bool IsUpdateAvailable,
     string? ReleaseUrl,
+    string RuntimeIdentifier,
+    string? PackageDownloadUrl,
+    string? PortableDownloadUrl,
     string? SetupDownloadUrl,
     string? MsiDownloadUrl,
     DateTime? PublishedAtUtc,
@@ -33,6 +37,7 @@ public sealed record AppUpdateCheckResult(
 /// </summary>
 public sealed class AppUpdateClient
 {
+    public const int MaxReleaseMetadataBytes = 1 * 1024 * 1024;
     public const string ApiBaseUrl = "https://api.github.com";
     public const string ApiAccept  = "application/vnd.github+json";
     public const string ApiVersion = "2022-11-28";
@@ -57,10 +62,26 @@ public sealed class AppUpdateClient
     public async Task<AppUpdateCheckResult> CheckLatestAsync(
         string currentVersion,
         CancellationToken ct = default)
+        => await CheckLatestForRuntimeAsync(
+            currentVersion,
+            CurrentRuntimeIdentifier(),
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Checks the latest release and selects packages only for the exact target
+    /// runtime. The explicit RID overload makes release selection deterministic
+    /// in CI and prevents a Linux/macOS station from ever being offered a
+    /// Windows or wrong-architecture artifact.
+    /// </summary>
+    public async Task<AppUpdateCheckResult> CheckLatestForRuntimeAsync(
+        string currentVersion,
+        string runtimeIdentifier,
+        CancellationToken ct = default)
     {
         var currentDisplay = string.IsNullOrWhiteSpace(currentVersion)
             ? "0.0.0"
             : currentVersion.Trim();
+        var runtime = NormalizeRuntimeIdentifier(runtimeIdentifier);
 
         if (!TryParseVersion(currentDisplay, out var current))
             current = new Version(0, 0, 0);
@@ -69,31 +90,35 @@ public sealed class AppUpdateClient
         HttpResponseMessage resp;
         try
         {
-            resp = await _http.SendAsync(NewApiRequest(HttpMethod.Get, url), ct).ConfigureAwait(false);
+            resp = await _http.SendAsync(
+                NewApiRequest(HttpMethod.Get, url),
+                HttpCompletionOption.ResponseHeadersRead,
+                ct).ConfigureAwait(false);
         }
         catch (HttpRequestException ex)
         {
-            return Failure(AppUpdateStatus.NetworkError, currentDisplay, ex.Message);
+            return Failure(AppUpdateStatus.NetworkError, currentDisplay, runtime, ex.Message);
         }
 
         using (resp)
         {
             if (resp.StatusCode == HttpStatusCode.NotFound)
-                return Failure(AppUpdateStatus.NoRelease, currentDisplay,
+                return Failure(AppUpdateStatus.NoRelease, currentDisplay, runtime,
                     $"{_owner}/{_repo} has no releases yet");
 
             if (!resp.IsSuccessStatusCode)
-                return Failure(AppUpdateStatus.NetworkError, currentDisplay,
+                return Failure(AppUpdateStatus.NetworkError, currentDisplay, runtime,
                     $"GET releases/latest -> {(int)resp.StatusCode} {resp.ReasonPhrase}");
 
             string body;
             try
             {
-                body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                body = await BoundedHttpContent.ReadUtf8StringAsync(
+                    resp.Content, MaxReleaseMetadataBytes, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                return Failure(AppUpdateStatus.NetworkError, currentDisplay, ex.Message);
+                return Failure(AppUpdateStatus.NetworkError, currentDisplay, runtime, ex.Message);
             }
 
             try
@@ -105,11 +130,15 @@ public sealed class AppUpdateClient
                     ? tagEl.GetString()
                     : null;
                 if (string.IsNullOrWhiteSpace(tagName))
-                    return Failure(AppUpdateStatus.ParseError, currentDisplay, "release has no tag_name");
+                    return Failure(AppUpdateStatus.ParseError, currentDisplay, runtime,
+                        "release has no tag_name");
 
                 if (!TryParseVersion(tagName, out var latest))
-                    return Failure(AppUpdateStatus.ParseError, currentDisplay,
+                    return Failure(AppUpdateStatus.ParseError, currentDisplay, runtime,
                         $"release tag '{tagName}' does not contain a version");
+                var releaseVersion = tagName.Trim();
+                if (releaseVersion.StartsWith('v') || releaseVersion.StartsWith('V'))
+                    releaseVersion = releaseVersion[1..];
 
                 var htmlUrl = root.TryGetProperty("html_url", out var htmlEl)
                     ? htmlEl.GetString()
@@ -125,6 +154,10 @@ public sealed class AppUpdateClient
 
                 string? setupUrl = null;
                 string? msiUrl = null;
+                string? packageUrl = null;
+                string? portableUrl = null;
+                string? macZipUrl = null;
+                string? macTarUrl = null;
                 if (root.TryGetProperty("assets", out var assetsEl)
                     && assetsEl.ValueKind == JsonValueKind.Array)
                 {
@@ -139,12 +172,73 @@ public sealed class AppUpdateClient
                         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(downloadUrl))
                             continue;
 
-                        if (name.EndsWith("-setup-x64.exe", StringComparison.OrdinalIgnoreCase))
-                            setupUrl ??= downloadUrl;
-                        else if (name.EndsWith("-x64.msi", StringComparison.OrdinalIgnoreCase))
-                            msiUrl ??= downloadUrl;
+                        switch (runtime)
+                        {
+                            case "win-x64":
+                                // Preserve the established WPF/Windows result
+                                // fields and preference order.
+                                if (string.Equals(
+                                    name,
+                                    $"Iskra-{releaseVersion}-setup-x64.exe",
+                                    StringComparison.OrdinalIgnoreCase))
+                                    setupUrl ??= downloadUrl;
+                                else if (string.Equals(
+                                    name,
+                                    $"Iskra-{releaseVersion}-x64.msi",
+                                    StringComparison.OrdinalIgnoreCase))
+                                    msiUrl ??= downloadUrl;
+                                break;
+
+                            case "linux-x64":
+                            case "linux-arm64":
+                                var debArchitecture = runtime == "linux-x64" ? "amd64" : "arm64";
+                                if (string.Equals(
+                                    name,
+                                    $"iskra_{releaseVersion}_{debArchitecture}.deb",
+                                    StringComparison.OrdinalIgnoreCase))
+                                {
+                                    packageUrl ??= downloadUrl;
+                                }
+                                else if (string.Equals(
+                                    name,
+                                    $"Iskra-{releaseVersion}-{runtime}.tar.gz",
+                                    StringComparison.OrdinalIgnoreCase))
+                                {
+                                    portableUrl ??= downloadUrl;
+                                }
+                                break;
+
+                            case "osx-arm64":
+                            case "osx-x64":
+                                if (string.Equals(
+                                    name,
+                                    $"Iskra-{releaseVersion}-{runtime}.dmg",
+                                    StringComparison.OrdinalIgnoreCase))
+                                {
+                                    packageUrl ??= downloadUrl;
+                                }
+                                else if (string.Equals(
+                                    name,
+                                    $"Iskra-{releaseVersion}-{runtime}.zip",
+                                    StringComparison.OrdinalIgnoreCase))
+                                {
+                                    macZipUrl ??= downloadUrl;
+                                }
+                                else if (string.Equals(
+                                    name,
+                                    $"Iskra-{releaseVersion}-{runtime}.tar.gz",
+                                    StringComparison.OrdinalIgnoreCase))
+                                {
+                                    macTarUrl ??= downloadUrl;
+                                }
+                                break;
+                        }
                     }
                 }
+
+                if (runtime == "win-x64") packageUrl = setupUrl ?? msiUrl;
+                if (runtime.StartsWith("osx-", StringComparison.Ordinal))
+                    portableUrl = macZipUrl ?? macTarUrl;
 
                 var updateAvailable = CompareVersionParts(latest, current) > 0;
                 return new AppUpdateCheckResult(
@@ -154,6 +248,9 @@ public sealed class AppUpdateClient
                     TagName: tagName,
                     IsUpdateAvailable: updateAvailable,
                     ReleaseUrl: htmlUrl,
+                    RuntimeIdentifier: runtime,
+                    PackageDownloadUrl: packageUrl,
+                    PortableDownloadUrl: portableUrl,
                     SetupDownloadUrl: setupUrl,
                     MsiDownloadUrl: msiUrl,
                     PublishedAtUtc: publishedAt,
@@ -161,7 +258,7 @@ public sealed class AppUpdateClient
             }
             catch (JsonException ex)
             {
-                return Failure(AppUpdateStatus.ParseError, currentDisplay, ex.Message);
+                return Failure(AppUpdateStatus.ParseError, currentDisplay, runtime, ex.Message);
             }
         }
     }
@@ -184,6 +281,30 @@ public sealed class AppUpdateClient
 
         version = new Version(nums[0], nums[1], nums[2], nums[3]);
         return true;
+    }
+
+    public static string CurrentRuntimeIdentifier()
+    {
+        var architecture = RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.X64 => "x64",
+            Architecture.Arm64 => "arm64",
+            _ => "unsupported",
+        };
+
+        if (architecture == "unsupported") return architecture;
+        if (OperatingSystem.IsWindows()) return $"win-{architecture}";
+        if (OperatingSystem.IsLinux()) return $"linux-{architecture}";
+        if (OperatingSystem.IsMacOS()) return $"osx-{architecture}";
+        return "unsupported";
+    }
+
+    private static string NormalizeRuntimeIdentifier(string? runtimeIdentifier)
+    {
+        var runtime = runtimeIdentifier?.Trim().ToLowerInvariant();
+        return runtime is "win-x64" or "linux-x64" or "linux-arm64" or "osx-arm64" or "osx-x64"
+            ? runtime
+            : "unsupported";
     }
 
     private static int CompareVersionParts(Version a, Version b)
@@ -210,6 +331,7 @@ public sealed class AppUpdateClient
     private static AppUpdateCheckResult Failure(
         AppUpdateStatus status,
         string currentVersion,
+        string runtimeIdentifier,
         string message) => new(
             Status: status,
             CurrentVersion: currentVersion,
@@ -217,6 +339,9 @@ public sealed class AppUpdateClient
             TagName: null,
             IsUpdateAvailable: false,
             ReleaseUrl: null,
+            RuntimeIdentifier: runtimeIdentifier,
+            PackageDownloadUrl: null,
+            PortableDownloadUrl: null,
             SetupDownloadUrl: null,
             MsiDownloadUrl: null,
             PublishedAtUtc: null,

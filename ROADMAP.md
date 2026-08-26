@@ -14,10 +14,53 @@ goals and acceptance gates live here.
   station-readiness, optional batch policy, flash transactions, read-only
   history/export, settings validation, and atomic settings persistence.
 - The cross-platform target is Windows, Linux, and macOS with a native Avalonia
-  desktop UI. `Iskra.Desktop` is now a read-only safety preview beside WPF, not
-  a replacement or a claim of platform/HIL parity.
-- Security audit status (2026-07-12): **lab-ready, not factory-production-ready**
-  until the owner/architecture gates in Sprint 9 are closed.
+  desktop UI. `Iskra.Desktop` has functional workflow parity and portable/native
+  package definitions, but it is not a replacement or a claim of platform/HIL
+  parity until the acceptance matrix passes.
+- Security audit status (2026-08-26): **2.2.0 is complete as a labelled
+  engineering release and remains STOP-SHIP for factory production** until the owner,
+  infrastructure, signing, and HIL gates in Sprint 9 are closed. The full audit
+  is in `docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md`; exact local evidence
+  and artifact hashes are in `docs/RELEASE_EVIDENCE_2.2.0.md`.
+
+## 2026-08-25 release-hardening slice
+
+- Bound catalog signature verification and parsing to one size-limited byte
+  snapshot; added activation-time anti-rollback with a serialized atomic floor,
+  future-date refusal, and fail-closed state handling.
+- Closed signed-catalog CLI override bypasses behind the explicit manual/lab
+  double gate. Normal operator use cannot replace signed target, hash, or
+  firmware values.
+- Replaced the target-sensitive two-process GDB handoff with a single guarded MI
+  session. It owns one probe lock, scans and safely attaches the physical target,
+  runs the application target gate, then and only then opens/loads firmware and
+  verifies with `compare-sections`. All paths have bounded process-tree cleanup.
+- Hardened ELF acceptance to little-endian ELF32 ARM executables/shared objects
+  with bounded program tables and complete PT_LOAD bytes. Added bounded update,
+  catalog, error, and firmware HTTP bodies.
+- Made local audit persistence part of PASS: a verified flash whose SQLite row
+  cannot be written is `E_AUDIT_WRITE_FAILED`, never PASS.
+- Added fail-closed Linux Secret Service and macOS Keychain token stores for CLI
+  and Avalonia. Secrets use stdin, not process arguments or environment; there
+  is no plaintext fallback.
+- Added exact-RID update selection and support/build definitions for Linux
+  x64/arm64 and macOS arm64/x64. Added deterministic portable archives, native
+  `.deb`/udev packaging, macOS `.app`/zip/DMG packaging, and fail-closed signing
+  and notarization gates.
+- Added pinned WiX tooling plus a native Windows/Linux/macOS CI matrix with
+  locked restores, warnings-as-errors, vulnerability checks, tests, publish, and
+  CLI smoke runs. Tagged Windows artifact publication remains intentionally
+  blocked until Authenticode/timestamping is configured.
+- Avalonia now refuses to close during an active flash, matching WPF, and refuses
+  to silently discard invalid settings on exit.
+- Code and cross-publish support are complete enough for an engineering release.
+  Production signing, native clean-machine execution, stable macOS USB identity,
+  full HIL, SBOM/provenance, central log redesign, production catalog-key
+  rotation, and board identity remain open.
+- Final 2.2.0 verification: locked Release build with zero warnings, 626/626
+  automated tests, zero known vulnerable NuGet packages, 16/16 release checksum
+  entries verified, and packaged CLI/lab-gate smokes green. All Windows EXE/MSI
+  artifacts are intentionally recorded as unsigned engineering outputs.
 
 ## 2026-07-12 implementation slice
 
@@ -147,10 +190,13 @@ the upgrade does not waive the remaining feature-parity and HIL gates.
 
 ### 8.1 — OS adapters and CLI parity
 
-- Secure credentials: Windows Credential Manager/DPAPI with restrictive ACL,
-  Linux Secret Service/libsecret, macOS Keychain. Never add plaintext fallback.
-- Probe discovery: Windows registry, Linux sysfs/udev, macOS IOKit; preserve a
-  stable physical probe identity across reconnects.
+- ✅ Secure credentials: Windows DPAPI, Linux Secret Service through
+  `/usr/bin/secret-tool`, and macOS login Keychain through `/usr/bin/security`.
+  Helper calls are fixed-path, bounded, and stdin-only; no plaintext fallback.
+  Signed-app/real-keyring behavior still belongs to native acceptance.
+- Probe discovery: Windows registry and Linux sysfs/udev exist. macOS currently
+  uses `/dev/cu.usbmodem*`; implement IOKit VID/PID/interface/serial matching to
+  preserve stable physical identity across reconnects before production.
 - Platform paths, file dialogs, browser launch, clipboard, sound, and update
   package selection become interfaces.
 - ✅ **`--doctor` extended (2026-08-08)** with the current runtime identifier and
@@ -160,9 +206,9 @@ the upgrade does not waive the remaining feature-parity and HIL gates.
   pending row count. Filesystem permission checks were already present. Linux
   udev/serial permission checks remain, and need a Linux station to verify.
 
-Started in the 2026-07-12 slice: `ITokenStore`, Unix GDB endpoints, Linux BMP
-sysfs discovery, and a generic `net10.0` CLI with private-token features gated
-until secure-store adapters exist.
+The generic `net10.0` CLI, Unix GDB endpoints, Linux sysfs discovery, and all
+three secure-store adapters are implemented. Native package and HIL acceptance
+remain the gate, not missing application wiring.
 
 ### 8.2 — Avalonia operator UI redesign
 
@@ -188,9 +234,10 @@ bench acceptance and non-Windows packaging, not features.
   full SHA-256, revocation reason) and the startup background catalog fetch
   raises a reload notice rather than swapping the catalog under a station that
   may be mid-batch. No WPF-only operator surface remains.
-- Remote firmware on Linux/macOS stays fail-closed until an encrypted
-  `ITokenStore` exists for those platforms; the Device Flow window itself is
-  cross-platform but the credential store is not.
+- ✅ Remote firmware is wired through encrypted OS stores on Linux and macOS and
+  still fails closed when the helper/keyring is unavailable. Live Device Flow,
+  token refresh, `--whoami`, and private-download tests remain in the native
+  acceptance matrix.
 - ✅ Add persisted Ukrainian/English/German selection across WPF and Avalonia,
   plus invocation-level `--lang uk|en|de` for CLI. Keep Ukrainian as the
   compatibility default and keep logs/protocol values language-neutral.
@@ -221,14 +268,17 @@ path — so it installs beside the production WPF station and can never upgrade,
 repair, or remove it. Both bundles mark the Arm toolchain permanent, so removing
 either product leaves the compiler in place for the other. Toolchain pins live in
 `installer/arm-toolchain.pins.ps1`, dot-sourced by both builders, so the two
-setup EXEs cannot ship different compilers. Linux and macOS packaging remain.
+setup EXEs cannot ship different compilers.
 
-
-- First release order: Windows x64, Ubuntu/Debian x64, macOS arm64, then macOS x64.
-- Keep WiX for Windows; add a Linux package/udev policy and signed/notarized macOS
-  `.app`/DMG. Select updates by exact OS and architecture.
-- Add Windows/Linux/macOS CI, locked restores, vulnerability gates, SBOM and
-  provenance, publish smoke tests, and per-OS BMP HIL.
+- ✅ Portable Linux x64/arm64 and macOS arm64/x64 bundles are deterministic and
+  select updates by exact RID.
+- ✅ Native builders define Ubuntu/Debian `.deb` packages with least-privilege
+  udev policy and macOS `.app`/zip/DMG output with Developer ID/notarization
+  gates. They must execute on matching native hosts.
+- ✅ Windows/Linux/macOS CI definitions use locked restores, warnings-as-errors,
+  vulnerability checks, native tests, publish, and CLI smoke tests.
+- ⏳ Supply-chain SBOM/provenance, official signing credentials, clean-machine
+  package runs, and per-OS/architecture BMP HIL remain.
 - ✅ **`.editorconfig` baseline added (2026-08-08)**, describing the house style
   with every rule at `suggestion` severity. It is intentionally not a gate: the
   repository still has pre-existing drift, so a formatting sweep must land
@@ -285,8 +335,9 @@ It is complete only when all of the following are evidenced, not merely planned:
 Recommended defaults are in parentheses:
 
 1. Platform order: Windows x64, Ubuntu/Debian x64, macOS arm64/x64.
-2. Private GitHub firmware on Linux/macOS v1: defer and use public signed assets
-   until Keychain/libsecret support is complete.
+2. ✅ Private GitHub firmware adapters now use Linux Secret Service and macOS
+   Keychain without plaintext fallback; native signed-app/keyring acceptance is
+   still required.
 3. Station account model: one locked-down service/operator account per station.
 4. GDB distribution: pinned OS prerequisite initially; bundle only after signing
    and license/provenance review.

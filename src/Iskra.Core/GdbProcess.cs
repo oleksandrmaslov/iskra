@@ -23,9 +23,10 @@ public sealed record GdbRunResult(
 }
 
 /// <summary>
-/// Spawns <c>arm-none-eabi-gdb.exe --batch</c> and captures stdout/stderr line-by-line.
-/// Knows nothing about target families or product IDs — pure process wrapper.
-/// The state machine layer interprets the captured lines.
+/// Owns an <c>arm-none-eabi-gdb</c> process and captures stdout/stderr
+/// line-by-line. The production flash path uses <see cref="RunGuardedAsync"/>
+/// so scan and flash share one GDB/remote connection; the batch helpers remain
+/// for diagnostics and compatibility only.
 /// </summary>
 public class GdbProcess
 {
@@ -100,7 +101,7 @@ public class GdbProcess
         {
             var callerCancelled = ct.IsCancellationRequested;
             timedOut = !callerCancelled;
-            await TerminateProcessTreeAsync(proc).ConfigureAwait(false);
+            await GdbMiSession.TerminateProcessTreeAsync(proc, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
             if (callerCancelled) throw;
         }
         catch
@@ -108,7 +109,7 @@ public class GdbProcess
             // Any exceptional exit must release the probe. In particular, app
             // shutdown/caller cancellation must not leave GDB running against
             // a target in the background.
-            await TerminateProcessTreeAsync(proc).ConfigureAwait(false);
+            await GdbMiSession.TerminateProcessTreeAsync(proc, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
             throw;
         }
 
@@ -127,20 +128,37 @@ public class GdbProcess
             Output: snapshot);
     }
 
-    private static async Task TerminateProcessTreeAsync(Process proc)
+    /// <summary>
+    /// Runs the production guarded transaction in one GDB/MI process. The
+    /// supplied gate sees the completed <c>swdp_scan</c> snapshot after target
+    /// #1 has been safely attached and held on that same remote connection.
+    /// Firmware is not opened and no load/verify command is sent unless the
+    /// gate returns true.
+    /// </summary>
+    public virtual Task<GdbGuardedRunResult> RunGuardedAsync(
+        string endpoint,
+        PowerMode power,
+        int frequencyHz,
+        bool connectUnderReset,
+        string firmwarePath,
+        TimeSpan scanTimeout,
+        TimeSpan flashTimeout,
+        Func<GdbRunResult, bool> scanGate,
+        Action<GdbLine>? onLine = null,
+        CancellationToken ct = default)
     {
-        try
-        {
-            if (!proc.HasExited) proc.Kill(entireProcessTree: true);
-        }
-        catch { /* best-effort termination */ }
-
-        try
-        {
-            if (!proc.HasExited)
-                await proc.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-        catch { /* process may already be gone */ }
+        return GdbMiSession.RunAsync(
+            _gdbExe,
+            endpoint,
+            power,
+            frequencyHz,
+            connectUnderReset,
+            firmwarePath,
+            scanTimeout,
+            flashTimeout,
+            scanGate,
+            onLine,
+            ct);
     }
 
     /// <summary>

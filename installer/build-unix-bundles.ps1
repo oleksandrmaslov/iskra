@@ -1,20 +1,21 @@
 # Builds the Linux and macOS bundles for Iskra.
 #
-# These are cross-published from Windows. .NET cross-publishes managed code and
-# ships Avalonia's native libraries per RID, so the binaries are producible
-# here - but they CANNOT BE EXECUTED OR SMOKE-TESTED on this build host. Treat
-# every output as unverified until it has been run on the target OS.
+# These can be built on any supported host. When they are cross-published, the
+# output is still explicitly labelled as not runtime-tested on its target OS.
+# GitHub CI runs the same Core/Application/Avalonia test suites and CLI smoke
+# test natively on every RID before a tagged build is considered releasable.
 #
 # WPF is Windows-only and is deliberately not part of these bundles.
 #
 # What ships per platform:
-#   linux-x64   Iskra.Avalonia, Iskra.Cli, a .desktop entry, and the udev rule
-#               that grants non-root access to the probe.
+#   linux-x64 / linux-arm64
+#               Iskra.Avalonia, Iskra.Cli, install/uninstall helpers, a desktop
+#               entry, and a least-privilege udev rule for probe access.
 #   osx-arm64   Iskra.app bundle (Apple Silicon) + Iskra.Cli
 #   osx-x64     Iskra.app bundle (Intel) + Iskra.Cli
 #
 # Deliberately NOT produced here:
-#   * .deb / .rpm - need dpkg-deb / rpmbuild, which do not exist on this host.
+#   * .deb / .rpm - native packaging belongs in the release CI runners.
 #   * .dmg - needs macOS hdiutil.
 #   * Code signing and notarization - need a macOS host and an Apple Developer
 #     ID. The macOS bundles are unsigned, so Gatekeeper will quarantine them.
@@ -23,30 +24,88 @@
 #     manager or Homebrew.
 #
 # Usage:
-#   pwsh ./installer/build-unix-bundles.ps1 -Version 2.1.0
+#   pwsh ./installer/build-unix-bundles.ps1 -Version 2.2.0
 
 param(
-    [string] $Version = "1.0.0",
+    [string] $Version = "2.2.0",
     [string] $Configuration = "Release",
-    [string[]] $Runtimes = @("linux-x64", "osx-arm64", "osx-x64")
+    [string[]] $Runtimes = @("linux-x64", "linux-arm64", "osx-arm64", "osx-x64"),
+    [switch] $AllowDirty,
+    [switch] $RequireTag,
+    [switch] $NativePackage
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
-$dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
-if (-not (Test-Path -LiteralPath $dotnet)) {
-    throw "The repository SDK host was not found at $dotnet"
+$dotnet = $null
+if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    $localDotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
+    if (Test-Path -LiteralPath $localDotnet) { $dotnet = $localDotnet }
+}
+if ($null -eq $dotnet) {
+    $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($null -ne $dotnetCommand) { $dotnet = $dotnetCommand.Source }
+}
+if ($null -eq $dotnet) {
+    throw "dotnet was not found; install the SDK pinned by global.json"
+}
+
+if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+    throw "Version must be SemVer-like (for example 2.2.0 or 2.2.0-rc.1): $Version"
+}
+
+$supportedRuntimes = @("linux-x64", "linux-arm64", "osx-arm64", "osx-x64")
+foreach ($runtime in $Runtimes) {
+    if ($runtime -notin $supportedRuntimes) {
+        throw "unsupported runtime '$runtime'; expected one of: $($supportedRuntimes -join ', ')"
+    }
 }
 
 $artifacts = Join-Path $repoRoot "artifacts"
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 
-Write-Host "[1/3] locked solution restore" -ForegroundColor Cyan
-& $dotnet restore Iskra.sln --locked-mode --nologo | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "locked solution restore failed (exit $LASTEXITCODE)" }
+$archiveHelper = Join-Path $PSScriptRoot "New-PortableTarGz.ps1"
+if (-not (Test-Path -LiteralPath $archiveHelper)) {
+    throw "portable archive helper is missing: $archiveHelper"
+}
+
+$gitCommit = (& git rev-parse --verify HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $gitCommit -notmatch '^[0-9a-f]{40}$') {
+    throw "could not resolve the release commit"
+}
+$gitCommitShort = $gitCommit.Substring(0, 12)
+$gitTimestamp = [long] ((& git show -s --format=%ct HEAD).Trim())
+if ($LASTEXITCODE -ne 0 -or $gitTimestamp -le 0) {
+    throw "could not resolve the release commit timestamp"
+}
+$archiveTimestamp = [DateTimeOffset]::FromUnixTimeSeconds($gitTimestamp)
+$builtAt = $archiveTimestamp.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ")
+$bundleVersion = ($Version -split '-', 2)[0]
+$gitState = if (@(& git status --porcelain).Count -gt 0) { "dirty" } else { "clean" }
+if ($gitState -eq "dirty" -and -not $AllowDirty) {
+    throw "release builds require a clean working tree; use -AllowDirty only for a labelled engineering build"
+}
+if ($RequireTag) {
+    $expectedTag = "v$Version"
+    $headTags = @(& git tag --points-at HEAD)
+    if ($expectedTag -notin $headTags) {
+        throw "release version $Version is not bound to tag $expectedTag at HEAD"
+    }
+}
+
+Write-Host "[1/3] locked portable-project restore" -ForegroundColor Cyan
+# Do not pass -r here. The committed lock files intentionally contain the full
+# RuntimeIdentifiers matrix; narrowing Restore to one RID changes the evaluated
+# graph and correctly triggers NU1004 in locked mode. Publish below selects one
+# of the already-locked runtime graphs with -r and --no-restore.
+foreach ($project in @("src/Iskra.Desktop", "src/Iskra.Cli")) {
+    & $dotnet restore $project --locked-mode --nologo | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "locked restore failed for $project, exit $LASTEXITCODE"
+    }
+}
 
 function Publish-Project([string] $Project, [string] $Runtime, [string] $Destination) {
     & $dotnet publish $Project `
@@ -70,6 +129,16 @@ function Write-UnixText([string] $Path, [string] $Content) {
     [IO.File]::WriteAllText($Path, $normalized, [Text.UTF8Encoding]::new($false))
 }
 
+function Remove-GeneratedDirectory([string] $Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $full = (Resolve-Path -LiteralPath $Path).Path
+    $artifactRoot = (Resolve-Path -LiteralPath $artifacts).Path.TrimEnd('\', '/')
+    if (-not $full.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "refusing to remove generated path outside artifacts: $full"
+    }
+    Remove-Item -LiteralPath $full -Recurse -Force
+}
+
 $built = @()
 
 foreach ($runtime in $Runtimes) {
@@ -77,7 +146,7 @@ foreach ($runtime in $Runtimes) {
     $isMac = $runtime.StartsWith("osx")
     $outName = "Iskra-$Version-$runtime"
     $outDir = Join-Path $artifacts $outName
-    if (Test-Path -LiteralPath $outDir) { Remove-Item -LiteralPath $outDir -Recurse -Force }
+    Remove-GeneratedDirectory $outDir
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
     $stage = Join-Path $outDir ".stage"
@@ -107,12 +176,15 @@ foreach ($runtime in $Runtimes) {
   <key>CFBundleName</key><string>Iskra</string>
   <key>CFBundleDisplayName</key><string>Iskra</string>
   <key>CFBundleIdentifier</key><string>com.oleksandrmaslov.iskra</string>
-  <key>CFBundleVersion</key><string>$Version</string>
-  <key>CFBundleShortVersionString</key><string>$Version</string>
+  <key>CFBundleVersion</key><string>$bundleVersion</string>
+  <key>CFBundleShortVersionString</key><string>$bundleVersion</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>Iskra</string>
+  <key>CFBundleIconFile</key><string>iskra.png</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Iskra contributors</string>
 </dict>
 </plist>
 "@
@@ -129,21 +201,73 @@ Name=Iskra
 Comment=Black Magic Probe firmware flasher
 Exec=/opt/iskra/Iskra.Avalonia
 Icon=/opt/iskra/iskra.png
+StartupWMClass=Iskra
 Terminal=false
 Categories=Development;Electronics;
+Keywords=firmware;flash;debugger;microcontroller;BMP;
 "@
         Copy-Item -LiteralPath (Join-Path $repoRoot "docs\iskra.png") -Destination (Join-Path $outDir "iskra.png") -Force
 
-        # Without this rule the probe is root-only and the app reports the
-        # port as missing rather than as a permission problem.
+        # TAG+=uaccess grants an ACL only to the active local session. Keep the
+        # device non-world-writable; headless stations should use a dedicated
+        # udev group policy rather than changing this to MODE=0666.
         Write-UnixText (Join-Path $outDir "99-black-magic-probe.rules") @"
 # Black Magic Probe - grant the console user access to both CDC interfaces.
 # Install: sudo cp 99-black-magic-probe.rules /etc/udev/rules.d/
 #          sudo udevadm control --reload-rules && sudo udevadm trigger
-# Then log out and back in so the new group membership applies.
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", MODE="0666", TAG+="uaccess"
-SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", MODE="0666", TAG+="uaccess"
+# Reconnect the probe after installation.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", MODE="0660", TAG+="uaccess"
 "@
+
+        Write-UnixText (Join-Path $outDir "install.sh") @'
+#!/bin/sh
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run this installer as root: sudo ./install.sh" >&2
+  exit 1
+fi
+
+SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+install -d -m 0755 /opt/iskra /usr/share/applications /usr/share/icons/hicolor/256x256/apps /etc/udev/rules.d /usr/local/bin
+install -m 0755 "$SOURCE_DIR/Iskra.Avalonia" /opt/iskra/Iskra.Avalonia
+install -m 0755 "$SOURCE_DIR/Iskra.Cli" /opt/iskra/Iskra.Cli
+install -m 0644 "$SOURCE_DIR/iskra.png" /opt/iskra/iskra.png
+install -m 0644 "$SOURCE_DIR/iskra.png" /usr/share/icons/hicolor/256x256/apps/iskra.png
+install -m 0644 "$SOURCE_DIR/iskra.desktop" /usr/share/applications/iskra.desktop
+install -m 0644 "$SOURCE_DIR/99-black-magic-probe.rules" /etc/udev/rules.d/99-black-magic-probe.rules
+ln -sfn /opt/iskra/Iskra.Cli /usr/local/bin/iskra-cli
+
+if command -v udevadm >/dev/null 2>&1; then
+  udevadm control --reload-rules
+  udevadm trigger --subsystem-match=tty --action=add || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications || true
+fi
+echo "Iskra installed. Reconnect the Black Magic Probe, then run: iskra-cli --doctor"
+'@
+
+        Write-UnixText (Join-Path $outDir "uninstall.sh") @'
+#!/bin/sh
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run this uninstaller as root: sudo ./uninstall.sh" >&2
+  exit 1
+fi
+
+rm -f /usr/local/bin/iskra-cli
+rm -f /usr/share/applications/iskra.desktop
+rm -f /usr/share/icons/hicolor/256x256/apps/iskra.png
+rm -f /etc/udev/rules.d/99-black-magic-probe.rules
+rm -rf /opt/iskra
+if command -v udevadm >/dev/null 2>&1; then
+  udevadm control --reload-rules
+fi
+echo "Iskra application files removed. Operator settings and flash logs were preserved."
+'@
     }
 
     $examples = Join-Path $outDir "examples"
@@ -151,43 +275,40 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", MODE="0666"
     Copy-Item -LiteralPath (Join-Path $repoRoot "examples\catalog.json") -Destination $examples -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot "examples\catalog.json.sig") -Destination $examples -Force
 
-    Remove-Item -LiteralPath $stage -Recurse -Force
+    Remove-GeneratedDirectory $stage
 
-    $gitCommit = (& git rev-parse --short=12 HEAD).Trim()
-    $gitState = if (@(& git status --porcelain).Count -gt 0) { "dirty" } else { "clean" }
-    $builtAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $macNotes = if ($NativePackage) { @"
+This bundle is being assembled by the native macOS release builder. Its final
+signature/notarization status is recorded in BUILD-METADATA.json and in the
+native checksum manifest; the builder fails closed for unsigned tag releases.
 
-    $macNotes = @"
-FIRST, RESTORE THE EXECUTABLE BIT. This zip was produced on Windows, which does
-not carry Unix permissions, so the app will not launch until you run:
-  chmod +x Iskra.app/Contents/MacOS/Iskra Iskra.Cli
+Run:  open Iskra.app        (or ./Iskra.app/Contents/MacOS/Iskra from a terminal)
 
-UNSIGNED BUILD. macOS will also quarantine it on first launch:
-  xattr -dr com.apple.quarantine Iskra.app
-Signing and notarization need a macOS host and an Apple Developer ID; neither
-was available at build time.
+Probe discovery reads /dev/cu.usbmodem*, using the trailing interface digit
+(1 = GDB, 3 = UART). Production acceptance still requires IOKit identity and
+real-probe HIL on each supported macOS architecture.
+"@ } else { @"
+UNSIGNED BUILD. Signing, notarization, and DMG creation require a macOS release
+runner and an Apple Developer ID. Gatekeeper can therefore quarantine this
+engineering archive; do not weaken a production station to run it.
 
 Run:  open Iskra.app        (or ./Iskra.app/Contents/MacOS/Iskra from a terminal)
 
 Probe discovery reads /dev/cu.usbmodem*, using the trailing interface digit
 (1 = GDB, 3 = UART). The naming convention is unit-tested, but it has never
 been run against a probe on real hardware.
-"@
+"@ }
 
     $linuxNotes = @"
-FIRST, RESTORE THE EXECUTABLE BIT. This zip was produced on Windows, which does
-not carry Unix permissions:
-  chmod +x Iskra.Avalonia Iskra.Cli
+Install:  sudo ./install.sh
+Run without installing:  ./Iskra.Avalonia
 
-Run:  ./Iskra.Avalonia
-
-Probe access needs the bundled udev rule, otherwise the port is root-only and
-the app simply reports no probe:
+Probe access needs the bundled least-privilege udev rule:
   sudo cp 99-black-magic-probe.rules /etc/udev/rules.d/
   sudo udevadm control --reload-rules && sudo udevadm trigger
 
-For a menu entry, install to /opt/iskra and copy iskra.desktop into
-/usr/share/applications/ (the Exec path assumes /opt/iskra).
+The installer uses /opt/iskra, adds a menu entry and iskra-cli symlink, and
+leaves operator settings and SQLite logs untouched when uninstalling.
 "@
 
     # Precomputed: PowerShell 5.1 mis-parses a here-string containing a
@@ -198,6 +319,7 @@ For a menu entry, install to /opt/iskra and copy iskra.desktop into
     } else {
         @(
             "  Iskra.Avalonia   Avalonia operator UI"
+            "  install.sh / uninstall.sh   system integration helpers"
             "  iskra.desktop    menu entry"
             "  99-black-magic-probe.rules   udev access rule"
         ) -join "`n"
@@ -208,23 +330,22 @@ Iskra $Version - $runtime
 
 $platformNotes
 
-NOT VERIFIED. This bundle was cross-published from a Windows host and could not
-be executed there. Nothing in it has been launched, and no flash has been
-performed on this platform. Treat the first run as the test.
+CROSS-PUBLISHED ENGINEERING BUILD. Native Windows/Linux/macOS CI tests the same
+commit, but this archive itself has not flashed hardware. Production acceptance
+still requires a clean target-OS station and the documented BMP HIL matrix.
 
-REQUIRES arm-none-eabi-gdb, which is NOT bundled. Unlike the Windows setup EXE
+REQUIRES an ARM-capable GDB, which is NOT bundled. Unlike the Windows setup EXE
 there is no pinned toolchain here. Install it first:
-  Debian/Ubuntu   sudo apt install gdb-arm-none-eabi   (or gcc-arm-none-eabi)
+  Debian/Ubuntu   sudo apt install gdb-multiarch
   Fedora          sudo dnf install arm-none-eabi-gdb
   macOS           brew install --cask gcc-arm-embedded
 Then check the station with:  ./Iskra.Cli --doctor
 
-REMOTE FIRMWARE DOES NOT WORK ON THIS PLATFORM. Downloading firmware from
-GitHub needs an encrypted credential store, and only Windows DPAPI is
-implemented. The app fails closed rather than writing a token in plaintext, so
-any catalog release whose source is a GitHub asset will refuse to flash here.
-Local catalogs and sideload directories work normally. If your catalog uses
-remote releases, this build can browse and check the station but not flash.
+PRIVATE REMOTE FIRMWARE uses the operating system's encrypted credential store:
+macOS Keychain or Linux Secret Service. On Linux, install secret-tool (usually
+the libsecret-tools/libsecret package) and make sure an unlocked Secret Service
+is available in the operator session. If the secure store is absent, Iskra
+fails closed; it never writes OAuth tokens to a plaintext file.
 
 Included:
   Iskra.Cli        command-line flasher and diagnostics
@@ -232,31 +353,68 @@ $includedList
   examples/        signed sample catalog
 
 Self-contained, single-file; no .NET runtime required.
-Commit:    $gitCommit ($gitState working tree)
+Commit:    $gitCommitShort ($gitState working tree)
 Built UTC: $builtAt
 
 Unsigned engineering build. Not a factory release.
 "@
 
-    $files = Get-ChildItem -LiteralPath $outDir -Recurse -File
+    $metadata = [ordered]@{
+        schema_version = 1
+        product = "Iskra"
+        version = $Version
+        runtime = $runtime
+        commit = $gitCommit
+        working_tree = $gitState
+        built_at_utc = $builtAt
+        sdk = (& $dotnet --version).Trim()
+        archive_format = "pax+gzip"
+        hardware_acceptance = "required"
+        signed = $false
+    } | ConvertTo-Json
+    Write-UnixText (Join-Path $outDir "BUILD-METADATA.json") $metadata
+
+    $files = Get-ChildItem -LiteralPath $outDir -Recurse -File |
+        Sort-Object { $_.FullName.Substring($outDir.Length + 1).Replace('\', '/') }
     $lines = foreach ($f in $files) {
         $rel = $f.FullName.Substring($outDir.Length + 1).Replace('\', '/')
         "$((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $rel"
     }
     [IO.File]::WriteAllLines((Join-Path $outDir "SHA256SUMS.txt"), $lines, [Text.UTF8Encoding]::new($false))
 
-    $zip = Join-Path $artifacts "$outName.zip"
-    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
-    Compress-Archive -Path (Join-Path $outDir '*') -DestinationPath $zip -CompressionLevel Optimal
+    $archive = Join-Path $artifacts "$outName.tar.gz"
+    if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
+    $executables = if ($isMac) {
+        @("Iskra.app/Contents/MacOS/Iskra", "Iskra.Cli")
+    } else {
+        @("Iskra.Avalonia", "Iskra.Cli", "install.sh", "uninstall.sh")
+    }
+    & $archiveHelper `
+        -SourceDirectory $outDir `
+        -DestinationPath $archive `
+        -RootName $outName `
+        -ExecutablePaths $executables `
+        -Timestamp $archiveTimestamp | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archive)) {
+        throw "portable archive creation failed for $runtime"
+    }
     $built += [pscustomobject]@{
         Runtime = $runtime
         Folder  = $outDir
-        Zip     = $zip
-        ZipMB   = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+        Archive = $archive
+        SizeMB  = [math]::Round((Get-Item $archive).Length / 1MB, 1)
     }
 }
 
+$releaseChecksums = Join-Path $artifacts "Iskra-$Version-portable-SHA256SUMS.txt"
+$releaseChecksumLines = foreach ($item in $built) {
+    "$((Get-FileHash -LiteralPath $item.Archive -Algorithm SHA256).Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($item.Archive))"
+}
+[IO.File]::WriteAllLines($releaseChecksums, $releaseChecksumLines, [Text.UTF8Encoding]::new($false))
+
 Write-Host ""
-Write-Host "[3/3] done - UNVERIFIED cross-published bundles" -ForegroundColor Yellow
-Write-Host "      They were not executed on this host. First run on the target OS is the test." -ForegroundColor Yellow
-$built | Format-Table Runtime, ZipMB, Zip -AutoSize
+$buildLabel = if ($NativePackage) { "native package staging" } else { "UNVERIFIED cross-published bundles" }
+Write-Host "[3/3] done - $buildLabel" -ForegroundColor Yellow
+Write-Host "      Target-OS hardware-in-the-loop acceptance remains required." -ForegroundColor Yellow
+$built | Format-Table Runtime, SizeMB, Archive -AutoSize
+Write-Host "Checksums: $releaseChecksums"

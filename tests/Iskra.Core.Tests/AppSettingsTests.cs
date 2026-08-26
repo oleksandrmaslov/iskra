@@ -109,11 +109,15 @@ public class AppSettingsTests : IDisposable
     [Fact]
     public void Save_is_atomic_via_tmp_rename()
     {
-        // The implementation writes to <path>.tmp then moves. Confirm no .tmp lingers.
+        // The implementation writes to a unique sibling temp and then moves.
+        // Confirm no predictable or unique temp file lingers.
         AppSettingsStore.Save(new AppSettings { StationId = "first" }, _path);
         AppSettingsStore.Save(new AppSettings { StationId = "second" }, _path);
         Assert.True(File.Exists(_path));
         Assert.False(File.Exists(_path + ".tmp"));
+        Assert.Empty(Directory.GetFiles(
+            Path.GetDirectoryName(_path)!,
+            Path.GetFileName(_path) + ".*.tmp"));
         Assert.Equal("second", AppSettingsStore.Load(_path).StationId);
     }
 
@@ -124,6 +128,17 @@ public class AppSettingsTests : IDisposable
         var s = AppSettingsStore.Load(_path);
         Assert.Equal(1_000_000, s.BmpFrequencyHz);
         Assert.Equal(PowerMode.External, s.Power);
+    }
+
+    [Fact]
+    public void Oversized_settings_file_falls_back_to_defaults()
+    {
+        File.WriteAllBytes(_path, new byte[AppSettingsStore.MaxSettingsBytes + 1]);
+
+        var settings = AppSettingsStore.Load(_path);
+
+        Assert.Equal(Environment.MachineName, settings.StationId);
+        Assert.True(settings.RequireSignedCatalog);
     }
 
     [Fact]

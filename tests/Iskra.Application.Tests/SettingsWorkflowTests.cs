@@ -43,7 +43,7 @@ public sealed class SettingsWorkflowTests
         Assert.Equal(PowerMode.Probe, saved.Power);
         Assert.True(saved.ConnectUnderReset);
         Assert.Equal(23, saved.TimeoutSeconds);
-        Assert.Equal("attempts.db", saved.DbPath);
+        Assert.Equal(Path.GetFullPath("attempts.db"), saved.DbPath);
         Assert.Equal("STATION-7", saved.StationId);
         Assert.Equal("Iryna", saved.LastOperator);
         Assert.Equal("LOT-9", saved.LastBatch);
@@ -72,6 +72,39 @@ public sealed class SettingsWorkflowTests
         Assert.Equal(SettingsSaveStatus.ValidationFailed, result.Status);
         Assert.Equal(field, result.InvalidField);
         Assert.Null(result.Settings);
+    }
+
+    [Theory]
+    [InlineData(":memory:")]
+    [InlineData("file:audit.db?mode=memory")]
+    public void Transient_audit_database_is_refused_by_shared_settings_policy(string path)
+    {
+        var current = new AppSettings();
+        var draft = SettingsDraft.FromSettings(current) with { DbPath = path };
+
+        var result = new SettingsWorkflow().BuildCandidate(current, draft);
+
+        Assert.Equal(SettingsSaveStatus.ValidationFailed, result.Status);
+        Assert.Equal(SettingsField.DbPath, result.InvalidField);
+        Assert.NotNull(result.Diagnostic);
+    }
+
+    [Theory]
+    [InlineData(SettingsField.BmpFrequencyHz, "50000001")]
+    [InlineData(SettingsField.TimeoutSeconds, "3601")]
+    public void Safety_critical_numeric_fields_have_upper_bounds(SettingsField field, string value)
+    {
+        var current = new AppSettings();
+        var draft = SettingsDraft.FromSettings(current) with
+        {
+            BmpFrequencyHz = field == SettingsField.BmpFrequencyHz ? value : "1000000",
+            TimeoutSeconds = field == SettingsField.TimeoutSeconds ? value : "15",
+        };
+
+        var result = new SettingsWorkflow().BuildCandidate(current, draft);
+
+        Assert.Equal(SettingsSaveStatus.ValidationFailed, result.Status);
+        Assert.Equal(field, result.InvalidField);
     }
 
     [Fact]

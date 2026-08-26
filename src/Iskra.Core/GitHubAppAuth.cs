@@ -36,6 +36,8 @@ public sealed class GitHubAppAuthException : Exception
 /// </summary>
 public sealed class GitHubAppInstallationTokenProvider
 {
+    public const int MaxTokenResponseBytes = 64 * 1024;
+    public const int MaxPrivateKeyBytes = 64 * 1024;
     public const string ApiBaseUrl  = "https://api.github.com";
     public const string ApiAccept   = "application/vnd.github+json";
     public const string ApiVersion  = "2022-11-28";
@@ -91,8 +93,10 @@ public sealed class GitHubAppInstallationTokenProvider
         req.Headers.UserAgent.ParseAdd(_userAgent);
         req.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", ApiVersion);
 
-        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-        var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        using var resp = await _http.SendAsync(
+            req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        var body = await BoundedHttpContent.ReadUtf8StringAsync(
+            resp.Content, MaxTokenResponseBytes, ct).ConfigureAwait(false);
 
         if (!resp.IsSuccessStatusCode)
             throw new GitHubAppAuthException(
@@ -151,7 +155,9 @@ public sealed class GitHubAppInstallationTokenProvider
         object? obj;
         try
         {
-            using var sr = new StreamReader(pemPath);
+            var pem = Encoding.UTF8.GetString(
+                BoundedFileReader.ReadAllBytes(pemPath, MaxPrivateKeyBytes));
+            using var sr = new StringReader(pem);
             obj = new PemReader(sr).ReadObject();
         }
         catch (Exception ex)

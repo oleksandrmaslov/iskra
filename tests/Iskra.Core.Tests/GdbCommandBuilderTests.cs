@@ -9,12 +9,32 @@ public class GdbCommandBuilderTests
     [InlineData("com3",         @"\\.\COM3")]
     [InlineData(@"\\.\COM12",   @"\\.\COM12")]
     [InlineData("localhost:2000", "localhost:2000")]
+    [InlineData("[::1]:2000", "[::1]:2000")]
     [InlineData("/dev/ttyACM0", "/dev/ttyACM0")]
     [InlineData("/dev/cu.usbmodem-BMP", "/dev/cu.usbmodem-BMP")]
+    [InlineData("/dev/serial/by-id/usb-Black_Magic_Probe_1", "/dev/serial/by-id/usb-Black_Magic_Probe_1")]
     [InlineData("ttyACM0", "ttyACM0")]
     public void NormalizeComPort_canonicalises_input(string input, string expected)
     {
         Assert.Equal(expected, GdbCommandBuilder.NormalizeComPort(input));
+    }
+
+    [Theory]
+    [InlineData("COM0")]
+    [InlineData(@"\\.\PhysicalDrive0")]
+    [InlineData("COM30\nload")]
+    [InlineData("COM30;load")]
+    [InlineData("|sh")]
+    [InlineData("\"COM30\"")]
+    [InlineData("/tmp/ttyACM0")]
+    [InlineData("/dev/../tmp/ttyACM0")]
+    [InlineData("localhost:0")]
+    [InlineData("localhost:65536")]
+    [InlineData("::1:2000")]
+    public void NormalizeProbeEndpoint_rejects_command_injection_and_invalid_transports(string endpoint)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            GdbCommandBuilder.NormalizeProbeEndpoint(endpoint));
     }
 
     [Theory]

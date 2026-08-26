@@ -272,6 +272,7 @@ public sealed partial class MainWindowViewModel
         SettingsField.BmpFrequencyHz => Text.SettingsSwdFrequency,
         SettingsField.TimeoutSeconds => Text.SettingsTimeout,
         SettingsField.LogShipIntervalMinutes => Text.SettingsCloudInterval,
+        SettingsField.DbPath => Text.SettingsLogFile,
         _ => string.Empty,
     };
 

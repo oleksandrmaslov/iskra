@@ -37,7 +37,7 @@ public class RemoteCatalogClientTests : IDisposable
             {
               "product_id": "ci-clop",
               "display_name": "CI-CLOP",
-              "target": { "bmp_match": "PY32Fxxx", "part_number": "PY32F002Ax5", "flash_kb": 32 },
+              "target": { "bmp_match": "PY32Fxxx", "part_number": "PY32F002Ax5", "flash_kb": 32, "flash_origin": "0x08000000" },
               "releases": [
                 {
                   "version": "1.0.0",

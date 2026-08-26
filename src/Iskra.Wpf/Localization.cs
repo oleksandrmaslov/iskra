@@ -205,7 +205,7 @@ internal static class UiText
             ["History.RecentNeedBatch"] = new("Останні {0} записів (вкажіть Партію для зведення).", "Latest {0} record(s) (enter a batch for a summary).", "Letzte {0} Einträge (Charge für eine Zusammenfassung eingeben)."),
             ["History.RecentNoBatches"] = new("Останні {0} записів. Партії вимкнено.", "Latest {0} record(s). Batches are disabled.", "Letzte {0} Einträge. Chargen sind deaktiviert."),
             ["History.ReadError"] = new("Помилка читання журналу: {0}", "Log read error: {0}", "Fehler beim Lesen des Protokolls: {0}"),
-            ["Settings.LabAllowed"] = new("Лабораторний режим дозволено змінною ISKRA_LAB_ALLOW_UNSIGNED_CATALOG.", "Lab mode is enabled by ISKRA_LAB_ALLOW_UNSIGNED_CATALOG.", "Der Labormodus ist durch ISKRA_LAB_ALLOW_UNSIGNED_CATALOG aktiviert."),
+            ["Settings.LabAllowed"] = new("Лабораторний режим увімкнено в цій спеціальній збірці та змінною ISKRA_LAB_ALLOW_UNSIGNED_CATALOG.", "Lab mode is compiled into this special build and enabled by ISKRA_LAB_ALLOW_UNSIGNED_CATALOG.", "Der Labormodus ist in diesem speziellen Build enthalten und durch ISKRA_LAB_ALLOW_UNSIGNED_CATALOG aktiviert."),
             ["Settings.SignatureMandatory"] = new("На операторській станції підпис каталогу обовʼязковий.", "A catalog signature is mandatory on an operator station.", "Auf einer Bedienstation ist eine Katalogsignatur zwingend erforderlich."),
             ["Settings.ReadOnlySuffix"] = new("(лише читання)", "(read-only)", "(schreibgeschützt)"),
             ["Flash.HotkeyHint"] = new("(або натисніть {0})", "(or press {0})", "(oder {0} drücken)"),

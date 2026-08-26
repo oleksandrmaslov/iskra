@@ -34,13 +34,13 @@ public sealed class CatalogSessionTests
     [Fact]
     public void Missing_explicit_path_never_falls_back()
     {
-        var parsed = new List<string>();
+        var parseCount = 0;
         var session = NewSession(
             fallbackCandidates: _ => ["fallback.json"],
             files: ["fallback.json"],
-            parseCatalog: path =>
+            parseCatalog: _ =>
             {
-                parsed.Add(path);
+                parseCount++;
                 return ValidCatalog;
             });
 
@@ -48,20 +48,20 @@ public sealed class CatalogSessionTests
 
         Assert.Equal(CatalogSessionStatus.ExplicitPathMissing, result.Status);
         Assert.False(result.IsReady);
-        Assert.Empty(parsed);
+        Assert.Equal(0, parseCount);
     }
 
     [Fact]
     public void Untrusted_explicit_path_is_not_parsed_or_downgraded_to_fallback()
     {
-        var parsed = new List<string>();
+        var parseCount = 0;
         var session = NewSession(
             fallbackCandidates: _ => ["fallback.json"],
             files: ["bad.json", "fallback.json"],
             trust: (_, _) => CatalogTrustResult.BadSignature,
-            parseCatalog: path =>
+            parseCatalog: _ =>
             {
-                parsed.Add(path);
+                parseCount++;
                 return ValidCatalog;
             });
 
@@ -69,7 +69,7 @@ public sealed class CatalogSessionTests
 
         Assert.Equal(CatalogSessionStatus.TrustRejected, result.Status);
         Assert.Equal(CatalogTrustResult.BadSignature, result.TrustResult);
-        Assert.Empty(parsed);
+        Assert.Equal(0, parseCount);
     }
 
     [Fact]
@@ -190,12 +190,81 @@ public sealed class CatalogSessionTests
         Assert.Equal(CatalogTrustResult.UnsignedAllowed, result.TrustResult);
     }
 
+    [Fact]
+    public void Signed_file_is_parsed_from_the_verified_snapshot_even_if_path_changes_afterward()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"iskra-catalog-session-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var catalogPath = Path.Combine(directory, "catalog.json");
+
+        try
+        {
+            var verifiedBytes = CatalogJson.WriteUtf8(CatalogWithProduct("verified-product"));
+            var replacementBytes = CatalogJson.WriteUtf8(CatalogWithProduct("replacement-product"));
+            var keypair = CatalogSignature.GenerateKeypair();
+            File.WriteAllBytes(catalogPath, verifiedBytes);
+            File.WriteAllText(
+                CatalogTrust.SignaturePathFor(catalogPath),
+                Convert.ToBase64String(CatalogSignature.Sign(verifiedBytes, keypair.PrivateKey)));
+
+            var session = new CatalogSession(
+                readAndVerifyCatalog: (path, requireSigned) =>
+                    CatalogTrust.ReadAndVerifyCatalogFile(path, requireSigned, keypair.PublicKey),
+                parseCatalog: snapshot =>
+                {
+                    // Deterministically simulate the old verify-then-reread
+                    // race at the boundary between trust and deserialization.
+                    File.WriteAllBytes(catalogPath, replacementBytes);
+                    return CatalogJson.Parse(snapshot.Span);
+                },
+                activateCatalog: AcceptActivation);
+
+            var result = session.Load(new AppSettings { CatalogPath = catalogPath });
+
+            Assert.True(result.IsReady);
+            Assert.NotNull(result.Catalog!.FindProduct("verified-product"));
+            Assert.Null(result.Catalog.FindProduct("replacement-product"));
+            Assert.NotNull(CatalogJson.ParseFile(catalogPath).FindProduct("replacement-product"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Signed_catalog_is_refused_when_activation_floor_detects_rollback()
+    {
+        var session = new CatalogSession(
+            fallbackCandidates: _ => ["signed.json"],
+            fileExists: _ => true,
+            directoryExists: _ => false,
+            readAndVerifyCatalog: (_, _) => new CatalogFileVerificationResult(
+                CatalogTrustResult.Verified,
+                ReadOnlyMemory<byte>.Empty),
+            parseCatalog: _ => ValidCatalog,
+            activateCatalog: catalog => new CatalogActivationResult(
+                CatalogActivationStatus.RollbackRejected,
+                catalog.GeneratedAt,
+                catalog.GeneratedAt.AddDays(1),
+                "signed catalog is older than the station floor"),
+            normalizePath: static path => path);
+
+        var result = session.Load(new AppSettings());
+
+        Assert.Equal(CatalogSessionStatus.RollbackRejected, result.Status);
+        Assert.False(result.IsReady);
+        Assert.Equal(CatalogTrustResult.Verified, result.TrustResult);
+    }
+
     private static CatalogSession NewSession(
         Func<AppSettings, IEnumerable<string>> fallbackCandidates,
         IReadOnlyCollection<string>? files = null,
         IReadOnlyCollection<string>? directories = null,
         Func<string, bool, CatalogTrustResult>? trust = null,
-        Func<string, Catalog>? parseCatalog = null,
+        Func<ReadOnlyMemory<byte>, Catalog>? parseCatalog = null,
         Func<string, Catalog>? buildSideload = null,
         bool labMode = false)
     {
@@ -205,10 +274,43 @@ public sealed class CatalogSessionTests
             fallbackCandidates,
             fileExists: path => files.Contains(path),
             directoryExists: path => directories.Contains(path),
-            verifyCatalog: trust ?? ((_, _) => CatalogTrustResult.Verified),
+            readAndVerifyCatalog: (path, requireSigned) => new CatalogFileVerificationResult(
+                (trust ?? ((_, _) => CatalogTrustResult.Verified))(path, requireSigned),
+                ReadOnlyMemory<byte>.Empty),
             parseCatalog: parseCatalog ?? (_ => ValidCatalog),
             buildSideload: buildSideload ?? (_ => ValidCatalog),
             unsignedLabModeEnabled: () => labMode,
-            normalizePath: static path => path);
+            normalizePath: static path => path,
+            activateCatalog: AcceptActivation);
+    }
+
+    private static CatalogActivationResult AcceptActivation(Catalog catalog) => new(
+        CatalogActivationStatus.Accepted,
+        catalog.GeneratedAt,
+        null,
+        null);
+
+    private static Catalog CatalogWithProduct(string productId)
+    {
+        var release = new FirmwareRelease(
+            Version: "1.0.0",
+            ElfFilename: $"{productId}.elf",
+            ElfSha256: new string('0', 64),
+            ElfUrl: null,
+            ReleasedAt: DateTime.UnixEpoch,
+            Notes: null);
+        return new Catalog(
+            SchemaVersion: CatalogJson.CurrentSchemaVersion,
+            GeneratedAt: DateTime.UnixEpoch,
+            Products:
+            [
+                new Product(
+                    ProductId: productId,
+                    DisplayName: productId,
+                    Target: new TargetDescriptor(
+                        "PY32Fxxx", "PY32F002Ax5", 32, FlashOrigin: 0x08000000),
+                    Releases: [release],
+                    DefaultRelease: release.Version),
+            ]);
     }
 }

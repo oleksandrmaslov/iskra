@@ -58,8 +58,10 @@ public static class FirmwareImage
 {
     // Guard rails against a hostile or corrupt header table claiming absurd
     // counts. A Cortex-M image has a handful of loadable segments.
+    public const long MaxFirmwareFileBytes = 64L * 1024 * 1024;
     private const int MaxProgramHeaders = 512;
-    private const long MaxHexLines = 20_000_000;
+    private const long MaxHexLines = 1_000_000;
+    private const int MaxHexLineChars = 521;
 
     public static FirmwareImageResult Read(string path, FirmwareKind kind)
     {
@@ -68,6 +70,9 @@ public static class FirmwareImage
 
         try
         {
+            if (new FileInfo(path).Length > MaxFirmwareFileBytes)
+                return Fail(FirmwareImageStatus.Malformed,
+                    $"firmware exceeds the {MaxFirmwareFileBytes}-byte safety limit");
             return kind switch
             {
                 FirmwareKind.Hex => ReadIntelHex(path),
@@ -93,79 +98,74 @@ public static class FirmwareImage
         if (ident[0] != 0x7F || ident[1] != (byte)'E' || ident[2] != (byte)'L' || ident[3] != (byte)'F')
             return Fail(FirmwareImageStatus.Malformed, "missing ELF magic");
 
-        var is64 = ident[4] == 2;      // EI_CLASS: 1 = ELF32, 2 = ELF64
-        var isBig = ident[5] == 2;     // EI_DATA:  1 = LSB,   2 = MSB
-        if (ident[4] is not (1 or 2))
-            return Fail(FirmwareImageStatus.Malformed, $"unsupported ELF class {ident[4]}");
-        if (ident[5] is not (1 or 2))
-            return Fail(FirmwareImageStatus.Malformed, $"unsupported ELF data encoding {ident[5]}");
+        // ARM Cortex-M images are ELF32, little-endian, EM_ARM. Accepting a
+        // different architecture and merely range-checking its addresses can
+        // turn a correctly signed but mislabelled build into a destructive
+        // factory input.
+        if (ident[4] != 1)
+            return Fail(FirmwareImageStatus.Malformed, $"expected ELF32 for ARM Cortex-M (class {ident[4]})");
+        if (ident[5] != 1)
+            return Fail(FirmwareImageStatus.Malformed, $"expected little-endian ELF (encoding {ident[5]})");
+        if (ident[6] != 1)
+            return Fail(FirmwareImageStatus.Malformed, $"unsupported ELF identification version {ident[6]}");
 
-        // e_phoff / e_phentsize / e_phnum live at fixed offsets that differ
-        // between ELF32 and ELF64.
-        var headerSize = is64 ? 64 : 52;
+        const int headerSize = 52;
         var header = new byte[headerSize];
         fs.Position = 0;
         if (fs.Read(header, 0, headerSize) < headerSize)
             return Fail(FirmwareImageStatus.Malformed, "file is shorter than its ELF header");
 
-        ulong phoff;
-        int phentsize, phnum;
-        if (is64)
-        {
-            phoff = ReadU64(header.AsSpan(32), isBig);
-            phentsize = ReadU16(header.AsSpan(54), isBig);
-            phnum = ReadU16(header.AsSpan(56), isBig);
-        }
-        else
-        {
-            phoff = ReadU32(header.AsSpan(28), isBig);
-            phentsize = ReadU16(header.AsSpan(42), isBig);
-            phnum = ReadU16(header.AsSpan(44), isBig);
-        }
+        var elfType = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(16));
+        var machine = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(18));
+        if (elfType is not (2 or 3))
+            return Fail(FirmwareImageStatus.Malformed, $"ELF type {elfType} is not executable or position-independent");
+        if (machine != 40)
+            return Fail(FirmwareImageStatus.Malformed, $"ELF machine {machine} is not ARM (EM_ARM=40)");
+
+        var phoff = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(28));
+        var phentsize = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(42));
+        var phnum = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(44));
 
         if (phnum == 0)
             return Fail(FirmwareImageStatus.Empty, "ELF has no program headers");
         if (phnum > MaxProgramHeaders)
             return Fail(FirmwareImageStatus.Malformed, $"implausible program header count {phnum}");
 
-        var minEntry = is64 ? 56 : 32;
+        const int minEntry = 32;
         if (phentsize < minEntry)
             return Fail(FirmwareImageStatus.Malformed, $"program header entry size {phentsize} is too small");
 
         var tableBytes = (long)phentsize * phnum;
-        if (phoff > (ulong)long.MaxValue || (long)phoff + tableBytes > fs.Length)
+        if (phoff > fs.Length || tableBytes > fs.Length - phoff)
             return Fail(FirmwareImageStatus.Malformed, "program header table extends past end of file");
 
-        var table = new byte[tableBytes];
-        fs.Position = (long)phoff;
-        if (fs.Read(table, 0, (int)tableBytes) < tableBytes)
+        var table = new byte[checked((int)tableBytes)];
+        fs.Position = phoff;
+        if (fs.Read(table, 0, table.Length) < table.Length)
             return Fail(FirmwareImageStatus.Malformed, "program header table is truncated");
 
         var segments = new List<FirmwareSegment>();
         for (var i = 0; i < phnum; i++)
         {
             var entry = table.AsSpan(i * phentsize, phentsize);
-            var type = ReadU32(entry, isBig);
+            var type = BinaryPrimitives.ReadUInt32LittleEndian(entry);
             if (type != 1) continue; // PT_LOAD only
 
             // gdb's `load` writes file-backed bytes to the physical address, so
             // p_filesz and p_paddr are the pair that matter. p_memsz covers .bss,
             // which is never written by the programmer.
-            ulong paddr, filesz;
-            if (is64)
-            {
-                paddr = ReadU64(entry[16..], isBig);
-                filesz = ReadU64(entry[32..], isBig);
-            }
-            else
-            {
-                paddr = ReadU32(entry[12..], isBig);
-                filesz = ReadU32(entry[16..], isBig);
-            }
+            var offset = BinaryPrimitives.ReadUInt32LittleEndian(entry[4..]);
+            ulong paddr = BinaryPrimitives.ReadUInt32LittleEndian(entry[12..]);
+            ulong filesz = BinaryPrimitives.ReadUInt32LittleEndian(entry[16..]);
+            ulong memsz = BinaryPrimitives.ReadUInt32LittleEndian(entry[20..]);
 
             if (filesz == 0) continue;
-            if (paddr > ulong.MaxValue - filesz)
-                return Fail(FirmwareImageStatus.Malformed, "segment address overflows the address space");
+            if (filesz > memsz)
+                return Fail(FirmwareImageStatus.Malformed, "PT_LOAD file size exceeds its memory size");
+            if (offset > fs.Length || filesz > (ulong)(fs.Length - offset))
+                return Fail(FirmwareImageStatus.Malformed, "PT_LOAD file bytes extend past end of file");
+            if (paddr + filesz > (ulong)uint.MaxValue + 1UL)
+                return Fail(FirmwareImageStatus.Malformed, "PT_LOAD address exceeds the 32-bit Cortex-M address space");
             segments.Add(new FirmwareSegment(paddr, filesz));
         }
 
@@ -191,6 +191,9 @@ public static class FirmwareImage
         {
             if (++lineNumber > MaxHexLines)
                 return Fail(FirmwareImageStatus.Malformed, "implausible number of HEX records");
+            if (line.Length > MaxHexLineChars)
+                return Fail(FirmwareImageStatus.Malformed,
+                    $"line {lineNumber} exceeds the Intel HEX record limit");
 
             line = line.Trim();
             if (line.Length == 0) continue;
@@ -220,7 +223,17 @@ public static class FirmwareImage
             switch (recordType)
             {
                 case 0x00: // data
-                    if (count > 0) segments.Add(new FirmwareSegment(upperBase + offset, (ulong)count));
+                    if (count > 0)
+                    {
+                        var address = upperBase + offset;
+                        if (address > uint.MaxValue
+                            || (ulong)count > (ulong)uint.MaxValue + 1UL - address)
+                        {
+                            return Fail(FirmwareImageStatus.Malformed,
+                                $"line {lineNumber}: data record exceeds the 32-bit Cortex-M address space");
+                        }
+                        segments.Add(new FirmwareSegment(address, (ulong)count));
+                    }
                     break;
                 case 0x01: // end of file
                     sawEof = true;
@@ -307,15 +320,4 @@ public static class FirmwareImage
     private static FirmwareImageResult Fail(FirmwareImageStatus status, string diagnostic) =>
         new(status, Array.Empty<FirmwareSegment>(), diagnostic);
 
-    private static ushort ReadU16(ReadOnlySpan<byte> s, bool big) => big
-        ? BinaryPrimitives.ReadUInt16BigEndian(s)
-        : BinaryPrimitives.ReadUInt16LittleEndian(s);
-
-    private static uint ReadU32(ReadOnlySpan<byte> s, bool big) => big
-        ? BinaryPrimitives.ReadUInt32BigEndian(s)
-        : BinaryPrimitives.ReadUInt32LittleEndian(s);
-
-    private static ulong ReadU64(ReadOnlySpan<byte> s, bool big) => big
-        ? BinaryPrimitives.ReadUInt64BigEndian(s)
-        : BinaryPrimitives.ReadUInt64LittleEndian(s);
 }

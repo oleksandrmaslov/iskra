@@ -73,6 +73,7 @@ public sealed class TokenStore : ITokenStore
 {
     public const string DefaultDirectoryName = "Iskra";
     public const string DefaultFileName      = "auth.bin";
+    public const int MaxEncryptedTokenBytes = 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -112,7 +113,7 @@ public sealed class TokenStore : ITokenStore
         if (!File.Exists(Path)) return null;
 
         byte[] cipher;
-        try { cipher = File.ReadAllBytes(Path); }
+        try { cipher = BoundedFileReader.ReadAllBytes(Path, MaxEncryptedTokenBytes); }
         catch (IOException ex) { throw new TokenStoreException($"could not read {Path}: {ex.Message}", ex); }
         catch (UnauthorizedAccessException ex) { throw new TokenStoreException($"access denied reading {Path}", ex); }
 
@@ -123,6 +124,10 @@ public sealed class TokenStore : ITokenStore
             throw new TokenStoreException(
                 $"token blob at {Path} could not be decrypted (wrong scope, corrupted, or " +
                 "machine credentials changed) — delete the file and re-authenticate", ex);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(cipher);
         }
 
         try
@@ -136,6 +141,10 @@ public sealed class TokenStore : ITokenStore
         {
             throw new TokenStoreException($"token blob at {Path} is not valid JSON: {ex.Message}", ex);
         }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plain);
+        }
     }
 
     public void Save(StoredTokens tokens)
@@ -143,19 +152,28 @@ public sealed class TokenStore : ITokenStore
         if (tokens is null) throw new ArgumentNullException(nameof(tokens));
         ValidateLoaded(tokens);
 
-        var json   = JsonSerializer.SerializeToUtf8Bytes(tokens, JsonOpts);
-        var cipher = ProtectedData.Protect(json, optionalEntropy: null, scope: Scope);
-
-        var dir = System.IO.Path.GetDirectoryName(Path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-        var tmp = Path + ".tmp";
-        File.WriteAllBytes(tmp, cipher);
-        try { File.Move(tmp, Path, overwrite: true); }
-        catch
+        var json = JsonSerializer.SerializeToUtf8Bytes(tokens, JsonOpts);
+        byte[]? cipher = null;
+        try
         {
-            try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
-            throw;
+            cipher = ProtectedData.Protect(json, optionalEntropy: null, scope: Scope);
+
+            var dir = System.IO.Path.GetDirectoryName(Path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+            var tmp = Path + $".{Guid.NewGuid():N}.tmp";
+            File.WriteAllBytes(tmp, cipher);
+            try { File.Move(tmp, Path, overwrite: true); }
+            catch
+            {
+                try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
+                throw;
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(json);
+            if (cipher is not null) CryptographicOperations.ZeroMemory(cipher);
         }
     }
 

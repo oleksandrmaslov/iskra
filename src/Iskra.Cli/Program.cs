@@ -75,12 +75,24 @@ if (hasSideload && requireSigned)
     Console.Error.WriteLine(CliText.Get("Catalog.SideloadUnsigned"));
     return 2;
 }
+if (hasCatalog && hasSideload)
+{
+    Console.Error.WriteLine(CliText.Get(
+        "Catalog.Error",
+        "use either --catalog or --sideload-dir, not both"));
+    return 2;
+}
 
 int catIdx = Array.IndexOf(args, "--catalog");
+string? verifiedCatalogPath = null;
+CatalogFileVerificationResult? catalogVerification = null;
 if (catIdx >= 0 && catIdx + 1 < args.Length)
 {
-    var catalogPath = args[catIdx + 1];
-    var trust = CatalogTrust.VerifyCatalogFile(catalogPath, requireSigned);
+    verifiedCatalogPath = args[catIdx + 1];
+    catalogVerification = CatalogTrust.ReadAndVerifyCatalogFile(
+        verifiedCatalogPath,
+        requireSigned);
+    var trust = catalogVerification.TrustResult;
     switch (trust)
     {
         case CatalogTrustResult.Verified:
@@ -104,7 +116,63 @@ if (catIdx >= 0 && catIdx + 1 < args.Length)
     }
 }
 
-var resolution = CatalogResolver.Resolve(args);
+// A signed catalog is authoritative in production. Catalog-controlled CLI
+// values may only win when the two-part lab/manual gate above is active.
+ResolveResult resolution;
+if (verifiedCatalogPath is not null)
+{
+    if (catalogVerification?.CatalogBytes is not { } catalogBytes)
+    {
+        Console.Error.WriteLine(CliText.Get("Catalog.SignatureReadFailed"));
+        return 2;
+    }
+
+    Catalog catalog;
+    try
+    {
+        // Resolve from the same bounded buffer whose signature was checked;
+        // reopening --catalog here would reintroduce a TOCTOU window.
+        catalog = CatalogJson.Parse(catalogBytes.Span);
+    }
+    catch (CatalogParseException ex)
+    {
+        Console.Error.WriteLine(CliText.Get("Catalog.Error", ex.Message));
+        return 2;
+    }
+
+    if (catalogVerification.TrustResult == CatalogTrustResult.Verified)
+    {
+        try
+        {
+            CatalogJson.ValidateTrustedArtifactPaths(catalog);
+        }
+        catch (CatalogParseException ex)
+        {
+            Console.Error.WriteLine(CliText.Get("Catalog.Error", ex.Message));
+            return 2;
+        }
+
+        var activation = CatalogActivationPolicy.ValidateAndAdvance(catalog.GeneratedAt);
+        if (!activation.IsAccepted)
+        {
+            Console.Error.WriteLine(CliText.Get(
+                "Catalog.Error",
+                activation.Diagnostic ?? activation.Status.ToString()));
+            return 2;
+        }
+    }
+
+    var catalogDirectory = Path.GetDirectoryName(Path.GetFullPath(verifiedCatalogPath)) ?? "";
+    resolution = CatalogResolver.ResolveWithCatalog(
+        args,
+        catalog,
+        catalogDirectory,
+        allowCatalogOverrides: allowManualFlash);
+}
+else
+{
+    resolution = CatalogResolver.Resolve(args, allowCatalogOverrides: allowManualFlash);
+}
 if (!resolution.Ok)
 {
     Console.Error.WriteLine(CliText.Get("Catalog.Error", resolution.Error));
@@ -286,6 +354,20 @@ var preflightFailure = (hashWasRequired && !hashVerified)
             rangeResult.Diagnostic ?? rangeResult.Status.ToString())
         : default((string, string)?);
 
+string dbPath;
+try
+{
+    dbPath = AuditDatabasePathPolicy.ValidateAndNormalize(
+        opts.DbPath ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db"));
+    Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine(CliText.Get("Result.ErrorRaw", "E_AUDIT_PATH_INVALID", ex.Message));
+    Console.Error.WriteLine(OperatorText.ErrorHint("E_AUDIT_PATH_INVALID"));
+    return 2;
+}
+
 if (preflightFailure is { } failure)
 {
     var hashFail = new FlashOutcome(
@@ -303,10 +385,9 @@ if (preflightFailure is { } failure)
     Console.WriteLine(CliText.Get("Result.Details", hashFail.ErrorMessage));
     Console.WriteLine("============================================");
 
-    var dbPath0 = opts.DbPath ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db");
     try
     {
-        using var log = new SqliteLogStore(dbPath0);
+        using var log = new SqliteLogStore(dbPath);
         log.Append(new FlashAttemptRecord(
             TsUtc:           DateTime.UtcNow,
             Operator:        opts.Operator,
@@ -327,7 +408,8 @@ if (preflightFailure is { } failure)
             ErrorCode:       hashFail.ErrorCode,
             ErrorMessage:    hashFail.ErrorMessage,
             DurationMs:      0,
-            GdbTail:         null));
+            GdbTail:         null),
+            reserveBatchLock: false);
     }
     catch (Exception ex)
     {
@@ -335,8 +417,6 @@ if (preflightFailure is { } failure)
     }
     return 1;
 }
-
-var dbPath = opts.DbPath ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db");
 
 // Atomically reserve the complete firmware identity before GDB touches the
 // target. A database/reservation failure is a hard stop, not a warning.
@@ -378,7 +458,8 @@ try
             ErrorCode:       "E_BATCH_LOCKED",
             ErrorMessage:    msg,
             DurationMs:      0,
-            GdbTail:         null));
+            GdbTail:         null),
+            reserveBatchLock: false);
         return 1;
     }
 }
@@ -405,28 +486,12 @@ var outcome = await FlashStateMachine.RunAsync(
             Console.WriteLine($"  gdb> {line.Text}");
     });
 
-Console.WriteLine();
-if (outcome.IsPass)
-{
-    Console.WriteLine("============================================");
-    Console.WriteLine(CliText.Get("Flash.Success", outcome.Duration.TotalMilliseconds));
-    Console.WriteLine(CliText.Get("Flash.Target", outcome.DetectedTarget));
-    Console.WriteLine("============================================");
-}
-else
-{
-    Console.WriteLine("============================================");
-    Console.WriteLine(CliText.Get("Result.Error", outcome.ErrorCode));
-    Console.WriteLine($"  {OperatorText.ErrorHint(outcome.ErrorCode)}");
-    if (!string.IsNullOrEmpty(outcome.ErrorMessage))
-        Console.WriteLine(CliText.Get("Result.Details", outcome.ErrorMessage));
-    Console.WriteLine("============================================");
-}
-
+long? loggedRowId = null;
+string? auditWriteError = null;
 try
 {
     using var log = new SqliteLogStore(dbPath);
-    var rowId = log.Append(new FlashAttemptRecord(
+    loggedRowId = log.Append(new FlashAttemptRecord(
         TsUtc:           DateTime.UtcNow,
         Operator:        opts.Operator,
         StationId:       opts.StationId,
@@ -447,12 +512,45 @@ try
         ErrorMessage:    outcome.ErrorMessage,
         DurationMs:      (long)outcome.Duration.TotalMilliseconds,
         GdbTail:         outcome.GdbTail));
-    Console.WriteLine(CliText.Get("Flash.Logged", rowId, dbPath));
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine(CliText.Get("Result.LogWarning", ex.Message));
+    auditWriteError = ex.Message;
 }
+
+if (outcome.IsPass && auditWriteError is not null)
+{
+    outcome = new FlashOutcome(
+        FlashResult.Fail,
+        "E_AUDIT_WRITE_FAILED",
+        $"firmware was flashed and verified, but the audit record could not be persisted: {auditWriteError}",
+        outcome.DetectedTarget,
+        outcome.Duration,
+        outcome.GdbTail);
+}
+
+Console.WriteLine();
+if (outcome.IsPass)
+{
+    Console.WriteLine("============================================");
+    Console.WriteLine(CliText.Get("Flash.Success", outcome.Duration.TotalMilliseconds));
+    Console.WriteLine(CliText.Get("Flash.Target", outcome.DetectedTarget));
+    Console.WriteLine("============================================");
+}
+else
+{
+    Console.WriteLine("============================================");
+    Console.WriteLine(CliText.Get("Result.Error", outcome.ErrorCode));
+    Console.WriteLine($"  {OperatorText.ErrorHint(outcome.ErrorCode)}");
+    if (!string.IsNullOrEmpty(outcome.ErrorMessage))
+        Console.WriteLine(CliText.Get("Result.Details", outcome.ErrorMessage));
+    Console.WriteLine("============================================");
+}
+
+if (loggedRowId is not null)
+    Console.WriteLine(CliText.Get("Flash.Logged", loggedRowId.Value, dbPath));
+else if (auditWriteError is not null)
+    Console.Error.WriteLine(CliText.Get("Result.LogWarning", auditWriteError));
 
 return outcome.IsPass ? 0 : 1;
 
@@ -638,8 +736,9 @@ static int SignCatalog(string[] args)
         Console.Error.WriteLine($"private key not found: {keyPath}");
         return 2;
     }
-    var priv  = Convert.FromBase64String(File.ReadAllText(keyPath).Trim());
-    var bytes = File.ReadAllBytes(catalogPath);
+    var priv = Convert.FromBase64String(
+        BoundedFileReader.ReadUtf8String(keyPath, 64 * 1024).Trim());
+    var bytes = BoundedFileReader.ReadAllBytes(catalogPath, CatalogJson.MaxCatalogBytes);
     var sig   = CatalogSignature.Sign(bytes, priv);
     var sigPath = CatalogTrust.SignaturePathFor(catalogPath);
     File.WriteAllText(sigPath, Convert.ToBase64String(sig));
@@ -649,7 +748,8 @@ static int SignCatalog(string[] args)
 
 static async Task<int> LoginAsync()
 {
-    if (!OperatingSystem.IsWindows())
+    var store = PlatformTokenStoreFactory.Create();
+    if (store is null)
     {
         Console.Error.WriteLine(CliText.Get("Auth.StoreUnsupported"));
         return 5;
@@ -696,7 +796,6 @@ static async Task<int> LoginAsync()
         Console.Error.WriteLine(CliText.Get("Common.Cancelled")); return 5;
     }
 
-    var store = new TokenStore();
     try { store.Save(StoredTokens.From(token, DateTime.UtcNow)); }
     catch (Exception ex)
     {
@@ -714,14 +813,22 @@ static async Task<int> LoginAsync()
 
 static int Logout()
 {
-    if (!OperatingSystem.IsWindows())
+    var store = PlatformTokenStoreFactory.Create();
+    if (store is null)
     {
         Console.Error.WriteLine(CliText.Get("Auth.StoreUnavailable"));
         return 5;
     }
 
-    var store = new TokenStore();
-    if (!store.Exists())
+    bool exists;
+    try { exists = store.Exists(); }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(CliText.Get("Auth.DeleteFailed", store.Path, ex.Message));
+        return 5;
+    }
+
+    if (!exists)
     {
         Console.WriteLine(CliText.Get("Auth.AlreadyLoggedOut"));
         return 0;
@@ -738,13 +845,13 @@ static int Logout()
 
 static async Task<int> WhoamiAsync()
 {
-    if (!OperatingSystem.IsWindows())
+    var store = PlatformTokenStoreFactory.Create();
+    if (store is null)
     {
         Console.Error.WriteLine(CliText.Get("Auth.StoreUnavailable"));
         return 5;
     }
 
-    var store = new TokenStore();
     StoredTokens? stored;
     try { stored = store.Load(); }
     catch (TokenStoreException ex)
@@ -786,13 +893,15 @@ static async Task<int> WhoamiAsync()
     req.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
     req.Headers.UserAgent.ParseAdd("Iskra");
     req.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
-    using var resp = await http.SendAsync(req);
+    using var resp = await http.SendAsync(
+        req, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
     if (!resp.IsSuccessStatusCode)
     {
         Console.Error.WriteLine($"GitHub /user → {(int)resp.StatusCode} {resp.ReasonPhrase}");
         return 5;
     }
-    var body = await resp.Content.ReadAsStringAsync();
+    var body = await BoundedHttpContent.ReadUtf8StringAsync(
+        resp.Content, 64 * 1024, CancellationToken.None);
     using var doc = System.Text.Json.JsonDocument.Parse(body);
     if (doc.RootElement.TryGetProperty("login", out var login))
         Console.WriteLine(CliText.Get("Auth.GitHubUser", login.GetString()));
@@ -876,12 +985,12 @@ static async Task<int> ShipLogsNowAsync(string[] args)
 
 static async Task<string> FetchRemoteFirmwareAsync(GitHubReleaseRef src, string expectedSha)
 {
-    if (!OperatingSystem.IsWindows())
+    var store = PlatformTokenStoreFactory.Create();
+    if (store is null)
         throw new PlatformNotSupportedException(CliText.Get("Firmware.PrivateUnsupported"));
 
     using var http = new HttpClient();
     var flow = new GitHubDeviceFlow(http, GitHubAppConfig.ClientId);
-    var store = new TokenStore();
     var provider = new AccessTokenProvider(store, flow);
     var api = new GitHubReleaseAssetClient(http);
     var cache = new FirmwareCache(api, provider.GetFreshAccessTokenAsync);
@@ -1018,17 +1127,27 @@ static int Doctor(string[] args)
         }
         else
         {
-            try
+            var verification = CatalogTrust.ReadAndVerifyCatalogFile(
+                catalogPath,
+                requireSigned: true);
+            if (verification.CatalogBytes is { } catalogBytes)
             {
-                var catalog = CatalogJson.ParseFile(catalogPath);
-                Pass("Catalog JSON", CliText.Get("Doctor.Products", catalog.Products.Count, catalogPath));
+                try
+                {
+                    var catalog = CatalogJson.Parse(catalogBytes.Span);
+                    Pass("Catalog JSON", CliText.Get("Doctor.Products", catalog.Products.Count, catalogPath));
+                }
+                catch (CatalogParseException ex)
+                {
+                    Fail("Catalog JSON", ex.Message);
+                }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CatalogParseException)
+            else
             {
-                Fail("Catalog JSON", ex.Message);
+                Fail("Catalog JSON", CliText.Get("Doctor.CatalogReadFailed"));
             }
 
-            var trust = CatalogTrust.VerifyCatalogFile(catalogPath, requireSigned: true);
+            var trust = verification.TrustResult;
             switch (trust)
             {
                 case CatalogTrustResult.Verified:
@@ -1056,22 +1175,32 @@ static int Doctor(string[] args)
     var localAppData = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Iskra");
+    var localAppDataLabel = OperatingSystem.IsWindows()
+        ? "%LOCALAPPDATA%\\Iskra"
+        : localAppData;
     if (CanWriteDirectory(localAppData, out var localError))
-        Pass("%LOCALAPPDATA%\\Iskra", CliText.Get("Doctor.Writable"));
+        Pass(localAppDataLabel, CliText.Get("Doctor.Writable"));
     else
-        Fail("%LOCALAPPDATA%\\Iskra", localError ?? CliText.Get("Doctor.NotWritable"));
+        Fail(localAppDataLabel, localError ?? CliText.Get("Doctor.NotWritable"));
 
-    var programData = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "Iskra");
-    if (CanWriteDirectory(programData, out var programDataError))
-        Pass("%PROGRAMDATA%\\Iskra", CliText.Get("Doctor.Writable"));
-    else
-        Fail("%PROGRAMDATA%\\Iskra", programDataError ?? CliText.Get("Doctor.NotWritable"));
+    // WPF/DPAPI intentionally uses machine-wide ProgramData. Unix credentials
+    // live in the per-user Keychain/Secret Service, and a packaged station's
+    // shared files are normally root-owned/read-only, so requiring write access
+    // there would incorrectly fail a healthy locked-down station.
+    if (OperatingSystem.IsWindows())
+    {
+        var programData = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "Iskra");
+        if (CanWriteDirectory(programData, out var programDataError))
+            Pass("%PROGRAMDATA%\\Iskra", CliText.Get("Doctor.Writable"));
+        else
+            Fail("%PROGRAMDATA%\\Iskra", programDataError ?? CliText.Get("Doctor.NotWritable"));
+    }
 
     // Same classification the desktop frontends render, so a doctor report and
     // the Settings tab can never disagree about the session state.
-    var authSnapshot = new AuthWorkflow(OperatingSystem.IsWindows() ? new TokenStore() : null).Evaluate();
+    var authSnapshot = new AuthWorkflow(PlatformTokenStoreFactory.Create()).Evaluate();
     switch (authSnapshot.Status)
     {
         case AuthStatus.SecureStoreUnavailable:

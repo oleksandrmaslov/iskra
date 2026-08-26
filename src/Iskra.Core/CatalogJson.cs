@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -16,6 +17,12 @@ public sealed class CatalogParseException : Exception
 public static class CatalogJson
 {
     public const int CurrentSchemaVersion = 1;
+    /// <summary>
+    /// Maximum accepted UTF-8 catalog size. Four MiB leaves ample room for a
+    /// large release catalog while bounding memory and parser work on hostile
+    /// local input.
+    /// </summary>
+    public const int MaxCatalogBytes = 4 * 1024 * 1024;
 
     public static JsonSerializerOptions DefaultOptions { get; } = new()
     {
@@ -29,6 +36,10 @@ public static class CatalogJson
 
     public static Catalog Parse(string json)
     {
+        ArgumentNullException.ThrowIfNull(json);
+        if (Encoding.UTF8.GetByteCount(json) > MaxCatalogBytes)
+            throw TooLarge();
+
         Catalog? c;
         try
         {
@@ -43,11 +54,55 @@ public static class CatalogJson
         return c;
     }
 
+    /// <summary>Deserializes and validates one already-captured UTF-8 snapshot.</summary>
+    public static Catalog Parse(ReadOnlySpan<byte> utf8Json)
+    {
+        if (utf8Json.Length > MaxCatalogBytes)
+            throw TooLarge();
+
+        // File.ReadAllText historically accepted a UTF-8 BOM. Preserve that
+        // compatibility while parsing directly from the verified bytes.
+        if (utf8Json.Length >= 3
+            && utf8Json[0] == 0xEF
+            && utf8Json[1] == 0xBB
+            && utf8Json[2] == 0xBF)
+        {
+            utf8Json = utf8Json[3..];
+        }
+
+        Catalog? c;
+        try
+        {
+            c = JsonSerializer.Deserialize<Catalog>(utf8Json, DefaultOptions);
+        }
+        catch (JsonException ex)
+        {
+            throw new CatalogParseException($"catalog json invalid: {ex.Message}", ex);
+        }
+
+        if (c is null) throw new CatalogParseException("catalog deserialised to null");
+        Validate(c);
+        return c;
+    }
+
     public static Catalog ParseFile(string path)
     {
-        if (!File.Exists(path))
-            throw new CatalogParseException($"catalog not found: {path}");
-        return Parse(File.ReadAllText(path));
+        try
+        {
+            return Parse(BoundedFileReader.ReadAllBytes(path, MaxCatalogBytes));
+        }
+        catch (FileNotFoundException ex)
+        {
+            throw new CatalogParseException($"catalog not found: {path}", ex);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            throw new CatalogParseException($"catalog not found: {path}", ex);
+        }
+        catch (FileSizeLimitExceededException ex)
+        {
+            throw new CatalogParseException(ex.Message, ex);
+        }
     }
 
     public static string Write(Catalog catalog)
@@ -56,11 +111,51 @@ public static class CatalogJson
     public static byte[] WriteUtf8(Catalog catalog)
         => JsonSerializer.SerializeToUtf8Bytes(catalog, DefaultOptions);
 
+    /// <summary>
+    /// Applies the stricter path policy used after a catalog has crossed the
+    /// production signature boundary. Unsigned sideload catalogs intentionally
+    /// carry absolute local paths and therefore do not call this method.
+    /// </summary>
+    public static void ValidateTrustedArtifactPaths(Catalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        foreach (var product in catalog.Products)
+        {
+            if (product.Target.FlashOrigin is null)
+                throw new CatalogParseException(
+                    $"{product.ProductId}: a trusted catalog must declare target.flash_origin");
+            var flashEnd = product.Target.FlashOrigin.Value
+                + checked((ulong)product.Target.FlashKb * 1024UL);
+            if (flashEnd > (ulong)uint.MaxValue + 1UL)
+                throw new CatalogParseException(
+                    $"{product.ProductId}: target flash window exceeds the 32-bit Cortex-M address space");
+
+            foreach (var release in product.Releases)
+            {
+                if (!IsPortableLeafName(release.ElfFilename))
+                    throw new CatalogParseException(
+                        $"{product.ProductId} v{release.Version}: trusted elf_filename must be a portable leaf name");
+
+                if (release.ElfSource is { } source)
+                {
+                    if (!IsPortableLeafName(source.Tag))
+                        throw new CatalogParseException(
+                            $"{product.ProductId} v{release.Version}: elf_source.tag must be one portable path segment");
+                    if (!IsPortableLeafName(source.Asset))
+                        throw new CatalogParseException(
+                            $"{product.ProductId} v{release.Version}: elf_source.asset must be a portable leaf name");
+                }
+            }
+        }
+    }
+
     public static void Validate(Catalog c)
     {
         if (c.SchemaVersion != CurrentSchemaVersion)
             throw new CatalogParseException(
                 $"unsupported schema_version {c.SchemaVersion} (need {CurrentSchemaVersion})");
+        if (c.GeneratedAt == default || c.GeneratedAt.Kind == DateTimeKind.Unspecified)
+            throw new CatalogParseException("catalog.generated_at must be an ISO-8601 timestamp with timezone");
         if (c.Products is null) throw new CatalogParseException("catalog.products missing");
         if (c.Products.Count == 0) throw new CatalogParseException("catalog has no products");
 
@@ -102,8 +197,14 @@ public static class CatalogJson
             throw new CatalogParseException($"{p.ProductId}: target.flash_kb must be > 0");
         if (p.Target.FrequencyHz is <= 0)
             throw new CatalogParseException($"{p.ProductId}: target.frequency_hz must be > 0");
+        if (p.Target.FrequencyHz is > FlashOptions.MaxBmpFrequencyHz)
+            throw new CatalogParseException(
+                $"{p.ProductId}: target.frequency_hz must be <= {FlashOptions.MaxBmpFrequencyHz}");
         if (p.Target.TimeoutSeconds is <= 0)
             throw new CatalogParseException($"{p.ProductId}: target.timeout_s must be > 0");
+        if (p.Target.TimeoutSeconds is > FlashOptions.MaxTimeoutSeconds)
+            throw new CatalogParseException(
+                $"{p.ProductId}: target.timeout_s must be <= {FlashOptions.MaxTimeoutSeconds}");
 
         // The optional memory map is all-or-nothing per region: a half-declared
         // RAM window would silently widen or narrow the accepted address space.
@@ -173,11 +274,26 @@ public static class CatalogJson
     {
         int slash = s.IndexOf('/');
         if (slash <= 0 || slash != s.LastIndexOf('/') || slash == s.Length - 1) return false;
+        if (s[..slash] is "." or ".." || s[(slash + 1)..] is "." or "..") return false;
         foreach (var c in s)
             if (!(char.IsLetterOrDigit(c) || c is '-' or '_' or '.' or '/')) return false;
         return true;
     }
 
+    private static bool IsPortableLeafName(string value)
+    {
+        const string invalid = "<>:\"/\\|?*";
+        return !string.IsNullOrWhiteSpace(value)
+            && value is not "." and not ".."
+            && !Path.IsPathRooted(value)
+            && !value.EndsWith(' ')
+            && !value.EndsWith('.')
+            && !value.Any(c => c < ' ' || invalid.Contains(c));
+    }
+
     private static bool IsHex(char c) =>
         (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+    private static CatalogParseException TooLarge() => new(
+        $"catalog exceeds the {MaxCatalogBytes}-byte limit");
 }
