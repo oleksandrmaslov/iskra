@@ -3,6 +3,17 @@ using System.Text.Json.Serialization;
 
 namespace Iskra.Core;
 
+public sealed class AppSettingsLoadException : Exception
+{
+    public AppSettingsLoadException(string path, string message, Exception inner)
+        : base($"settings at '{path}' are unreadable or invalid: {message}", inner)
+    {
+        SettingsPath = path;
+    }
+
+    public string SettingsPath { get; }
+}
+
 /// <summary>
 /// Operator-configurable keyboard shortcut that triggers the FLASH button
 /// on the WPF main window. <see cref="None"/> disables the shortcut entirely.
@@ -78,6 +89,7 @@ public static class IskraLanguages
 /// </summary>
 public sealed class AppSettings
 {
+    public const int MaxLogShipIntervalMinutes = 24 * 60;
     // Operator language. Ukrainian remains the safe compatibility default.
     public string LanguageCode { get; set; } = IskraLanguages.Ukrainian;
 
@@ -192,11 +204,20 @@ public static class AppSettingsStore
         {
             var json = BoundedFileReader.ReadUtf8String(path, MaxSettingsBytes);
             settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            Validate(settings);
         }
-        catch
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or System.Text.DecoderFallbackException
+            or JsonException
+            or InvalidDataException
+            or NotSupportedException
+            or ArgumentException)
         {
-            // Corrupt settings file shouldn't break the app — fall back to defaults.
-            return new AppSettings();
+            // Defaults can materially change catalog, GDB, power, timeout, and
+            // audit policy. Preserve the original file and fail closed instead
+            // of silently operating under a different station configuration.
+            throw new AppSettingsLoadException(path, ex.Message, ex);
         }
         // Sprint 6: a tampered settings.json cannot widen the catalog-source
         // allowlist. If the on-disk owner/repo isn't allowed, snap back to the
@@ -215,8 +236,37 @@ public static class AppSettingsStore
         return settings;
     }
 
+    internal static void Validate(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (settings.BmpFrequencyHz <= 0
+            || settings.BmpFrequencyHz > FlashOptions.MaxBmpFrequencyHz)
+        {
+            throw new InvalidDataException("bmp_frequency_hz is outside the supported range");
+        }
+        if (settings.TimeoutSeconds <= 0
+            || settings.TimeoutSeconds > FlashOptions.MaxTimeoutSeconds)
+        {
+            throw new InvalidDataException("timeout_seconds is outside the supported range");
+        }
+        if (settings.LogShipIntervalMinutes <= 0
+            || settings.LogShipIntervalMinutes > AppSettings.MaxLogShipIntervalMinutes)
+        {
+            throw new InvalidDataException("log_ship_interval_minutes is outside the supported range");
+        }
+        if (string.IsNullOrWhiteSpace(settings.StationId))
+            throw new InvalidDataException("station_id is required");
+        if (!Enum.IsDefined(settings.Power))
+            throw new InvalidDataException("power is not a supported value");
+        if (!Enum.IsDefined(settings.FlashHotkey))
+            throw new InvalidDataException("flash_hotkey is not a supported value");
+        if (!string.IsNullOrWhiteSpace(settings.DbPath))
+            _ = AuditDatabasePathPolicy.ValidateAndNormalize(settings.DbPath);
+    }
+
     public static void Save(AppSettings settings, string? path = null)
     {
+        Validate(settings);
         path ??= DefaultPath;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var tmp = path + $".{Guid.NewGuid():N}.tmp";

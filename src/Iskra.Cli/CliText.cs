@@ -63,6 +63,7 @@ internal static class CliText
     private static Dictionary<string, string> Ukrainian() => new(StringComparer.Ordinal)
     {
         ["Language.Invalid"] = "Помилка: --lang підтримує лише uk, en або de (також приймаються uk-UA, en-US і de-DE).",
+        ["Settings.LoadFailed"] = "Помилка: налаштування пошкоджені або недоступні: {0}. Файл збережено без змін. Виправте або видаліть його перед роботою. Деталі: {1}",
         ["Lab.Locked"] = "Помилка: лабораторний режим заблоковано. Лише на лабораторній станції задайте {0}=1.",
         ["Catalog.Required"] = "Помилка: операторський режим вимагає підписаний --catalog. Для ручної лабораторної прошивки потрібні --allow-manual-flash і {0}=1.",
         ["Catalog.SideloadUnsigned"] = "Помилка: sideload-каталог не підписано. Для лабораторної перевірки явно додайте --allow-unsigned-catalog.",
@@ -201,6 +202,7 @@ internal static class CliText
         var d = new Dictionary<string, string>(Ukrainian(), StringComparer.Ordinal)
         {
             ["Language.Invalid"] = "Error: --lang supports only uk, en, or de (uk-UA, en-US, and de-DE are also accepted).",
+            ["Settings.LoadFailed"] = "Error: settings are corrupt or unreadable: {0}. The file was preserved unchanged. Repair or remove it before operation. Details: {1}",
             ["Lab.Locked"] = "Error: laboratory mode is locked. Set {0}=1 only on a laboratory station.",
             ["Catalog.Required"] = "Error: operator mode requires a signed --catalog. Manual laboratory flashing requires --allow-manual-flash and {0}=1.",
             ["Catalog.SideloadUnsigned"] = "Error: a sideload catalog is unsigned. For laboratory testing, explicitly add --allow-unsigned-catalog.",
@@ -341,6 +343,7 @@ internal static class CliText
         var d = new Dictionary<string, string>(English(), StringComparer.Ordinal)
         {
             ["Language.Invalid"] = "Fehler: --lang unterstützt nur uk, en oder de (uk-UA, en-US und de-DE werden ebenfalls akzeptiert).",
+            ["Settings.LoadFailed"] = "Fehler: Die Einstellungen sind beschädigt oder nicht lesbar: {0}. Die Datei wurde unverändert beibehalten. Reparieren oder entfernen Sie sie vor dem Betrieb. Details: {1}",
             ["Lab.Locked"] = "Fehler: Der Labormodus ist gesperrt. Setzen Sie {0}=1 ausschließlich auf einer Laborstation.",
             ["Catalog.Required"] = "Fehler: Der Bedienermodus erfordert einen signierten --catalog. Manuelles Flashen im Labor erfordert --allow-manual-flash und {0}=1.",
             ["Catalog.SideloadUnsigned"] = "Fehler: Der Sideload-Katalog ist nicht signiert. Fügen Sie für Labortests ausdrücklich --allow-unsigned-catalog hinzu.",

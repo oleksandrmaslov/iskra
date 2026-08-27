@@ -39,6 +39,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void OnWindowOpened(object? sender, EventArgs e)
     {
+        _viewModel?.StartBackgroundServices();
         var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
         if (screen is null) return;
 
@@ -134,7 +135,10 @@ public sealed partial class MainWindow : Window
         {
             e.Cancel = true;
             MainTabs.SelectedIndex = SettingsTabIndex;
+            return;
         }
+
+        _viewModel.StopBackgroundServices();
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)

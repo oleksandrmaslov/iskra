@@ -108,6 +108,29 @@ public sealed class SettingsWorkflowTests
     }
 
     [Fact]
+    public void Log_ship_interval_accepts_the_daily_limit_and_rejects_one_minute_over()
+    {
+        var current = new AppSettings();
+        var atLimit = SettingsDraft.FromSettings(current) with
+        {
+            LogShipIntervalMinutes = AppSettings.MaxLogShipIntervalMinutes.ToString(),
+        };
+        var overLimit = atLimit with
+        {
+            LogShipIntervalMinutes = (AppSettings.MaxLogShipIntervalMinutes + 1).ToString(),
+        };
+
+        var accepted = new SettingsWorkflow().BuildCandidate(current, atLimit);
+        var rejected = new SettingsWorkflow().BuildCandidate(current, overLimit);
+
+        Assert.True(accepted.IsSaved);
+        Assert.Equal(AppSettings.MaxLogShipIntervalMinutes, accepted.Settings!.LogShipIntervalMinutes);
+        Assert.Equal(SettingsSaveStatus.ValidationFailed, rejected.Status);
+        Assert.Equal(SettingsField.LogShipIntervalMinutes, rejected.InvalidField);
+        Assert.Null(rejected.Settings);
+    }
+
+    [Fact]
     public void Disabled_batches_clear_stale_last_batch_and_blank_values_use_defaults()
     {
         var current = new AppSettings { LastBatch = "OLD" };

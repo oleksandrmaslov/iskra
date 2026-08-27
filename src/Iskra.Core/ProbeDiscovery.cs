@@ -1,4 +1,8 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Text;
+using System.Xml;
+using System.Xml.Linq;
 using Microsoft.Win32;
 
 namespace Iskra.Core;
@@ -20,8 +24,11 @@ public sealed record ProbeInfo(
 /// </summary>
 public static class ProbeDiscovery
 {
+    internal const int BmpUsbVendorId = 0x1D50;
+    internal const int BmpUsbProductId = 0x6018;
     private const string BmpVidPidPrefix = "VID_1D50&PID_6018";
     private const string UsbEnumRoot = @"SYSTEM\CurrentControlSet\Enum\USB";
+    private const int MaxIoRegistryBytes = 8 * 1024 * 1024;
 
     public static IReadOnlyList<ProbeInfo> FindAll()
     {
@@ -41,7 +48,10 @@ public static class ProbeDiscovery
         // both BMP interfaces the same nondescript FriendlyName. BMP firmware
         // convention is GDB on the lower-numbered port of each consecutive pair;
         // sort and keep one port per pair.
-        if (all.Count == 0) return all;
+        // Never apply this heuristic to Linux/macOS: their native adapters
+        // expose the USB interface number, and guessing would turn an
+        // unidentified serial endpoint into a flash-capable GDB endpoint.
+        if (!OperatingSystem.IsWindows() || all.Count == 0) return named;
         var sorted = all.OrderBy(p => ParseComNumber(p.PortName)).ToList();
         return sorted.Where((_, i) => i % 2 == 0).ToList();
     }
@@ -90,6 +100,81 @@ public static class ProbeDiscovery
             ?.SerialNumber;
     }
 
+    /// <summary>
+    /// Produces the stable physical key used by the machine-wide probe lock.
+    /// USB VID/PID and serial take precedence; an OS physical instance is the
+    /// fail-safe fallback, followed by a canonical endpoint only when discovery
+    /// cannot provide hardware metadata.
+    /// </summary>
+    public static string ResolveProbeLockIdentity(string endpoint, string? knownSerial = null)
+    {
+        var normalizedEndpoint = CanonicalizeEndpointAlias(endpoint);
+        if (!string.IsNullOrWhiteSpace(knownSerial))
+            return BmpSerialIdentity(knownSerial);
+
+        try
+        {
+            var probe = FindAll().FirstOrDefault(candidate =>
+                string.Equals(
+                    CanonicalizeEndpointAlias(candidate.PortName),
+                    normalizedEndpoint,
+                    EndpointComparison()));
+            if (probe is not null) return ProbeLockIdentity(probe);
+        }
+        catch
+        {
+            // Endpoint identity remains a fail-closed compatibility fallback
+            // for explicit remote/manual transports and discovery failures.
+        }
+
+        return $"endpoint:{normalizedEndpoint}";
+    }
+
+    internal static string ProbeLockIdentity(ProbeInfo probe)
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        if (!string.IsNullOrWhiteSpace(probe.SerialNumber))
+            return BmpSerialIdentity(probe.SerialNumber);
+
+        if (!string.IsNullOrWhiteSpace(probe.DeviceInstanceId))
+        {
+            var instance = NormalizeIdentityComponent(probe.DeviceInstanceId);
+            return $"usb:{BmpUsbVendorId:x4}:{BmpUsbProductId:x4}:instance:{instance}";
+        }
+
+        return $"endpoint:{CanonicalizeEndpointAlias(probe.PortName)}";
+    }
+
+    internal static string CanonicalizeEndpointAlias(string endpoint)
+    {
+        var normalized = GdbCommandBuilder.NormalizeProbeEndpoint(endpoint);
+        if (normalized.StartsWith(@"\\.\COM", StringComparison.OrdinalIgnoreCase))
+            return normalized.ToUpperInvariant();
+
+        if (!normalized.StartsWith("/dev/", StringComparison.Ordinal))
+            return normalized.ToLowerInvariant();
+
+        var fullPath = Path.GetFullPath(normalized);
+        try
+        {
+            var target = File.ResolveLinkTarget(fullPath, returnFinalTarget: true);
+            if (target is not null) fullPath = Path.GetFullPath(target.FullName);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        catch (PlatformNotSupportedException) { }
+        return fullPath;
+    }
+
+    private static StringComparison EndpointComparison() =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static string BmpSerialIdentity(string serial) =>
+        $"usb:{BmpUsbVendorId:x4}:{BmpUsbProductId:x4}:serial:{NormalizeIdentityComponent(serial)}";
+
+    private static string NormalizeIdentityComponent(string value) =>
+        value.Trim().Normalize(NormalizationForm.FormC).ToUpperInvariant();
+
     public static string? StableSerialFromInstanceName(string? instanceName, string? parentIdPrefix = null)
     {
         if (!string.IsNullOrWhiteSpace(instanceName) &&
@@ -102,25 +187,27 @@ public static class ProbeDiscovery
     }
 
     /// <summary>
-    /// Enumerates candidate probe interfaces on macOS.
-    ///
-    /// <para>macOS names a composite CDC device <c>/dev/cu.usbmodem</c> +
-    /// serial + the USB interface number, so Black Magic Probe surfaces as
-    /// <c>…1</c> (interface 0, GDB) and <c>…3</c> (interface 2, UART). That
-    /// trailing digit is the only classification signal available without
-    /// shelling out to <c>ioreg</c>, so it is what this uses.</para>
-    ///
-    /// <para>Unlike the Windows adapter there is no VID/PID filter, so an
-    /// unrelated USB modem can appear here. That degrades safely rather than
-    /// dangerously: station readiness demands exactly one probe, so a second
-    /// device blocks flashing instead of being flashed, and a non-BMP endpoint
-    /// still fails the scan phase before any write.</para>
-    ///
-    /// <para>The optional root makes this deterministic in tests; production
-    /// uses <c>/dev</c>. Not yet verified against a probe on real macOS
-    /// hardware.</para>
+    /// Enumerates official Black Magic Probe interfaces on macOS. Production
+    /// reads the native IOUSB registry through <c>/usr/sbin/ioreg</c> and binds
+    /// each callout device to VID/PID, interface number, and serial/location
+    /// identity. The filename convention is retained only for an injected test
+    /// root and is never used by the production <c>/dev</c> path.
     /// </summary>
     public static IReadOnlyList<ProbeInfo> FindMacOs(string devRoot = "/dev")
+    {
+        if (string.Equals(Path.GetFullPath(devRoot), "/dev", StringComparison.Ordinal))
+        {
+            if (!OperatingSystem.IsMacOS()) return Array.Empty<ProbeInfo>();
+            var snapshot = ReadMacOsIoRegistry();
+            return snapshot is null
+                ? Array.Empty<ProbeInfo>()
+                : ParseMacOsIoRegistry(snapshot.Value, devRoot);
+        }
+
+        return FindMacOsFilenameFixture(devRoot);
+    }
+
+    private static IReadOnlyList<ProbeInfo> FindMacOsFilenameFixture(string devRoot)
     {
         var results = new List<ProbeInfo>();
         if (!Directory.Exists(devRoot)) return results;
@@ -159,6 +246,200 @@ public static class ProbeDiscovery
 
         return results;
     }
+
+    internal static IReadOnlyList<ProbeInfo> ParseMacOsIoRegistry(
+        ReadOnlyMemory<byte> plistBytes,
+        string devRoot = "/dev")
+    {
+        var results = new List<ProbeInfo>();
+        try
+        {
+            using var stream = new MemoryStream(plistBytes.ToArray(), writable: false);
+            var settings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Ignore,
+                XmlResolver = null,
+                MaxCharactersInDocument = MaxIoRegistryBytes,
+            };
+            using var reader = XmlReader.Create(stream, settings);
+            var document = XDocument.Load(reader, LoadOptions.None);
+            var top = document.Root?.Elements().FirstOrDefault(e => e.Name.LocalName is "array" or "dict");
+            if (top is null) return results;
+
+            if (top.Name.LocalName == "dict")
+                VisitMacRegistryDictionary(top, default, devRoot, results);
+            else
+            {
+                foreach (var dictionary in top.Elements().Where(e => e.Name.LocalName == "dict"))
+                    VisitMacRegistryDictionary(dictionary, default, devRoot, results);
+            }
+        }
+        catch (InvalidDataException) { }
+        catch (XmlException) { }
+        catch (IOException) { }
+
+        return results
+            .GroupBy(p => CanonicalizeEndpointAlias(p.PortName), EndpointComparer())
+            .Select(group => group.First())
+            .OrderBy(p => p.PortName, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static void VisitMacRegistryDictionary(
+        XElement dictionary,
+        MacUsbContext inherited,
+        string devRoot,
+        List<ProbeInfo> results)
+    {
+        var properties = ReadPlistDictionary(dictionary);
+        var context = inherited with
+        {
+            VendorId = PlistInteger(properties, "idVendor") ?? inherited.VendorId,
+            ProductId = PlistInteger(properties, "idProduct") ?? inherited.ProductId,
+            InterfaceNumber = PlistInteger(properties, "bInterfaceNumber") ?? inherited.InterfaceNumber,
+            LocationId = PlistInteger(properties, "locationID") ?? inherited.LocationId,
+            RegistryEntryId = PlistInteger(properties, "IORegistryEntryID") ?? inherited.RegistryEntryId,
+            SerialNumber = PlistString(properties, "USB Serial Number") ?? inherited.SerialNumber,
+            ProductName = PlistString(properties, "USB Product Name")
+                ?? PlistString(properties, "Product Name")
+                ?? inherited.ProductName,
+        };
+
+        var callout = PlistString(properties, "IOCalloutDevice");
+        if (!string.IsNullOrWhiteSpace(callout)
+            && context.VendorId == BmpUsbVendorId
+            && context.ProductId == BmpUsbProductId)
+        {
+            var name = Path.GetFileName(callout);
+            if (name.StartsWith("cu.", StringComparison.Ordinal))
+            {
+                var port = devRoot.TrimEnd('/', '\\').Replace('\\', '/') + "/" + name;
+                var physical = context.SerialNumber
+                    ?? (context.LocationId is int location ? $"location-{location:x8}" : null)
+                    ?? (context.RegistryEntryId is int entry ? $"registry-{entry:x}" : null)
+                    ?? name;
+                var interfaceNumber = context.InterfaceNumber is int number
+                    ? number.ToString("x2", System.Globalization.CultureInfo.InvariantCulture)
+                    : null;
+                var role = ClassifyUsbInterfaceNumber(interfaceNumber);
+                results.Add(new ProbeInfo(
+                    PortName: port,
+                    FriendlyName: context.ProductName ?? "Black Magic Probe",
+                    DeviceInstanceId: $"IOKit/{physical}/if-{interfaceNumber ?? "unknown"}",
+                    Interface: role,
+                    SerialNumber: context.SerialNumber));
+            }
+        }
+
+        if (properties.TryGetValue("IORegistryEntryChildren", out var children)
+            && children.Name.LocalName == "array")
+        {
+            foreach (var child in children.Elements().Where(e => e.Name.LocalName == "dict"))
+                VisitMacRegistryDictionary(child, context, devRoot, results);
+        }
+    }
+
+    private static Dictionary<string, XElement> ReadPlistDictionary(XElement dictionary)
+    {
+        var properties = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        var elements = dictionary.Elements().ToList();
+        for (var i = 0; i + 1 < elements.Count; i += 2)
+        {
+            if (elements[i].Name.LocalName != "key") continue;
+            properties[elements[i].Value] = elements[i + 1];
+        }
+        return properties;
+    }
+
+    private static string? PlistString(IReadOnlyDictionary<string, XElement> properties, string key) =>
+        properties.TryGetValue(key, out var value) && value.Name.LocalName == "string"
+            ? value.Value
+            : null;
+
+    private static int? PlistInteger(IReadOnlyDictionary<string, XElement> properties, string key)
+    {
+        if (!properties.TryGetValue(key, out var value)
+            || value.Name.LocalName is not ("integer" or "string"))
+            return null;
+
+        var text = value.Value.Trim();
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(text.AsSpan(2), System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var hex))
+            return hex;
+        return int.TryParse(text, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var number)
+            ? number
+            : null;
+    }
+
+    private static IEqualityComparer<string> EndpointComparer() =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    [SupportedOSPlatform("macos")]
+    private static ReadOnlyMemory<byte>? ReadMacOsIoRegistry()
+    {
+        const string ioreg = "/usr/sbin/ioreg";
+        if (!File.Exists(ioreg)) return null;
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = ioreg,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            },
+        };
+        foreach (var argument in new[] { "-a", "-p", "IOUSB", "-l", "-w", "0" })
+            process.StartInfo.ArgumentList.Add(argument);
+        process.StartInfo.Environment["LC_ALL"] = "C";
+
+        try
+        {
+            if (!process.Start()) return null;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            var stdout = ReadBoundedAsync(process.StandardOutput.BaseStream, MaxIoRegistryBytes, cts.Token);
+            var stderr = ReadBoundedAsync(process.StandardError.BaseStream, 64 * 1024, cts.Token);
+            process.WaitForExitAsync(cts.Token).GetAwaiter().GetResult();
+            var snapshot = stdout.GetAwaiter().GetResult();
+            _ = stderr.GetAwaiter().GetResult();
+            return process.ExitCode == 0 ? snapshot : null;
+        }
+        catch
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+            return null;
+        }
+    }
+
+    private static async Task<byte[]> ReadBoundedAsync(
+        Stream stream,
+        int maxBytes,
+        CancellationToken cancellationToken)
+    {
+        using var output = new MemoryStream();
+        var buffer = new byte[8192];
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0) return output.ToArray();
+            if (output.Length + read > maxBytes)
+                throw new InvalidDataException($"ioreg output exceeds {maxBytes} bytes");
+            output.Write(buffer, 0, read);
+        }
+    }
+
+    private readonly record struct MacUsbContext(
+        int? VendorId,
+        int? ProductId,
+        int? InterfaceNumber,
+        int? LocationId,
+        int? RegistryEntryId,
+        string? SerialNumber,
+        string? ProductName);
 
     /// <summary>
     /// Enumerates official Black Magic Probe CDC interfaces through Linux
@@ -248,7 +529,9 @@ public static class ProbeDiscovery
         try
         {
             var path = Path.Combine(directory, name);
-            return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+            return File.Exists(path)
+                ? BoundedFileReader.ReadUtf8String(path, 4_096).Trim()
+                : null;
         }
         catch
         {

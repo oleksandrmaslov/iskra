@@ -122,23 +122,52 @@ public class AppSettingsTests : IDisposable
     }
 
     [Fact]
-    public void Corrupt_settings_file_falls_back_to_defaults()
+    public void Corrupt_settings_file_is_preserved_and_fails_closed()
     {
         File.WriteAllText(_path, "{not valid json");
-        var s = AppSettingsStore.Load(_path);
-        Assert.Equal(1_000_000, s.BmpFrequencyHz);
-        Assert.Equal(PowerMode.External, s.Power);
+
+        var ex = Assert.Throws<AppSettingsLoadException>(() => AppSettingsStore.Load(_path));
+
+        Assert.Equal(_path, ex.SettingsPath);
+        Assert.Equal("{not valid json", File.ReadAllText(_path));
     }
 
     [Fact]
-    public void Oversized_settings_file_falls_back_to_defaults()
+    public void Oversized_settings_file_is_preserved_and_fails_closed()
     {
         File.WriteAllBytes(_path, new byte[AppSettingsStore.MaxSettingsBytes + 1]);
 
-        var settings = AppSettingsStore.Load(_path);
+        var ex = Assert.Throws<AppSettingsLoadException>(() => AppSettingsStore.Load(_path));
 
-        Assert.Equal(Environment.MachineName, settings.StationId);
-        Assert.True(settings.RequireSignedCatalog);
+        Assert.Equal(_path, ex.SettingsPath);
+        Assert.Equal(AppSettingsStore.MaxSettingsBytes + 1, new FileInfo(_path).Length);
+    }
+
+    [Theory]
+    [InlineData("{\"bmp_frequency_hz\":50000001}")]
+    [InlineData("{\"timeout_seconds\":3601}")]
+    [InlineData("{\"log_ship_interval_minutes\":1441}")]
+    [InlineData("{\"station_id\":\"   \"}")]
+    [InlineData("{\"db_path\":\":memory:\"}")]
+    [InlineData("{\"power\":999}")]
+    [InlineData("{\"flash_hotkey\":999}")]
+    public void Well_formed_but_unsafe_settings_are_preserved_and_fail_closed(string json)
+    {
+        File.WriteAllText(_path, json);
+
+        var ex = Assert.Throws<AppSettingsLoadException>(() => AppSettingsStore.Load(_path));
+
+        Assert.Equal(_path, ex.SettingsPath);
+        Assert.Equal(json, File.ReadAllText(_path));
+    }
+
+    [Fact]
+    public void Save_refuses_semantically_invalid_settings()
+    {
+        var invalid = new AppSettings { Power = (PowerMode)999 };
+
+        Assert.Throws<InvalidDataException>(() => AppSettingsStore.Save(invalid, _path));
+        Assert.False(File.Exists(_path));
     }
 
     [Fact]

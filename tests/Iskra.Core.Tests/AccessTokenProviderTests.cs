@@ -121,6 +121,92 @@ public class AccessTokenProviderTests
         Assert.Single(h.Requests);
     }
 
+    [Fact]
+    public async Task Concurrent_callers_share_one_rotating_refresh()
+    {
+        var issuedAt = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
+        _store.Save(FreshStored(issuedAt));
+        var refreshTime = issuedAt.AddHours(9);
+        var response = JsonResp("""
+            {
+              "access_token": "gho_ONCE", "token_type": "bearer",
+              "expires_in": 28800, "refresh_token": "ghr_ONCE",
+              "refresh_token_expires_in": 15897600, "scope": ""
+            }
+            """);
+        var (provider, handler) = BuildProvider(refreshTime, response);
+
+        var tokens = await Task.WhenAll(
+            provider.GetFreshAccessTokenAsync(),
+            provider.GetFreshAccessTokenAsync());
+
+        Assert.Equal(new[] { "gho_ONCE", "gho_ONCE" }, tokens);
+        Assert.Single(handler.Requests);
+        Assert.Equal("ghr_ONCE", _store.Load()!.RefreshToken);
+    }
+
+    [Fact]
+    public async Task Rejected_stale_refresh_does_not_delete_newer_credentials()
+    {
+        var issuedAt = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
+        var old = FreshStored(issuedAt);
+        var replacement = FreshStored(issuedAt.AddHours(9), "gho_OTHER") with
+        {
+            RefreshToken = "ghr_OTHER",
+        };
+        var store = new ReplacingTokenStore(old, replacement);
+        var handler = new StubHandler(JsonResp("{\"error\":\"bad_refresh_token\"}"));
+        var flow = new GitHubDeviceFlow(new HttpClient(handler), "Iv23liTEST",
+            delay: (_, _) => Task.CompletedTask);
+        var provider = new AccessTokenProvider(store, flow, now: () => issuedAt.AddHours(9));
+
+        var token = await provider.GetFreshAccessTokenAsync();
+
+        Assert.Equal("gho_OTHER", token);
+        Assert.False(store.DeleteCalled);
+        Assert.Equal("ghr_OTHER", store.Load()!.RefreshToken);
+    }
+
+    [Fact]
+    public async Task Cross_process_refresh_lock_wait_honors_cancellation()
+    {
+        var issuedAt = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
+        _store.Save(FreshStored(issuedAt));
+        var refreshTime = issuedAt.AddHours(9);
+        var (provider, handler) = BuildProvider(refreshTime, JsonResp("""
+            {
+              "access_token": "gho_NEVER", "token_type": "bearer",
+              "expires_in": 28800, "refresh_token": "ghr_NEVER",
+              "refresh_token_expires_in": 15897600, "scope": ""
+            }
+            """));
+
+        var mutexName = AccessTokenProvider.RefreshMutexName(_store.Path);
+        await using var held = await SystemWideMutexLease.AcquireAsync(
+            mutexName, currentUserOnly: true);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => provider.GetFreshAccessTokenAsync(cancellation.Token));
+        Assert.Empty(handler.Requests);
+        Assert.Equal("ghr_REFRESH", _store.Load()!.RefreshToken);
+    }
+
+    [Fact]
+    public async Task Cross_process_refresh_lock_serializes_distinct_leases()
+    {
+        var mutexName = $"Iskra.Tests.TokenRefresh.{Guid.NewGuid():N}";
+        await using var first = await SystemWideMutexLease.AcquireAsync(
+            mutexName, currentUserOnly: true);
+
+        Assert.Null(SystemWideMutexLease.TryAcquire(mutexName, currentUserOnly: true));
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => SystemWideMutexLease.AcquireAsync(
+                mutexName, currentUserOnly: true, cancellation.Token));
+    }
+
     // --- helpers ---------------------------------------------------------
 
     private static HttpResponseMessage JsonResp(string body, HttpStatusCode status = HttpStatusCode.OK)
@@ -135,6 +221,31 @@ public class AccessTokenProviderTests
         public StoredTokens? Load() => _tokens;
         public void Save(StoredTokens tokens) => _tokens = tokens;
         public void Delete() => _tokens = null;
+    }
+
+    private sealed class ReplacingTokenStore(
+        StoredTokens original,
+        StoredTokens replacement) : ITokenStore
+    {
+        private StoredTokens? _tokens = original;
+        private int _loads;
+
+        public string Path => $"memory-token-store-{Guid.NewGuid():N}";
+        public bool DeleteCalled { get; private set; }
+        public bool Exists() => _tokens is not null;
+        public StoredTokens? Load()
+        {
+            _loads++;
+            if (_loads == 2)
+                _tokens = replacement;
+            return _tokens;
+        }
+        public void Save(StoredTokens tokens) => _tokens = tokens;
+        public void Delete()
+        {
+            DeleteCalled = true;
+            _tokens = null;
+        }
     }
 
     private sealed class StubHandler : HttpMessageHandler

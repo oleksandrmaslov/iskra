@@ -23,7 +23,8 @@ public sealed record CatalogSessionResult(
     string? SourceDirectory,
     CatalogTrustResult? TrustResult,
     bool IsSideload,
-    string? Diagnostic)
+    string? Diagnostic,
+    CatalogActivationPermit? Permit = null)
 {
     public bool IsReady => Status == CatalogSessionStatus.Ready && Catalog is not null;
 }
@@ -51,12 +52,27 @@ public sealed class CatalogSession : ICatalogSession
     private readonly Func<string, Catalog> _buildSideload;
     private readonly Func<bool> _unsignedLabModeEnabled;
     private readonly Func<string, string> _normalizePath;
-    private readonly Func<Catalog, CatalogActivationResult> _activateCatalog;
+    private readonly Func<Catalog, ReadOnlyMemory<byte>, CatalogActivationResult> _activateCatalog;
 
     public CatalogSessionResult Current { get; private set; } = NotFound(
         "Catalog has not been loaded yet.");
 
-    public CatalogSession(
+    public CatalogSession()
+        : this(
+            fallbackCandidates: null,
+            fileExists: null,
+            directoryExists: null,
+            readAndVerifyCatalog: null,
+            parseCatalog: null,
+            buildSideload: null,
+            unsignedLabModeEnabled: null,
+            normalizePath: null,
+            activateCatalog: null,
+            activateCatalogSnapshot: null)
+    {
+    }
+
+    internal CatalogSession(
         Func<AppSettings, IEnumerable<string>>? fallbackCandidates = null,
         Func<string, bool>? fileExists = null,
         Func<string, bool>? directoryExists = null,
@@ -65,7 +81,8 @@ public sealed class CatalogSession : ICatalogSession
         Func<string, Catalog>? buildSideload = null,
         Func<bool>? unsignedLabModeEnabled = null,
         Func<string, string>? normalizePath = null,
-        Func<Catalog, CatalogActivationResult>? activateCatalog = null)
+        Func<Catalog, CatalogActivationResult>? activateCatalog = null,
+        Func<Catalog, ReadOnlyMemory<byte>, CatalogActivationResult>? activateCatalogSnapshot = null)
     {
         _fallbackCandidates = fallbackCandidates ?? DefaultFallbackCandidates;
         _fileExists = fileExists ?? File.Exists;
@@ -76,8 +93,12 @@ public sealed class CatalogSession : ICatalogSession
         _buildSideload = buildSideload ?? (path => SideloadCatalogBuilder.BuildFromDirectory(path));
         _unsignedLabModeEnabled = unsignedLabModeEnabled ?? CatalogTrust.IsUnsignedLabModeEnabled;
         _normalizePath = normalizePath ?? Path.GetFullPath;
-        _activateCatalog = activateCatalog ?? (catalog =>
-            CatalogActivationPolicy.ValidateAndAdvance(catalog.GeneratedAt));
+        _activateCatalog = activateCatalogSnapshot
+            ?? (activateCatalog is not null
+                ? (catalog, _) => activateCatalog(catalog)
+                : (catalog, bytes) => CatalogActivationPolicy.ValidateAndAdvance(
+                    catalog.GeneratedAt,
+                    catalogSha256: CatalogActivationPolicy.ComputeCatalogSha256(bytes.Span)));
     }
 
     public CatalogSessionResult Load(AppSettings settings)
@@ -165,7 +186,18 @@ public sealed class CatalogSession : ICatalogSession
             try
             {
                 var catalog = _buildSideload(path);
-                return Ready(catalog, path, path, CatalogTrustResult.UnsignedAllowed, isSideload: true);
+                var permit = new CatalogActivationPermit(
+                    catalog,
+                    CatalogTrustResult.UnsignedAllowed,
+                    null,
+                    path,
+                    isSideload: true);
+                return Ready(
+                    path,
+                    path,
+                    CatalogTrustResult.UnsignedAllowed,
+                    isSideload: true,
+                    permit);
             }
             catch (SideloadCatalogException ex)
             {
@@ -216,7 +248,7 @@ public sealed class CatalogSession : ICatalogSession
             if (trust == CatalogTrustResult.Verified)
             {
                 CatalogJson.ValidateTrustedArtifactPaths(catalog);
-                var activation = _activateCatalog(catalog);
+                var activation = _activateCatalog(catalog, catalogBytes);
                 if (!activation.IsAccepted)
                 {
                     return new CatalogSessionResult(
@@ -229,7 +261,21 @@ public sealed class CatalogSession : ICatalogSession
                         activation.Diagnostic ?? activation.Status.ToString());
                 }
             }
-            return Ready(catalog, path, Path.GetDirectoryName(path), trust, isSideload: false);
+            var digest = trust == CatalogTrustResult.Verified
+                ? CatalogActivationPolicy.ComputeCatalogSha256(catalogBytes.Span)
+                : null;
+            var permit = new CatalogActivationPermit(
+                catalog,
+                trust,
+                digest,
+                path,
+                isSideload: false);
+            return Ready(
+                path,
+                Path.GetDirectoryName(path),
+                trust,
+                isSideload: false,
+                permit);
         }
         catch (CatalogParseException ex)
         {
@@ -252,18 +298,19 @@ public sealed class CatalogSession : ICatalogSession
     }
 
     private static CatalogSessionResult Ready(
-        Catalog catalog,
         string sourcePath,
         string? sourceDirectory,
         CatalogTrustResult trust,
-        bool isSideload) => new(
+        bool isSideload,
+        CatalogActivationPermit permit) => new(
             CatalogSessionStatus.Ready,
-            catalog,
+            permit.Catalog,
             sourcePath,
             sourceDirectory,
             trust,
             isSideload,
-            null);
+            null,
+            permit);
 
     private static CatalogSessionResult NotFound(string diagnostic) => new(
         CatalogSessionStatus.NotFound,
@@ -291,9 +338,7 @@ public sealed class CatalogSession : ICatalogSession
     {
         if (settings.CatalogAutoUpdate)
         {
-            yield return Path.Combine(
-                RemoteCatalogClient.DefaultCacheDir(),
-                RemoteCatalogClient.CatalogFileName);
+            yield return RemoteCatalogClient.ActiveCatalogPath();
         }
 
         yield return Path.Combine(AppContext.BaseDirectory, "examples", "catalog.json");

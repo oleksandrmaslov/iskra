@@ -14,7 +14,7 @@ namespace Iskra.Core;
 /// </list>
 /// The per-phase classifiers are pure (no IO), making the test suite deterministic.
 /// </summary>
-public static class FlashStateMachine
+internal static class FlashStateMachine
 {
     /// <summary>
     /// Default backoff before retrying scan on <c>E_PROBE_BUSY</c>. BMP usually
@@ -60,7 +60,8 @@ public static class FlashStateMachine
                     return gateOutcome is null;
                 },
                 onLine,
-                ct).ConfigureAwait(false);
+                ct,
+                options.ProbeLockIdentity).ConfigureAwait(false);
             accumulatedScanDuration += guardedRun.Scan.Duration;
 
             // GdbMiSession does not invoke the gate when a scan command itself
@@ -84,7 +85,10 @@ public static class FlashStateMachine
                     guardedRun.Flash.TimedOut,
                     guardedRun.Flash.Duration,
                     guardedRun.Scan.Output.Concat(guardedRun.Flash.Output).ToArray());
-                var outcome = Classify(combined, options.TargetBmpMatch);
+                var outcome = Classify(
+                    combined,
+                    options.TargetBmpMatch,
+                    options.ExpectedLoadSections);
                 return outcome with
                 {
                     Duration = accumulatedScanDuration + guardedRun.Flash.Duration,
@@ -171,7 +175,10 @@ public static class FlashStateMachine
     /// return PASS or FAIL with the right E_* code. Order of checks matters — earlier checks
     /// take precedence so we report the *cause*, not a downstream symptom.
     /// </summary>
-    public static FlashOutcome Classify(GdbRunResult run, string expectedBmpMatch)
+    public static FlashOutcome Classify(
+        GdbRunResult run,
+        string expectedBmpMatch,
+        IReadOnlyList<FirmwareLoadSection>? expectedLoadSections = null)
     {
         var tail = run.Tail();
 
@@ -215,17 +222,38 @@ public static class FlashStateMachine
                 $"section {mismatch.Detail} verify failed",
                 detected, run.Duration, tail);
 
-        var loadedSections = events
+        var loadEvents = events
             .Where(e => e.Kind == GdbEventKind.LoadingSection)
-            .Select(e => e.Detail)
             .ToList();
-        if (loadedSections.Count == 0)
+        if (loadEvents.Count == 0)
         {
             var why = run.ExitCode != 0
                 ? $"gdb exit {run.ExitCode}; load signal absent"
                 : "load signal absent in gdb output";
             return Fail("E_LOAD_FAILED", why, detected, run.Duration, tail);
         }
+
+        if (expectedLoadSections is { Count: > 0 })
+        {
+            var expected = CountLoadPlan(expectedLoadSections.Select(
+                section => LoadPlanKey(section.Name, section.Address, section.Length)));
+            var observed = CountLoadPlan(loadEvents.Select(
+                section => LoadPlanKey(
+                    section.Detail,
+                    section.Address ?? ulong.MaxValue,
+                    section.Length ?? ulong.MaxValue)));
+            if (!LoadPlansMatch(expected, observed, out var difference))
+            {
+                return Fail(
+                    "E_LOAD_FAILED",
+                    $"GDB/BFD load plan differs from the validated ELF section plan: {difference}",
+                    detected,
+                    run.Duration,
+                    tail);
+            }
+        }
+
+        var loadedSections = loadEvents.Select(e => e.Detail).ToList();
 
         var matchedCounts = events
             .Where(e => e.Kind == GdbEventKind.SectionMatched)
@@ -246,6 +274,39 @@ public static class FlashStateMachine
             return Fail("E_GDB_CRASHED", $"gdb exit code {run.ExitCode}", detected, run.Duration, tail);
 
         return new FlashOutcome(FlashResult.Pass, null, null, detected, run.Duration, tail);
+    }
+
+    private static string LoadPlanKey(string name, ulong address, ulong length) =>
+        $"{name}\u001f0x{address:X}\u001f0x{length:X}";
+
+    private static Dictionary<string, int> CountLoadPlan(IEnumerable<string> items) =>
+        items.GroupBy(item => item, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+    private static bool LoadPlansMatch(
+        IReadOnlyDictionary<string, int> expected,
+        IReadOnlyDictionary<string, int> observed,
+        out string difference)
+    {
+        foreach (var item in expected)
+        {
+            observed.TryGetValue(item.Key, out var actualCount);
+            if (actualCount != item.Value)
+            {
+                difference = $"expected {item.Key.Replace('\u001f', ' ')} x{item.Value}, observed x{actualCount}";
+                return false;
+            }
+        }
+        foreach (var item in observed)
+        {
+            if (!expected.ContainsKey(item.Key))
+            {
+                difference = $"unexpected {item.Key.Replace('\u001f', ' ')} x{item.Value}";
+                return false;
+            }
+        }
+        difference = string.Empty;
+        return true;
     }
 
     private static FlashOutcome? ClassifyProbeError(

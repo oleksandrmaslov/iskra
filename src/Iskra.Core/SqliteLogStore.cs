@@ -16,7 +16,19 @@ public sealed record FlashAttemptRow(
     string Result,
     string? ErrorCode,
     long DurationMs,
-    string? TargetDetected);
+    string? TargetDetected,
+    string AttemptState);
+
+/// <summary>
+/// Lifecycle values stored in <c>flash_attempts.attempt_state</c>. A STARTED
+/// row is committed before firmware acquisition or probe/GDB work. The same
+/// row is changed to TERMINAL only by <see cref="SqliteLogStore.FinalizeAttempt"/>.
+/// </summary>
+public static class FlashAttemptStates
+{
+    public const string Started = "STARTED";
+    public const string Terminal = "TERMINAL";
+}
 
 /// <summary>
 /// One unsynced row, ready to be shipped to the cloud mirror. The
@@ -97,12 +109,46 @@ public sealed record FlashAttemptRecord(
     string? GdbTail);
 
 /// <summary>
+/// Immutable identity and station settings captured before an attempt performs
+/// external work. Outcome fields deliberately do not exist at this stage.
+/// </summary>
+public sealed record FlashAttemptStartRecord(
+    DateTime TsUtc,
+    string Operator,
+    string StationId,
+    string BatchId,
+    string ProductId,
+    string FirmwareVersion,
+    string FirmwareSha256,
+    string TargetBmpMatch,
+    int TargetFlashKb,
+    string ComPort,
+    string? ProbeSerial,
+    PowerMode Power,
+    bool ConnectRst,
+    int BmpFrequencyHz);
+
+/// <summary>
+/// Terminal fields applied atomically to one durable STARTED row.
+/// </summary>
+public sealed record FlashAttemptFinalization(
+    DateTime CompletedAtUtc,
+    string? TargetDetected,
+    FlashResult Result,
+    string? ErrorCode,
+    string? ErrorMessage,
+    long DurationMs,
+    string? GdbTail);
+
+/// <summary>
 /// Append-only SQLite store for flash attempts. One row per attempt.
 /// Schema is created on first connection; safe to call repeatedly.
 /// Pass <c>:memory:</c> for unit tests.
 /// </summary>
 public sealed class SqliteLogStore : IDisposable
 {
+    public const string AbandonedAttemptErrorCode = "E_ATTEMPT_ABANDONED";
+
     private readonly SqliteConnection _conn;
 
     public SqliteLogStore(string dbPath)
@@ -135,11 +181,40 @@ public sealed class SqliteLogStore : IDisposable
             alter.CommandText = "ALTER TABLE flash_attempts ADD COLUMN synced_at_utc TEXT;";
             alter.ExecuteNonQuery();
         }
+
+        // OPEN-14 migration. Existing rows are already terminal by definition;
+        // the nullable completion timestamp is backfilled from their historical
+        // ts_utc value. Both additions are safe for Sprint 4/5 era databases.
+        if (!ColumnExists("flash_attempts", "attempt_state"))
+        {
+            using var alter = _conn.CreateCommand();
+            alter.CommandText =
+                "ALTER TABLE flash_attempts ADD COLUMN attempt_state TEXT NOT NULL DEFAULT 'TERMINAL';";
+            alter.ExecuteNonQuery();
+        }
+        if (!ColumnExists("flash_attempts", "completed_at_utc"))
+        {
+            using var alter = _conn.CreateCommand();
+            alter.CommandText = "ALTER TABLE flash_attempts ADD COLUMN completed_at_utc TEXT;";
+            alter.ExecuteNonQuery();
+        }
+        using (var backfillCompletion = _conn.CreateCommand())
+        {
+            backfillCompletion.CommandText = """
+                UPDATE flash_attempts
+                SET completed_at_utc = ts_utc
+                WHERE attempt_state = 'TERMINAL' AND completed_at_utc IS NULL;
+                """;
+            backfillCompletion.ExecuteNonQuery();
+        }
         using (var idx = _conn.CreateCommand())
         {
-            idx.CommandText =
-                "CREATE INDEX IF NOT EXISTS idx_flash_attempts_unsynced " +
-                "ON flash_attempts(id) WHERE synced_at_utc IS NULL;";
+            idx.CommandText = """
+                CREATE INDEX IF NOT EXISTS idx_flash_attempts_unsynced
+                ON flash_attempts(id) WHERE synced_at_utc IS NULL;
+                CREATE INDEX IF NOT EXISTS idx_flash_attempts_started
+                ON flash_attempts(id) WHERE attempt_state = 'STARTED';
+                """;
             idx.ExecuteNonQuery();
         }
 
@@ -159,6 +234,7 @@ public sealed class SqliteLogStore : IDisposable
                        fa.target_flash_kb, fa.ts_utc
                 FROM flash_attempts AS fa
                 WHERE trim(fa.batch_id) != ''
+                  AND fa.attempt_state = 'TERMINAL'
                   AND (fa.error_code IS NULL OR fa.error_code NOT IN (
                     'E_BATCH_LOCKED', 'E_RELEASE_REVOKED'
                   ))
@@ -166,6 +242,7 @@ public sealed class SqliteLogStore : IDisposable
                     SELECT 1
                     FROM flash_attempts AS earlier
                     WHERE earlier.batch_id = fa.batch_id
+                      AND earlier.attempt_state = 'TERMINAL'
                       AND (earlier.error_code IS NULL OR earlier.error_code NOT IN (
                         'E_BATCH_LOCKED', 'E_RELEASE_REVOKED'
                       ))
@@ -191,6 +268,7 @@ public sealed class SqliteLogStore : IDisposable
 
     public long Append(FlashAttemptRecord r, bool reserveBatchLock = true)
     {
+        ArgumentNullException.ThrowIfNull(r);
         using var tx = _conn.BeginTransaction();
 
         // Preserve the original "first real attempt locks the batch" behavior
@@ -237,6 +315,8 @@ public sealed class SqliteLogStore : IDisposable
         cmd.Parameters.AddWithValue("$error_message",    (object?)r.ErrorMessage ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$duration_ms",      r.DurationMs);
         cmd.Parameters.AddWithValue("$gdb_tail",         (object?)r.GdbTail ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$attempt_state",    FlashAttemptStates.Terminal);
+        cmd.Parameters.AddWithValue("$completed_at_utc", r.TsUtc.ToUniversalTime().ToString("o"));
         cmd.ExecuteNonQuery();
 
         using var idCmd = _conn.CreateCommand();
@@ -247,6 +327,158 @@ public sealed class SqliteLogStore : IDisposable
         return id;
     }
 
+    /// <summary>
+    /// Commits a STARTED row before firmware acquisition or probe/GDB work.
+    /// This is a separate durable transaction by design: a later process crash
+    /// must leave evidence that an outcome is unknown rather than no row at all.
+    /// </summary>
+    public long BeginAttempt(FlashAttemptStartRecord r, bool reserveBatchLock = true)
+    {
+        ArgumentNullException.ThrowIfNull(r);
+        using var tx = _conn.BeginTransaction();
+
+        if (reserveBatchLock && !string.IsNullOrWhiteSpace(r.BatchId))
+        {
+            InsertBatchLock(
+                tx,
+                r.BatchId,
+                new BatchLockDescriptor(
+                    r.ProductId,
+                    r.FirmwareVersion,
+                    r.FirmwareSha256,
+                    r.TargetBmpMatch,
+                    r.TargetFlashKb),
+                r.TsUtc);
+        }
+
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = InsertSql;
+        cmd.Parameters.AddWithValue("$ts_utc",           r.TsUtc.ToUniversalTime().ToString("o"));
+        cmd.Parameters.AddWithValue("$operator",         r.Operator);
+        cmd.Parameters.AddWithValue("$station_id",       r.StationId);
+        cmd.Parameters.AddWithValue("$batch_id",         r.BatchId);
+        cmd.Parameters.AddWithValue("$product_id",       r.ProductId);
+        cmd.Parameters.AddWithValue("$firmware_version", r.FirmwareVersion);
+        cmd.Parameters.AddWithValue("$firmware_sha256",  r.FirmwareSha256);
+        cmd.Parameters.AddWithValue("$target_bmp_match", r.TargetBmpMatch);
+        cmd.Parameters.AddWithValue("$target_detected",  DBNull.Value);
+        cmd.Parameters.AddWithValue("$target_flash_kb",  r.TargetFlashKb);
+        cmd.Parameters.AddWithValue("$com_port",         r.ComPort);
+        cmd.Parameters.AddWithValue("$probe_serial",     (object?)r.ProbeSerial ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$power_mode",       r.Power.ToString().ToLowerInvariant());
+        cmd.Parameters.AddWithValue("$connect_rst",      r.ConnectRst ? 1 : 0);
+        cmd.Parameters.AddWithValue("$bmp_frequency_hz", r.BmpFrequencyHz);
+        cmd.Parameters.AddWithValue("$result",           FlashAttemptStates.Started);
+        cmd.Parameters.AddWithValue("$error_code",       DBNull.Value);
+        cmd.Parameters.AddWithValue("$error_message",    DBNull.Value);
+        cmd.Parameters.AddWithValue("$duration_ms",      0);
+        cmd.Parameters.AddWithValue("$gdb_tail",         DBNull.Value);
+        cmd.Parameters.AddWithValue("$attempt_state",    FlashAttemptStates.Started);
+        cmd.Parameters.AddWithValue("$completed_at_utc", DBNull.Value);
+        cmd.ExecuteNonQuery();
+
+        using var idCmd = _conn.CreateCommand();
+        idCmd.Transaction = tx;
+        idCmd.CommandText = "SELECT last_insert_rowid();";
+        var id = (long)(idCmd.ExecuteScalar() ?? 0L);
+        tx.Commit();
+        return id;
+    }
+
+    /// <summary>
+    /// Atomically changes exactly one STARTED row into its terminal PASS/FAIL
+    /// outcome. Re-finalizing or finalizing an unknown id is rejected so a
+    /// second code path cannot silently overwrite the authoritative result.
+    /// </summary>
+    public void FinalizeAttempt(long attemptId, FlashAttemptFinalization finalization)
+    {
+        if (attemptId <= 0) throw new ArgumentOutOfRangeException(nameof(attemptId));
+        ArgumentNullException.ThrowIfNull(finalization);
+        if (finalization.DurationMs < 0)
+            throw new ArgumentOutOfRangeException(nameof(finalization), "Duration cannot be negative.");
+
+        using var tx = _conn.BeginTransaction();
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            UPDATE flash_attempts
+            SET target_detected = $target_detected,
+                result = $result,
+                error_code = $error_code,
+                error_message = $error_message,
+                duration_ms = $duration_ms,
+                gdb_tail = $gdb_tail,
+                attempt_state = 'TERMINAL',
+                completed_at_utc = $completed_at_utc,
+                synced_at_utc = NULL
+            WHERE id = $id AND attempt_state = 'STARTED';
+            """;
+        cmd.Parameters.AddWithValue("$target_detected",  (object?)finalization.TargetDetected ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$result",           finalization.Result == FlashResult.Pass ? "PASS" : "FAIL");
+        cmd.Parameters.AddWithValue("$error_code",       (object?)finalization.ErrorCode ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$error_message",    (object?)finalization.ErrorMessage ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$duration_ms",      finalization.DurationMs);
+        cmd.Parameters.AddWithValue("$gdb_tail",         (object?)finalization.GdbTail ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$completed_at_utc", finalization.CompletedAtUtc.ToUniversalTime().ToString("o"));
+        cmd.Parameters.AddWithValue("$id",               attemptId);
+        if (cmd.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException(
+                $"Audit attempt {attemptId} does not exist or is already terminal.");
+        tx.Commit();
+    }
+
+    /// <summary>
+    /// Returns durable rows whose process never committed a terminal result.
+    /// They remain visible as STARTED in normal history as well.
+    /// </summary>
+    public IReadOnlyList<FlashAttemptRow> QueryStartedAttempts(int limit = 200)
+    {
+        if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
+        return QueryRows("WHERE attempt_state = 'STARTED'", limit);
+    }
+
+    /// <summary>
+    /// Explicit recovery hook for a supervisor/startup policy that has proved
+    /// older STARTED rows are abandoned. Active rows newer than the caller's
+    /// cutoff are untouched. Recovered rows become ordinary unsynced FAIL rows.
+    /// </summary>
+    public int RecoverAbandonedAttempts(
+        DateTime startedBeforeUtc,
+        DateTime recoveredAtUtc,
+        string? diagnostic = null)
+    {
+        using var tx = _conn.BeginTransaction();
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            UPDATE flash_attempts
+            SET result = 'FAIL',
+                error_code = $error_code,
+                error_message = $error_message,
+                duration_ms = 0,
+                attempt_state = 'TERMINAL',
+                completed_at_utc = $completed_at_utc,
+                synced_at_utc = NULL
+            WHERE attempt_state = 'STARTED' AND ts_utc <= $cutoff_utc;
+            """;
+        cmd.Parameters.AddWithValue("$error_code", AbandonedAttemptErrorCode);
+        cmd.Parameters.AddWithValue(
+            "$error_message",
+            string.IsNullOrWhiteSpace(diagnostic)
+                ? "The process ended before a terminal audit outcome was persisted."
+                : diagnostic);
+        cmd.Parameters.AddWithValue(
+            "$completed_at_utc",
+            recoveredAtUtc.ToUniversalTime().ToString("o"));
+        cmd.Parameters.AddWithValue(
+            "$cutoff_utc",
+            startedBeforeUtc.ToUniversalTime().ToString("o"));
+        var recovered = cmd.ExecuteNonQuery();
+        tx.Commit();
+        return recovered;
+    }
+
     public int Count()
     {
         using var cmd = _conn.CreateCommand();
@@ -255,12 +487,16 @@ public sealed class SqliteLogStore : IDisposable
     }
 
     public IReadOnlyList<FlashAttemptRow> QueryRecent(int limit = 200)
+        => QueryRows(whereClause: null, limit);
+
+    private IReadOnlyList<FlashAttemptRow> QueryRows(string? whereClause, int limit)
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = $"""
             SELECT id, ts_utc, operator, batch_id, product_id, firmware_version,
-                   result, error_code, duration_ms, target_detected
+                   result, error_code, duration_ms, target_detected, attempt_state
             FROM flash_attempts
+            {whereClause}
             ORDER BY id DESC
             LIMIT $limit;
             """;
@@ -279,7 +515,8 @@ public sealed class SqliteLogStore : IDisposable
                 Result:          reader.GetString(6),
                 ErrorCode:       reader.IsDBNull(7) ? null : reader.GetString(7),
                 DurationMs:      reader.GetInt64(8),
-                TargetDetected:  reader.IsDBNull(9) ? null : reader.GetString(9)));
+                TargetDetected:  reader.IsDBNull(9) ? null : reader.GetString(9),
+                AttemptState:    reader.GetString(10)));
         }
         return rows;
     }
@@ -422,7 +659,7 @@ public sealed class SqliteLogStore : IDisposable
                    power_mode, connect_rst, bmp_frequency_hz,
                    result, error_code, error_message, duration_ms, gdb_tail
             FROM flash_attempts
-            WHERE synced_at_utc IS NULL
+            WHERE synced_at_utc IS NULL AND attempt_state = 'TERMINAL'
             ORDER BY id ASC
             LIMIT $limit;
             """;
@@ -475,7 +712,9 @@ public sealed class SqliteLogStore : IDisposable
         cmd.CommandText = """
             UPDATE flash_attempts
             SET synced_at_utc = $ts
-            WHERE id = $id AND synced_at_utc IS NULL;
+            WHERE id = $id
+              AND synced_at_utc IS NULL
+              AND attempt_state = 'TERMINAL';
             """;
         var tsParam = cmd.Parameters.Add("$ts", SqliteType.Text);
         var idParam = cmd.Parameters.Add("$id", SqliteType.Integer);
@@ -495,7 +734,10 @@ public sealed class SqliteLogStore : IDisposable
     public int CountUnsynced()
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM flash_attempts WHERE synced_at_utc IS NULL;";
+        cmd.CommandText = """
+            SELECT COUNT(*) FROM flash_attempts
+            WHERE synced_at_utc IS NULL AND attempt_state = 'TERMINAL';
+            """;
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
@@ -514,7 +756,7 @@ public sealed class SqliteLogStore : IDisposable
               SUM(CASE WHEN result = 'PASS' THEN 1 ELSE 0 END) AS pass,
               SUM(CASE WHEN result = 'FAIL' THEN 1 ELSE 0 END) AS fail
             FROM flash_attempts
-            WHERE batch_id = $batch;
+            WHERE batch_id = $batch AND attempt_state = 'TERMINAL';
             """;
         cmd.Parameters.AddWithValue("$batch", batchId);
         using var reader = cmd.ExecuteReader();
@@ -547,7 +789,9 @@ public sealed class SqliteLogStore : IDisposable
           error_message    TEXT,
           duration_ms      INTEGER NOT NULL,
           gdb_tail         TEXT,
-          synced_at_utc    TEXT
+          synced_at_utc    TEXT,
+          attempt_state    TEXT    NOT NULL DEFAULT 'TERMINAL',
+          completed_at_utc TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_flash_attempts_batch ON flash_attempts(batch_id);
         CREATE INDEX IF NOT EXISTS idx_flash_attempts_ts    ON flash_attempts(ts_utc);
@@ -570,14 +814,16 @@ public sealed class SqliteLogStore : IDisposable
           target_bmp_match, target_detected, target_flash_kb,
           com_port, probe_serial,
           power_mode, connect_rst, bmp_frequency_hz,
-          result, error_code, error_message, duration_ms, gdb_tail
+          result, error_code, error_message, duration_ms, gdb_tail,
+          attempt_state, completed_at_utc
         ) VALUES (
           $ts_utc, $operator, $station_id, $batch_id, $product_id,
           $firmware_version, $firmware_sha256,
           $target_bmp_match, $target_detected, $target_flash_kb,
           $com_port, $probe_serial,
           $power_mode, $connect_rst, $bmp_frequency_hz,
-          $result, $error_code, $error_message, $duration_ms, $gdb_tail
+          $result, $error_code, $error_message, $duration_ms, $gdb_tail,
+          $attempt_state, $completed_at_utc
         );
         """;
 }

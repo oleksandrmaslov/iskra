@@ -1,4 +1,5 @@
 using Iskra.Core;
+using System.Text;
 
 namespace Iskra.Core.Tests;
 
@@ -100,4 +101,85 @@ public sealed class MacOsProbeDiscoveryTests : IDisposable
 
         Assert.Equal(ProbeInterface.Unknown, probe.Interface);
     }
+
+    [Fact]
+    public void Ioreg_fixture_filters_vid_pid_and_classifies_native_interface_numbers()
+    {
+        var probes = ProbeDiscovery.ParseMacOsIoRegistry(
+            Encoding.UTF8.GetBytes(IoRegistryFixture()),
+            "/dev");
+
+        Assert.Equal(2, probes.Count);
+        var gdb = Assert.Single(probes, p => p.Interface == ProbeInterface.Gdb);
+        var uart = Assert.Single(probes, p => p.Interface == ProbeInterface.Uart);
+        Assert.Equal("/dev/cu.usbmodemE4D2A1C31", gdb.PortName);
+        Assert.Equal("/dev/cu.usbmodemE4D2A1C33", uart.PortName);
+        Assert.Equal("E4D2A1C3", gdb.SerialNumber);
+        Assert.Equal("E4D2A1C3", uart.SerialNumber);
+        Assert.Contains("IOKit/E4D2A1C3/if-00", gdb.DeviceInstanceId, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Ioreg_fixture_reconnect_keeps_the_same_physical_lock_identity()
+    {
+        var first = Assert.Single(
+            ProbeDiscovery.ParseMacOsIoRegistry(
+                Encoding.UTF8.GetBytes(IoRegistryFixture("cu.usbmodemE4D2A1C31")),
+                "/dev"),
+            p => p.Interface == ProbeInterface.Gdb);
+        var reconnected = Assert.Single(
+            ProbeDiscovery.ParseMacOsIoRegistry(
+                Encoding.UTF8.GetBytes(IoRegistryFixture("cu.usbmodem14101")),
+                "/dev"),
+            p => p.Interface == ProbeInterface.Gdb);
+
+        Assert.NotEqual(first.PortName, reconnected.PortName);
+        Assert.Equal(
+            ProbeDiscovery.ProbeLockIdentity(first),
+            ProbeDiscovery.ProbeLockIdentity(reconnected));
+    }
+
+    [Fact]
+    public void Malformed_or_untrusted_ioreg_xml_fails_closed()
+    {
+        var malformed = Encoding.UTF8.GetBytes(
+            "<!DOCTYPE plist [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><plist><array><dict><key>IOCalloutDevice</key><string>&xxe;</string></dict></array></plist>");
+
+        Assert.Empty(ProbeDiscovery.ParseMacOsIoRegistry(malformed, "/dev"));
+    }
+
+    private static string IoRegistryFixture(string gdbDevice = "cu.usbmodemE4D2A1C31") => $$"""
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <array>
+          <dict>
+            <key>idVendor</key><integer>7504</integer>
+            <key>idProduct</key><integer>24600</integer>
+            <key>USB Serial Number</key><string>E4D2A1C3</string>
+            <key>USB Product Name</key><string>Black Magic Probe</string>
+            <key>locationID</key><integer>338690048</integer>
+            <key>IORegistryEntryChildren</key>
+            <array>
+              <dict>
+                <key>bInterfaceNumber</key><integer>0</integer>
+                <key>IORegistryEntryChildren</key>
+                <array><dict><key>IOCalloutDevice</key><string>/dev/{{gdbDevice}}</string></dict></array>
+              </dict>
+              <dict>
+                <key>bInterfaceNumber</key><integer>2</integer>
+                <key>IORegistryEntryChildren</key>
+                <array><dict><key>IOCalloutDevice</key><string>/dev/cu.usbmodemE4D2A1C33</string></dict></array>
+              </dict>
+            </array>
+          </dict>
+          <dict>
+            <key>idVendor</key><integer>4660</integer>
+            <key>idProduct</key><integer>22136</integer>
+            <key>IORegistryEntryChildren</key>
+            <array><dict><key>bInterfaceNumber</key><integer>0</integer><key>IOCalloutDevice</key><string>/dev/cu.usbmodemOTHER1</string></dict></array>
+          </dict>
+        </array>
+        </plist>
+        """;
 }

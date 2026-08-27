@@ -67,4 +67,39 @@ public sealed class GdbMiSessionTests
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void Probe_lock_collides_for_endpoint_aliases_with_the_same_physical_serial()
+    {
+        var lockNamespace = Guid.NewGuid().ToString("N");
+        using var first = GdbMiSession.TryAcquireProbeLock(
+            "COM30",
+            lockNamespace,
+            ProbeDiscovery.ResolveProbeLockIdentity("COM30", "bmp-001"));
+
+        Assert.NotNull(first);
+        Assert.Null(GdbMiSession.TryAcquireProbeLock(
+            @"\\.\COM99",
+            lockNamespace,
+            ProbeDiscovery.ResolveProbeLockIdentity(@"\\.\COM99", " BMP-001 ")));
+
+        using var otherPhysicalProbe = GdbMiSession.TryAcquireProbeLock(
+            @"\\.\COM99",
+            lockNamespace,
+            ProbeDiscovery.ResolveProbeLockIdentity(@"\\.\COM99", "BMP-002"));
+        Assert.NotNull(otherPhysicalProbe);
+    }
+
+    [Fact]
+    public async Task Probe_lock_can_be_released_after_an_async_thread_handoff()
+    {
+        var lockNamespace = Guid.NewGuid().ToString("N");
+        var first = GdbMiSession.TryAcquireProbeLock("COM30", lockNamespace);
+        Assert.NotNull(first);
+
+        await Task.Run(first!.Dispose);
+
+        using var reacquired = GdbMiSession.TryAcquireProbeLock(@"\\.\COM30", lockNamespace);
+        Assert.NotNull(reacquired);
+    }
 }

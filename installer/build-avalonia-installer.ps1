@@ -161,8 +161,15 @@ if ($LASTEXITCODE -ne 0 -or -not $wixVersion.StartsWith("5.0.2+", [StringCompari
 & $dotnet restore Iskra.sln --locked-mode --nologo | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "locked solution restore failed (exit $LASTEXITCODE)" }
 
+$publishDir = Join-Path $repoRoot "publish\avalonia-$Version-$Runtime"
+$cliPublishDir = Join-Path $repoRoot "publish\avalonia-cli-$Version-$Runtime"
+# A failed single-file publish can leave a zero-byte bundle behind. Start each
+# release build from clean, version-scoped staging directories so a retry never
+# consumes or overwrites stale output from another release.
+Remove-GeneratedDirectory $publishDir
+Remove-GeneratedDirectory $cliPublishDir
+
 Write-Host "[2/8] dotnet publish Avalonia (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
-$publishDir = Join-Path $repoRoot "publish\avalonia-$Runtime"
 & $dotnet publish src/Iskra.Desktop `
     -c $Configuration `
     -r $Runtime `
@@ -183,7 +190,6 @@ $brandedExe = Join-Path $publishDir "Iskra.Avalonia.exe"
 Move-Item -LiteralPath $publishedExe -Destination $brandedExe -Force
 
 Write-Host "[3/8] dotnet publish CLI (single-file, self-contained, $Runtime)" -ForegroundColor Cyan
-$cliPublishDir = Join-Path $repoRoot "publish\avalonia-cli-$Runtime"
 & $dotnet publish src/Iskra.Cli `
     -c $Configuration `
     -r $Runtime `

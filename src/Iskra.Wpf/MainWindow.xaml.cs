@@ -28,11 +28,14 @@ public partial class MainWindow : Window
     private string? _probeSerial;
     private string? _lastAppUpdateUrl;
     private readonly ICatalogSession _catalogSession = new CatalogSession();
+    private CatalogActivationPermit? _catalogPermit;
     private readonly FlashWorkflow _flashWorkflow = new(new GitHubRemoteFirmwareProvider());
     private readonly HistoryWorkflow _historyWorkflow = new();
     private readonly SettingsWorkflow _settingsWorkflow = new();
     private readonly CloudLogWorkflow _cloudLogWorkflow = new();
+    private CloudLogScheduler? _cloudLogScheduler;
     private readonly AuthWorkflow _authWorkflow = new(new TokenStore());
+    private readonly BoundedTextBuffer _gdbOutput = new();
     private AuthSnapshot? _authSnapshot;
     private bool _isLoaded;
     private bool _flashInProgress;
@@ -89,6 +92,13 @@ public partial class MainWindow : Window
         RefreshCatalogCacheStatus();
         RefreshAppUpdateStatus();
         RefreshCloudSyncStatus();
+        _cloudLogScheduler = new CloudLogScheduler(
+            () => _settings.Clone(),
+            (settings, cancellationToken) => _cloudLogWorkflow.ShipAsync(
+                settings,
+                cancellationToken: cancellationToken),
+            _ => Dispatcher.BeginInvoke(new Action(RefreshCloudSyncStatus)));
+        _cloudLogScheduler.Start();
         ApplyBatchModeToUI();
 
         _isLoaded = true;
@@ -233,6 +243,7 @@ public partial class MainWindow : Window
     private void LoadCatalog()
     {
         _catalog = null;
+        _catalogPermit = null;
         _catalogPath = null;
         _catalogDir = null;
         ProductCombo.Items.Clear();
@@ -253,6 +264,7 @@ public partial class MainWindow : Window
         }
 
         _catalog = session.Catalog;
+        _catalogPermit = session.Permit;
         _catalogPath = session.SourcePath;
         _catalogDir = session.SourceDirectory;
         var trustText = session.IsSideload
@@ -358,7 +370,7 @@ public partial class MainWindow : Window
         if (product is null || release is null) { Beep(); return; }
 
         SetFlashInProgress(true);
-        GdbOutput.Clear();
+        ClearGdbOutput();
         try
         {
             // Progress<T> posts to the dispatcher, so a stage report can still be
@@ -373,8 +385,13 @@ public partial class MainWindow : Window
                 else if (update.Stage is FlashWorkflowStage.ValidatingFirmware or FlashWorkflowStage.Flashing)
                     SetBannerNeutral(T("Flash.Running"), warning: false);
             });
+            if (_catalogPermit is null)
+            {
+                ShowFail("E_CATALOG_UNTRUSTED", "Catalog activation permit is unavailable.");
+                return;
+            }
             var request = new FlashWorkflowRequest(
-                Catalog: _catalog,
+                CatalogPermit: _catalogPermit,
                 CatalogDirectory: _catalogDir,
                 ProductId: product.ProductId,
                 FirmwareVersion: release.Version,
@@ -387,7 +404,7 @@ public partial class MainWindow : Window
             var result = await _flashWorkflow.ExecuteAsync(
                 request,
                 progress,
-                line => Dispatcher.Invoke(() => GdbOutput.AppendText(line.Text + "\n")));
+                line => Dispatcher.Invoke(() => AppendGdbOutput(line.Text)));
             verdictShown = true;
 
             if (result.IsBlocked)
@@ -474,7 +491,20 @@ public partial class MainWindow : Window
         ResultText.Text = $"✗ {code}";
         ResultDetail.Text = UiText.ErrorHint(code);
         if (!string.IsNullOrEmpty(detail))
-            GdbOutput.AppendText($"\n[{T("Flash.ErrorDetails")}]\n{detail}\n");
+            AppendGdbOutput($"[{T("Flash.ErrorDetails")}]\n{detail}");
+    }
+
+    private void ClearGdbOutput()
+    {
+        _gdbOutput.Clear();
+        GdbOutput.Clear();
+    }
+
+    private void AppendGdbOutput(string text)
+    {
+        GdbOutput.Text = _gdbOutput.AppendLine(text);
+        GdbOutput.CaretIndex = GdbOutput.Text.Length;
+        GdbOutput.ScrollToEnd();
     }
 
     private void SetBannerNeutral(string msg, bool warning, string? detail = null)
@@ -885,7 +915,10 @@ public partial class MainWindow : Window
             {
                 _suppressTabSelectionChanged = false;
             }
+            return;
         }
+
+        _cloudLogScheduler?.Dispose();
     }
 
     private void SettingsSave_Click(object sender, RoutedEventArgs e)
@@ -941,6 +974,7 @@ public partial class MainWindow : Window
             LoadCatalog();
             RefreshHistory();
             RefreshCloudSyncStatus();
+            _cloudLogScheduler?.NotifySettingsChanged();
             RefreshFlashReadiness(updateBanner: true);
 
             SettingsStatus.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x8A, 0x1B));
@@ -1281,7 +1315,7 @@ public partial class MainWindow : Window
 
             try
             {
-                new TokenStore().Save(StoredTokens.From(dlg.Token!, DateTime.UtcNow));
+                _authWorkflow.SaveTokens(StoredTokens.From(dlg.Token!, DateTime.UtcNow));
             }
             catch (Exception ex)
             {
@@ -1403,10 +1437,7 @@ public partial class MainWindow : Window
     // Remote catalog auto-update (Sprint 3.5)
     // ============================================================
 
-    private RemoteCatalogClient NewRemoteCatalogClient(HttpClient http) => new(
-        http,
-        owner: string.IsNullOrWhiteSpace(_settings.CatalogOwner) ? "oleksandrmaslov" : _settings.CatalogOwner,
-        repo:  string.IsNullOrWhiteSpace(_settings.CatalogRepo)  ? "iskra-catalog"   : _settings.CatalogRepo);
+    private static RemoteCatalogClient NewRemoteCatalogClient(HttpClient http) => new(http);
 
     private void RefreshCatalogCacheStatus()
     {

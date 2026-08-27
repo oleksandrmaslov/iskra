@@ -129,7 +129,40 @@ public class GitHubReleaseAssetClientTests
     {
         var h = new StubHandler(JsonResp("{\"message\":\"Bad token\"}", HttpStatusCode.Unauthorized));
         await Assert.ThrowsAsync<GitHubApiException>(() =>
-            NewClient(h).DownloadAssetAsync("https://api/x", "tok", new MemoryStream()));
+            NewClient(h).DownloadAssetAsync(
+                "https://api.github.com/repos/o/r/releases/assets/222",
+                "tok",
+                new MemoryStream()));
+    }
+
+    [Theory]
+    [InlineData("http://api.github.com/repos/o/r/releases/assets/222")]
+    [InlineData("https://api.github.com.evil.example/repos/o/r/releases/assets/222")]
+    [InlineData("https://evil.example/repos/o/r/releases/assets/222")]
+    [InlineData("file:///tmp/token")]
+    public async Task DownloadAsset_never_sends_a_bearer_token_to_an_untrusted_origin(string url)
+    {
+        var handler = new StubHandler(BinaryResp([1, 2, 3]));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            NewClient(handler).DownloadAssetAsync(url, "tok", new MemoryStream()));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Release_metadata_cannot_redirect_the_bearer_token_to_another_origin()
+    {
+        var body = ReleaseJsonWithAsset.Replace(
+            "https://api.github.com/repos/o/r/releases/assets/222",
+            "https://attacker.example/collect");
+        var handler = new StubHandler(JsonResp(body));
+
+        await Assert.ThrowsAsync<GitHubApiException>(() =>
+            NewClient(handler).GetAssetDownloadUrlAsync(
+                "o/r", "v1.0.0", "ci-clop_v1.0.0_PY32F002Ax5.elf", "tok"));
+
+        Assert.Single(handler.Requests);
     }
 
     [Fact]

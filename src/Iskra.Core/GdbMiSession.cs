@@ -43,7 +43,8 @@ internal static class GdbMiSession
         TimeSpan flashTimeout,
         Func<GdbRunResult, bool> scanGate,
         Action<GdbLine>? onLine,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? probeLockIdentity = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(gdbExe);
         ArgumentException.ThrowIfNullOrWhiteSpace(firmwarePath);
@@ -53,7 +54,8 @@ internal static class GdbMiSession
         if (flashTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(flashTimeout));
 
         var normalizedEndpoint = GdbCommandBuilder.NormalizeProbeEndpoint(endpoint);
-        await using var probeLock = TryAcquireProbeLock(normalizedEndpoint);
+        probeLockIdentity ??= ProbeDiscovery.ResolveProbeLockIdentity(normalizedEndpoint);
+        await using var probeLock = TryAcquireProbeLock(normalizedEndpoint, probeLockIdentity: probeLockIdentity);
         if (probeLock is null)
         {
             var busy = SyntheticRun(
@@ -104,9 +106,19 @@ internal static class GdbMiSession
                 Record: result));
         }
 
-        void CaptureMiLine(string? text, GdbStream stream)
+        void CaptureMiLine(BoundedProcessLine captured, GdbStream stream)
         {
-            if (text is null) return;
+            var text = captured.Text;
+            if (captured.WasTruncated)
+            {
+                if (stream == GdbStream.Stderr)
+                    current.Add(text, stream);
+                else
+                    current.Add(
+                        $"GDB/MI record exceeded {GdbProcess.MaxCapturedLineChars} characters and was discarded",
+                        GdbStream.Stderr);
+                return;
+            }
             CompleteWaiter(text);
 
             if (text.Length >= 2 && (text[0] is '~' or '@' or '&') && text[1] == '"')
@@ -124,11 +136,6 @@ internal static class GdbMiSession
             if (text.Contains("^error", StringComparison.Ordinal)) current.Add(text, stream);
         }
 
-        process.OutputDataReceived += (_, e) => CaptureMiLine(e.Data, GdbStream.Stdout);
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data is not null) current.Add(e.Data, GdbStream.Stderr);
-        };
         process.Exited += (_, _) =>
         {
             foreach (var pair in waiters)
@@ -175,12 +182,21 @@ internal static class GdbMiSession
 
         var total = Stopwatch.StartNew();
         var processStarted = false;
+        using var readerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task stdoutTask = Task.CompletedTask;
+        Task stderrTask = Task.CompletedTask;
         try
         {
             if (!process.Start()) throw new InvalidOperationException($"Failed to start gdb: {gdbExe}");
             processStarted = true;
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            stdoutTask = BoundedProcessLineReader.ReadAsync(
+                process.StandardOutput,
+                line => CaptureMiLine(line, GdbStream.Stdout),
+                readerCts.Token);
+            stderrTask = BoundedProcessLineReader.ReadAsync(
+                process.StandardError,
+                line => CaptureMiLine(line, GdbStream.Stderr),
+                readerCts.Token);
 
             using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             scanCts.CancelAfter(scanTimeout);
@@ -268,6 +284,12 @@ internal static class GdbMiSession
             else
                 await ExitOrTerminateAsync(process).ConfigureAwait(false);
 
+            if (!await DrainReadersAsync(stdoutTask, stderrTask, readerCts).ConfigureAwait(false))
+            {
+                flash.Add("GDB output capture did not terminate cleanly", GdbStream.Stderr);
+                flashOk = false;
+            }
+
             flashStarted.Stop();
             ct.ThrowIfCancellationRequested();
 
@@ -289,49 +311,51 @@ internal static class GdbMiSession
             // the interprocess probe lock.
             if (processStarted && !HasExited(process))
                 await TerminateProcessTreeAsync(process, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            readerCts.Cancel();
+            await ObserveReadersAsync(stdoutTask, stderrTask).ConfigureAwait(false);
         }
     }
 
-    internal static FileStream? TryAcquireProbeLock(string endpoint, string? lockRoot = null)
+    private static async Task<bool> DrainReadersAsync(
+        Task stdoutTask,
+        Task stderrTask,
+        CancellationTokenSource readerCts)
     {
-        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(endpoint)))[..24];
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try
         {
-            var root = lockRoot ?? Path.Combine(
-                ResolveLocalStateRoot(),
-                "Iskra",
-                "probe-locks");
-            Directory.CreateDirectory(root);
-            if (!OperatingSystem.IsWindows())
-            {
-                try { File.SetUnixFileMode(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
-                catch (PlatformNotSupportedException) { }
-            }
-
-            return new FileStream(
-                Path.Combine(root, digest + ".lock"),
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None,
-                bufferSize: 1,
-                FileOptions.None);
+            await Task.WhenAll(stdoutTask, stderrTask)
+                .WaitAsync(timeout.Token)
+                .ConfigureAwait(false);
+            return true;
         }
-        catch (IOException)
+        catch
         {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
+            readerCts.Cancel();
+            await ObserveReadersAsync(stdoutTask, stderrTask).ConfigureAwait(false);
+            return false;
         }
     }
 
-    private static string ResolveLocalStateRoot()
+    private static async Task ObserveReadersAsync(params Task[] readers)
     {
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return string.IsNullOrWhiteSpace(local) ? Path.GetTempPath() : local;
+        try { await Task.WhenAll(readers).ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    internal static ProbeLock? TryAcquireProbeLock(
+        string endpoint,
+        string? lockRoot = null,
+        string? probeLockIdentity = null)
+    {
+        var identity = probeLockIdentity
+            ?? ProbeDiscovery.ResolveProbeLockIdentity(endpoint);
+        var namespaceSalt = string.IsNullOrWhiteSpace(lockRoot) ? string.Empty : $"test:{lockRoot}:";
+        var digest = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(namespaceSalt + identity)))[..32];
+        return ProbeLock.TryAcquire($"Iskra.Probe.v1.{digest}");
     }
 
     private static GdbRunResult SyntheticRun(string message, int exitCode)
@@ -479,27 +503,18 @@ internal static class GdbMiSession
 
     private sealed class PhaseCapture(Action<GdbLine>? onLine)
     {
-        private readonly Queue<GdbLine> _lines = new();
-        private readonly object _sync = new();
+        private readonly BoundedGdbLineBuffer _lines = new();
 
         public void Add(string text, GdbStream stream)
         {
-            if (text.Length > GdbProcess.MaxCapturedLineChars)
-                text = text[..GdbProcess.MaxCapturedLineChars] + "…[truncated]";
+            text = BoundedGdbLineBuffer.TruncateLine(text);
             var line = new GdbLine(DateTime.UtcNow, stream, text);
-            lock (_sync)
-            {
-                if (_lines.Count == GdbProcess.MaxCapturedLines) _lines.Dequeue();
-                _lines.Enqueue(line);
-            }
+            _lines.Add(line);
             try { onLine?.Invoke(line); }
             catch { }
         }
 
-        public GdbRunResult Snapshot(int exitCode, bool timedOut, TimeSpan duration)
-        {
-            lock (_sync)
-                return new GdbRunResult(exitCode, timedOut, duration, _lines.ToArray());
-        }
+        public GdbRunResult Snapshot(int exitCode, bool timedOut, TimeSpan duration) =>
+            new(exitCode, timedOut, duration, _lines.Snapshot());
     }
 }

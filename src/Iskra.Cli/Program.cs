@@ -6,7 +6,21 @@ using Iskra.Core;
 
 Console.OutputEncoding = Encoding.UTF8;
 
-var language = CliLanguage.Resolve(args, AppSettingsStore.Load().LanguageCode);
+AppSettings startupSettings;
+try
+{
+    startupSettings = AppSettingsStore.Load();
+}
+catch (AppSettingsLoadException ex)
+{
+    var requestedLanguage = CliLanguage.Resolve(args, IskraLanguages.Ukrainian);
+    System.Globalization.CultureInfo.CurrentUICulture =
+        IskraLanguages.CultureFor(requestedLanguage.LanguageCode);
+    Console.Error.WriteLine(CliText.Get("Settings.LoadFailed", ex.SettingsPath, ex.InnerException?.Message ?? ex.Message));
+    return 2;
+}
+
+var language = CliLanguage.Resolve(args, startupSettings.LanguageCode);
 System.Globalization.CultureInfo.CurrentUICulture = IskraLanguages.CultureFor(language.LanguageCode);
 if (!language.Ok)
 {
@@ -85,6 +99,8 @@ if (hasCatalog && hasSideload)
 
 int catIdx = Array.IndexOf(args, "--catalog");
 string? verifiedCatalogPath = null;
+string? resolvedCatalogDirectory = null;
+CatalogActivationPermit? verifiedCatalogPermit = null;
 CatalogFileVerificationResult? catalogVerification = null;
 if (catIdx >= 0 && catIdx + 1 < args.Length)
 {
@@ -152,7 +168,9 @@ if (verifiedCatalogPath is not null)
             return 2;
         }
 
-        var activation = CatalogActivationPolicy.ValidateAndAdvance(catalog.GeneratedAt);
+        var activation = CatalogActivationPolicy.ValidateAndAdvance(
+            catalog.GeneratedAt,
+            catalogSha256: CatalogActivationPolicy.ComputeCatalogSha256(catalogBytes.Span));
         if (!activation.IsAccepted)
         {
             Console.Error.WriteLine(CliText.Get(
@@ -162,11 +180,15 @@ if (verifiedCatalogPath is not null)
         }
     }
 
-    var catalogDirectory = Path.GetDirectoryName(Path.GetFullPath(verifiedCatalogPath)) ?? "";
+    verifiedCatalogPermit = catalogVerification.TrustResult == CatalogTrustResult.Verified
+        ? CatalogActivationPermit.FromVerifiedSnapshot(catalogVerification, verifiedCatalogPath)
+        : CatalogActivationPermit.FromUnsignedLab(catalog, verifiedCatalogPath);
+
+    resolvedCatalogDirectory = Path.GetDirectoryName(Path.GetFullPath(verifiedCatalogPath)) ?? "";
     resolution = CatalogResolver.ResolveWithCatalog(
         args,
         catalog,
-        catalogDirectory,
+        resolvedCatalogDirectory,
         allowCatalogOverrides: allowManualFlash);
 }
 else
@@ -187,56 +209,12 @@ if (resolution.Product is not null && resolution.Release is not null)
         p.Target.BmpMatch, p.Target.FlashKb, FirmwarePreflight.DisplayName(r.FirmwareKind)));
 }
 
-// Remote release + no explicit --elf → download from GitHub release asset
-// into the local cache, verify SHA, then inject --elf with the cached path.
-if (resolution.Release?.IsRemote == true && !args.Contains("--elf"))
-{
-    var src = resolution.Release.ElfSource!;
-    var expectedSha = resolution.Release.ElfSha256;
-    Console.WriteLine($"GitHub: {src.Repo}@{src.Tag} → {src.Asset}");
-    try
-    {
-        var localPath = await FetchRemoteFirmwareAsync(src, expectedSha);
-        Console.WriteLine(CliText.Get("Firmware.CacheHit", localPath));
-        args = args.Concat(new[] { "--elf", localPath }).ToArray();
-    }
-    catch (NotSignedInException)
-    {
-        Console.Error.WriteLine(CliText.Get("Auth.Required"));
-        return 5;
-    }
-    catch (RefreshTokenExpiredException)
-    {
-        Console.Error.WriteLine(CliText.Get("Auth.Expired"));
-        return 5;
-    }
-    catch (GitHubRepoAccessDeniedException ex)
-    {
-        Console.Error.WriteLine(CliText.Get("Firmware.NoRepoAccess", ex.Repo));
-        Console.Error.WriteLine(CliText.Get("Common.ErrorDetails", ex.Message));
-        return 5;
-    }
-    catch (GitHubAssetNotFoundException ex)
-    {
-        Console.Error.WriteLine(CliText.Get("Firmware.AssetMissing", ex.Message));
-        return 5;
-    }
-    catch (GitHubApiException ex)
-    {
-        Console.Error.WriteLine(CliText.Get("GitHub.ApiError", ex.StatusCode, ex.Message));
-        return 5;
-    }
-    catch (FirmwareCacheException ex)
-    {
-        Console.Error.WriteLine(CliText.Get("Firmware.DownloadError", ex.Message));
-        return 5;
-    }
-    catch (PlatformNotSupportedException ex)
-    {
-        Console.Error.WriteLine(CliText.Get("Common.ErrorDetails", ex.Message));
-        return 5;
-    }
-}
+// Keep remote acquisition inside FlashWorkflow so its durable STARTED record
+// exists before network/cache work. FlashOptions only needs a syntactic path;
+// the workflow ignores this placeholder for a release with elf_source.
+var remoteAcquisitionPending = resolution.Release?.IsRemote == true && !args.Contains("--elf");
+if (remoteAcquisitionPending)
+    args = args.Concat(new[] { "--elf", resolution.Release!.ElfFilename }).ToArray();
 
 bool dryRun = args.Contains("--dry-run");
 args = args.Where(a => a != "--dry-run").ToArray();
@@ -276,35 +254,12 @@ if (opts is null)
 selectedProbe ??= ProbeDiscovery.FindGdbPorts()
     .FirstOrDefault(p => string.Equals(p.PortName, opts.Port, StringComparison.OrdinalIgnoreCase));
 var probeSerial = selectedProbe?.SerialNumber;
+opts = opts with
+{
+    ProbeLockIdentity = ProbeDiscovery.ResolveProbeLockIdentity(opts.Port, probeSerial),
+};
 
 var firmwareKindName = FirmwarePreflight.DisplayName(opts.FirmwareKind);
-switch (FirmwarePreflight.Check(opts.ElfPath, opts.FirmwareKind))
-{
-    case FirmwarePreflight.CheckResult.NotFound:
-        Console.Error.WriteLine(CliText.Get("Firmware.NotFound", firmwareKindName, opts.ElfPath));
-        return 4;
-    case FirmwarePreflight.CheckResult.InvalidFormat:
-        Console.Error.WriteLine(CliText.Get("Firmware.BadFormat", firmwareKindName, opts.ElfPath));
-        return 4;
-    case FirmwarePreflight.CheckResult.IoError:
-        Console.Error.WriteLine(CliText.Get("Firmware.ReadFailed", opts.ElfPath));
-        return 4;
-}
-
-var computedSha = FirmwareIntegrity.ComputeSha256Hex(opts.ElfPath);
-bool hashVerified = false;
-bool hashWasRequired = FirmwareIntegrity.IsValidSha256Hex(opts.FirmwareSha256);
-if (hashWasRequired)
-{
-    hashVerified = FirmwareIntegrity.HashesMatch(computedSha, opts.FirmwareSha256);
-}
-
-// BMP's swdp_scan only identifies an MCU family, so a build for a larger
-// sibling part or a different memory map reaches this point looking valid.
-// Compare the image's load map against what the catalog declared.
-var rangeResult = FirmwareRangeCheck.Validate(
-    opts.ElfPath, opts.FirmwareKind, opts.ToTargetDescriptor());
-
 var gdbExe = GdbDiscovery.Find(opts.GdbPath);
 if (gdbExe is null)
 {
@@ -315,6 +270,53 @@ if (gdbExe is null)
 
 if (dryRun)
 {
+    var dryRunPath = opts.ElfPath;
+    if (remoteAcquisitionPending)
+    {
+        var source = resolution.Release!.ElfSource!;
+        Console.WriteLine($"GitHub: {source.Repo}@{source.Tag} → {source.Asset}");
+        try
+        {
+            dryRunPath = await FetchRemoteFirmwareAsync(
+                source,
+                resolution.Release.ElfSha256,
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is NotSignedInException
+            or RefreshTokenExpiredException
+            or GitHubRepoAccessDeniedException
+            or GitHubAssetNotFoundException
+            or GitHubApiException
+            or FirmwareCacheException
+            or PlatformNotSupportedException)
+        {
+            Console.Error.WriteLine(CliText.Get("Firmware.DownloadError", ex.Message));
+            return 5;
+        }
+    }
+
+    switch (FirmwarePreflight.Check(dryRunPath, opts.FirmwareKind))
+    {
+        case FirmwarePreflight.CheckResult.NotFound:
+            Console.Error.WriteLine(CliText.Get("Firmware.NotFound", firmwareKindName, dryRunPath));
+            return 4;
+        case FirmwarePreflight.CheckResult.InvalidFormat:
+            Console.Error.WriteLine(CliText.Get("Firmware.BadFormat", firmwareKindName, dryRunPath));
+            return 4;
+        case FirmwarePreflight.CheckResult.IoError:
+            Console.Error.WriteLine(CliText.Get("Firmware.ReadFailed", dryRunPath));
+            return 4;
+    }
+
+    var computedSha = FirmwareIntegrity.ComputeSha256Hex(dryRunPath);
+    var hashWasRequired = FirmwareIntegrity.IsValidSha256Hex(opts.FirmwareSha256);
+    var hashVerified = hashWasRequired
+        && FirmwareIntegrity.HashesMatch(computedSha, opts.FirmwareSha256);
+    var rangeResult = FirmwareRangeCheck.Validate(
+        dryRunPath,
+        opts.FirmwareKind,
+        opts.ToTargetDescriptor());
+
     Console.WriteLine(CliText.Get("DryRun.Header"));
     if (hashWasRequired)
     {
@@ -333,201 +335,129 @@ if (dryRun)
         : CliText.Get("DryRun.RangeFail", rangeResult.Diagnostic ?? rangeResult.Status.ToString()));
     Console.WriteLine(CliText.Get("DryRun.Executable", gdbExe));
     var processArgs = GdbCommandBuilder.BuildProcessArgs(
-        opts.Port, opts.Power, opts.BmpFrequencyHz, opts.ConnectUnderReset, opts.ElfPath);
+        opts.Port, opts.Power, opts.BmpFrequencyHz, opts.ConnectUnderReset, dryRunPath);
     foreach (var a in processArgs)
         Console.WriteLine($"  {a}");
-    return 0;
+    return (!rangeResult.IsAcceptable || (hashWasRequired && !hashVerified)) ? 4 : 0;
 }
 
-// Integrity first: a corrupt download should be reported as a hash mismatch,
-// not as a confusing address-range complaint about garbage bytes.
-var preflightFailure = (hashWasRequired && !hashVerified)
-    ? ("E_FW_HASH_MISMATCH",
-        $"computed {computedSha}, expected {opts.FirmwareSha256.ToLowerInvariant()}")
-    : !rangeResult.IsAcceptable
-        ? (rangeResult.Status switch
-            {
-                FirmwareRangeStatus.TooLargeForFlash => "E_FW_TOO_LARGE",
-                FirmwareRangeStatus.OutsideDeclaredMemory => "E_FW_ADDRESS_RANGE",
-                _ => "E_FW_BAD_FORMAT",
-            },
-            rangeResult.Diagnostic ?? rangeResult.Status.ToString())
-        : default((string, string)?);
+var target = new TargetDescriptor(
+    BmpMatch: opts.TargetBmpMatch,
+    PartNumber: resolution.Product?.Target.PartNumber ?? opts.Product,
+    FlashKb: opts.TargetFlashKb,
+    FrequencyHz: opts.BmpFrequencyHz,
+    PowerMode: opts.Power,
+    ConnectReset: opts.ConnectUnderReset,
+    TimeoutSeconds: opts.TimeoutSeconds,
+    FlashOrigin: opts.TargetFlashOrigin,
+    RamOrigin: opts.TargetRamOrigin,
+    RamKb: opts.TargetRamKb);
 
-string dbPath;
-try
-{
-    dbPath = AuditDatabasePathPolicy.ValidateAndNormalize(
-        opts.DbPath ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db"));
-    Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-}
-catch (Exception ex)
-{
-    Console.Error.WriteLine(CliText.Get("Result.ErrorRaw", "E_AUDIT_PATH_INVALID", ex.Message));
-    Console.Error.WriteLine(OperatorText.ErrorHint("E_AUDIT_PATH_INVALID"));
-    return 2;
-}
-
-if (preflightFailure is { } failure)
-{
-    var hashFail = new FlashOutcome(
-        Result:        FlashResult.Fail,
-        ErrorCode:     failure.Item1,
-        ErrorMessage:  failure.Item2,
-        DetectedTarget: null,
-        Duration:      TimeSpan.Zero,
-        GdbTail:       string.Empty);
-
-    Console.WriteLine();
-    Console.WriteLine("============================================");
-    Console.WriteLine(CliText.Get("Result.Error", hashFail.ErrorCode));
-    Console.WriteLine($"  {OperatorText.ErrorHint(hashFail.ErrorCode)}");
-    Console.WriteLine(CliText.Get("Result.Details", hashFail.ErrorMessage));
-    Console.WriteLine("============================================");
-
-    try
-    {
-        using var log = new SqliteLogStore(dbPath);
-        log.Append(new FlashAttemptRecord(
-            TsUtc:           DateTime.UtcNow,
-            Operator:        opts.Operator,
-            StationId:       opts.StationId,
-            BatchId:         opts.Batch,
-            ProductId:       opts.Product,
-            FirmwareVersion: opts.FirmwareVersion,
-            FirmwareSha256:  computedSha,
-            TargetBmpMatch:  opts.TargetBmpMatch,
-            TargetDetected:  null,
-            TargetFlashKb:   opts.TargetFlashKb,
-            ComPort:         opts.Port,
-            ProbeSerial:     probeSerial,
-            Power:           opts.Power,
-            ConnectRst:      opts.ConnectUnderReset,
-            BmpFrequencyHz:  opts.BmpFrequencyHz,
-            Result:          hashFail.Result,
-            ErrorCode:       hashFail.ErrorCode,
-            ErrorMessage:    hashFail.ErrorMessage,
-            DurationMs:      0,
-            GdbTail:         null),
-            reserveBatchLock: false);
-    }
-    catch (Exception ex)
-    {
-        Console.Error.WriteLine(CliText.Get("Result.LogWarning", ex.Message));
-    }
-    return 1;
-}
-
-// Atomically reserve the complete firmware identity before GDB touches the
-// target. A database/reservation failure is a hard stop, not a warning.
-try
-{
-    using var lockStore = new SqliteLogStore(dbPath);
-    var requested = new BatchLockDescriptor(
-        opts.Product,
+var effectiveRelease = remoteAcquisitionPending
+    ? resolution.Release!
+    : (resolution.Release ?? new FirmwareRelease(
         opts.FirmwareVersion,
-        computedSha,
-        opts.TargetBmpMatch,
-        opts.TargetFlashKb);
-    var reservation = lockStore.ReserveBatchLock(opts.Batch, requested);
-    if (!reservation.IsAccepted)
+        opts.ElfPath,
+        opts.FirmwareSha256,
+        null,
+        DateTime.UnixEpoch,
+        null,
+        null,
+        opts.FirmwareKind)) with
     {
-        var locked = reservation.Lock;
-        var msg = $"locked to {locked.ProductId} v{locked.FirmwareVersion} "
-            + $"sha256={ShortSha(locked.FirmwareSha256)}, attempted "
-            + $"{opts.Product} v{opts.FirmwareVersion} sha256={ShortSha(computedSha)}";
-        Console.Error.WriteLine(CliText.Get("Result.ErrorRaw", "E_BATCH_LOCKED", msg));
-        Console.Error.WriteLine(OperatorText.ErrorHint("E_BATCH_LOCKED"));
-        lockStore.Append(new FlashAttemptRecord(
-            TsUtc:           DateTime.UtcNow,
-            Operator:        opts.Operator,
-            StationId:       opts.StationId,
-            BatchId:         opts.Batch,
-            ProductId:       opts.Product,
-            FirmwareVersion: opts.FirmwareVersion,
-            FirmwareSha256:  computedSha,
-            TargetBmpMatch:  opts.TargetBmpMatch,
-            TargetDetected:  null,
-            TargetFlashKb:   opts.TargetFlashKb,
-            ComPort:         opts.Port,
-            ProbeSerial:     probeSerial,
-            Power:           opts.Power,
-            ConnectRst:      opts.ConnectUnderReset,
-            BmpFrequencyHz:  opts.BmpFrequencyHz,
-            Result:          FlashResult.Fail,
-            ErrorCode:       "E_BATCH_LOCKED",
-            ErrorMessage:    msg,
-            DurationMs:      0,
-            GdbTail:         null),
-            reserveBatchLock: false);
-        return 1;
-    }
-}
-catch (Exception ex)
+        Version = opts.FirmwareVersion,
+        ElfFilename = Path.GetFullPath(opts.ElfPath),
+        ElfSha256 = opts.FirmwareSha256,
+        ElfSource = null,
+        FirmwareKind = opts.FirmwareKind,
+    };
+var product = new Product(
+    opts.Product,
+    resolution.Product?.DisplayName ?? opts.Product,
+    target,
+    [effectiveRelease],
+    effectiveRelease.Version);
+var workflowCatalog = new Catalog(1, DateTime.UtcNow, [product]);
+var workflowCatalogPermit = verifiedCatalogPermit is not null && !allowManualFlash
+    ? verifiedCatalogPermit
+    : CatalogActivationPermit.FromUnsignedLab(
+        workflowCatalog,
+        verifiedCatalogPath,
+        isSideload: hasSideload);
+var workflowSettings = new AppSettings
 {
-    Console.Error.WriteLine(CliText.Get("Result.ErrorRaw", "E_BATCH_LOCK_CHECK_FAILED", ex.Message));
-    Console.Error.WriteLine(OperatorText.ErrorHint("E_BATCH_LOCK_CHECK_FAILED"));
-    return 1;
-}
+    LanguageCode = language.LanguageCode,
+    GdbPath = gdbExe,
+    BmpFrequencyHz = opts.BmpFrequencyHz,
+    Power = opts.Power,
+    ConnectUnderReset = opts.ConnectUnderReset,
+    TimeoutSeconds = opts.TimeoutSeconds,
+    DbPath = opts.DbPath ?? Path.Combine(Environment.CurrentDirectory, "flash_log.db"),
+    StationId = opts.StationId,
+    BatchesEnabled = true,
+};
+
+IRemoteFirmwareProvider? remoteProvider = effectiveRelease.IsRemote
+    ? new DelegateRemoteFirmwareProvider(async (release, cancellationToken) =>
+    {
+        var source = release.ElfSource
+            ?? throw new InvalidOperationException("remote firmware source is missing");
+        Console.WriteLine($"GitHub: {source.Repo}@{source.Tag} → {source.Asset}");
+        var localPath = await FetchRemoteFirmwareAsync(
+            source,
+            release.ElfSha256,
+            cancellationToken);
+        Console.WriteLine(CliText.Get("Firmware.CacheHit", localPath));
+        return localPath;
+    })
+    : null;
 
 Console.WriteLine(CliText.Get("Flash.Summary", opts.Product, opts.FirmwareVersion, opts.TargetBmpMatch, opts.Port));
 Console.WriteLine(CliText.Get("Flash.Operator", opts.Operator, opts.Batch, opts.StationId));
 Console.WriteLine(CliText.Get("Flash.Running"));
 Console.WriteLine();
 
-var gdb = new GdbProcess(gdbExe);
-var outcome = await FlashStateMachine.RunAsync(
-    gdb,
-    opts,
-    timeout: TimeSpan.FromSeconds(opts.TimeoutSeconds),
-    onLine: line =>
-    {
-        if (line.Stream == GdbStream.Stderr || !string.IsNullOrWhiteSpace(line.Text))
-            Console.WriteLine($"  gdb> {line.Text}");
-    });
-
-long? loggedRowId = null;
-string? auditWriteError = null;
+var workflow = new FlashWorkflow(remoteProvider);
+using var cliCancellation = new CancellationTokenSource();
+ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+{
+    eventArgs.Cancel = true;
+    cliCancellation.Cancel();
+};
+Console.CancelKeyPress += cancelHandler;
+FlashWorkflowResult workflowResult;
 try
 {
-    using var log = new SqliteLogStore(dbPath);
-    loggedRowId = log.Append(new FlashAttemptRecord(
-        TsUtc:           DateTime.UtcNow,
-        Operator:        opts.Operator,
-        StationId:       opts.StationId,
-        BatchId:         opts.Batch,
-        ProductId:       opts.Product,
-        FirmwareVersion: opts.FirmwareVersion,
-        FirmwareSha256:  computedSha,
-        TargetBmpMatch:  opts.TargetBmpMatch,
-        TargetDetected:  outcome.DetectedTarget,
-        TargetFlashKb:   opts.TargetFlashKb,
-        ComPort:         opts.Port,
-        ProbeSerial:     probeSerial,
-        Power:           opts.Power,
-        ConnectRst:      opts.ConnectUnderReset,
-        BmpFrequencyHz:  opts.BmpFrequencyHz,
-        Result:          outcome.Result,
-        ErrorCode:       outcome.ErrorCode,
-        ErrorMessage:    outcome.ErrorMessage,
-        DurationMs:      (long)outcome.Duration.TotalMilliseconds,
-        GdbTail:         outcome.GdbTail));
+    workflowResult = await workflow.ExecuteAsync(
+        new FlashWorkflowRequest(
+            workflowCatalogPermit,
+            resolvedCatalogDirectory ?? Path.GetDirectoryName(Path.GetFullPath(opts.ElfPath)),
+            product.ProductId,
+            effectiveRelease.Version,
+            workflowSettings,
+            opts.Operator,
+            opts.Batch,
+            gdbExe,
+            opts.Port,
+            probeSerial),
+        onGdbLine: line =>
+        {
+            if (line.Stream == GdbStream.Stderr || !string.IsNullOrWhiteSpace(line.Text))
+                Console.WriteLine($"  gdb> {line.Text}");
+        },
+        cancellationToken: cliCancellation.Token);
 }
-catch (Exception ex)
+catch (OperationCanceledException) when (cliCancellation.IsCancellationRequested)
 {
-    auditWriteError = ex.Message;
+    Console.Error.WriteLine(CliText.Get("Result.ErrorRaw", "E_CANCELLED", "flash attempt cancelled"));
+    return 130;
+}
+finally
+{
+    Console.CancelKeyPress -= cancelHandler;
 }
 
-if (outcome.IsPass && auditWriteError is not null)
-{
-    outcome = new FlashOutcome(
-        FlashResult.Fail,
-        "E_AUDIT_WRITE_FAILED",
-        $"firmware was flashed and verified, but the audit record could not be persisted: {auditWriteError}",
-        outcome.DetectedTarget,
-        outcome.Duration,
-        outcome.GdbTail);
-}
+var outcome = workflowResult.Outcome;
 
 Console.WriteLine();
 if (outcome.IsPass)
@@ -547,17 +477,26 @@ else
     Console.WriteLine("============================================");
 }
 
-if (loggedRowId is not null)
-    Console.WriteLine(CliText.Get("Flash.Logged", loggedRowId.Value, dbPath));
-else if (auditWriteError is not null)
-    Console.Error.WriteLine(CliText.Get("Result.LogWarning", auditWriteError));
+if (workflowResult.AttemptLogged && workflowResult.AttemptId is { } attemptId)
+{
+    string auditPath;
+    try { auditPath = FlashWorkflow.ResolveDatabasePath(workflowSettings); }
+    catch { auditPath = workflowSettings.DbPath ?? "flash_log.db"; }
+    Console.WriteLine(CliText.Get("Flash.Logged", attemptId, auditPath));
+}
+else if (!workflowResult.AttemptLogged && !workflowResult.IsBlocked)
+{
+    Console.Error.WriteLine(CliText.Get(
+        "Result.LogWarning",
+        outcome.ErrorMessage ?? outcome.ErrorCode ?? "audit write failed"));
+}
 
-return outcome.IsPass ? 0 : 1;
-
-static string ShortSha(string value) =>
-    string.IsNullOrWhiteSpace(value)
-        ? "unknown"
-        : value[..Math.Min(12, value.Length)].ToLowerInvariant();
+var authFailure = outcome.ErrorCode is "E_NOT_SIGNED_IN"
+    or "E_AUTH_EXPIRED"
+    or "E_NO_REPO_ACCESS"
+    or "E_ASSET_NOT_FOUND"
+    or "E_FW_DOWNLOAD_FAILED";
+return outcome.IsPass ? 0 : authFailure ? 5 : 1;
 
 static int GenKeypair(string[] args)
 {
@@ -628,12 +567,17 @@ static void WriteNewKeyFile(string path, string base64, bool privateKey)
     // DPAPI is not relevant for an offline signing key. Restrict the newly
     // created file to the current Windows identity and remove inherited ACLs.
     var identity = $"{Environment.UserDomainName}\\{Environment.UserName}:(F)";
+    var systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
+    var icaclsPath = Path.Combine(systemDirectory, "icacls.exe");
+    if (!File.Exists(icaclsPath))
+        throw new IOException($"trusted icacls.exe was not found at {icaclsPath}");
+
     var psi = new System.Diagnostics.ProcessStartInfo
     {
-        FileName = "icacls.exe",
+        FileName = icaclsPath,
         UseShellExecute = false,
         RedirectStandardError = true,
-        RedirectStandardOutput = true,
+        RedirectStandardOutput = false,
         CreateNoWindow = true,
     };
     psi.ArgumentList.Add(path);
@@ -642,9 +586,40 @@ static void WriteNewKeyFile(string path, string base64, bool privateKey)
     psi.ArgumentList.Add(identity);
     using var process = System.Diagnostics.Process.Start(psi)
         ?? throw new IOException("could not start icacls.exe");
-    process.WaitForExit();
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    var errorTask = ReadBoundedProcessTextAsync(
+        process.StandardError,
+        maximumChars: 4_096,
+        timeout.Token);
+    try
+    {
+        process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
+    }
+    catch (OperationCanceledException ex)
+    {
+        try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+        throw new IOException("icacls timed out while securing the private key", ex);
+    }
+    var error = errorTask.GetAwaiter().GetResult();
     if (process.ExitCode != 0)
-        throw new IOException($"icacls failed: {process.StandardError.ReadToEnd().Trim()}");
+        throw new IOException($"icacls failed: {error.Trim()}");
+}
+
+static async Task<string> ReadBoundedProcessTextAsync(
+    TextReader reader,
+    int maximumChars,
+    CancellationToken cancellationToken)
+{
+    var retained = new StringBuilder(Math.Min(maximumChars, 512));
+    var buffer = new char[512];
+    while (true)
+    {
+        var read = await reader.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+        if (read == 0) break;
+        var keep = Math.Min(read, maximumChars - retained.Length);
+        if (keep > 0) retained.Append(buffer, 0, keep);
+    }
+    return retained.ToString();
 }
 
 static int GenerateCatalog(string[] args)
@@ -796,7 +771,14 @@ static async Task<int> LoginAsync()
         Console.Error.WriteLine(CliText.Get("Common.Cancelled")); return 5;
     }
 
-    try { store.Save(StoredTokens.From(token, DateTime.UtcNow)); }
+    try
+    {
+        TokenStoreOperationLock.Run(store, () =>
+        {
+            store.Save(StoredTokens.From(token, DateTime.UtcNow));
+            return true;
+        });
+    }
     catch (Exception ex)
     {
         Console.Error.WriteLine(CliText.Get("Auth.SaveFailed", store.Path, ex.Message));
@@ -833,7 +815,14 @@ static int Logout()
         Console.WriteLine(CliText.Get("Auth.AlreadyLoggedOut"));
         return 0;
     }
-    try { store.Delete(); }
+    try
+    {
+        TokenStoreOperationLock.Run(store, () =>
+        {
+            store.Delete();
+            return true;
+        });
+    }
     catch (Exception ex)
     {
         Console.Error.WriteLine(CliText.Get("Auth.DeleteFailed", store.Path, ex.Message));
@@ -983,7 +972,10 @@ static async Task<int> ShipLogsNowAsync(string[] args)
     return 0;
 }
 
-static async Task<string> FetchRemoteFirmwareAsync(GitHubReleaseRef src, string expectedSha)
+static async Task<string> FetchRemoteFirmwareAsync(
+    GitHubReleaseRef src,
+    string expectedSha,
+    CancellationToken cancellationToken)
 {
     var store = PlatformTokenStoreFactory.Create();
     if (store is null)
@@ -994,7 +986,7 @@ static async Task<string> FetchRemoteFirmwareAsync(GitHubReleaseRef src, string 
     var provider = new AccessTokenProvider(store, flow);
     var api = new GitHubReleaseAssetClient(http);
     var cache = new FirmwareCache(api, provider.GetFreshAccessTokenAsync);
-    return await cache.GetOrDownloadAsync(src, expectedSha);
+    return await cache.GetOrDownloadAsync(src, expectedSha, cancellationToken);
 }
 
 static string FormatFutureDuration(TimeSpan d)
@@ -1089,13 +1081,26 @@ static int Doctor(string[] args)
     else
     {
         Pass("Arm GNU Toolchain", gdbPath);
-        // Provenance: the path alone does not say which build is installed, and
-        // a mismatched toolchain is a plausible cause of odd flash failures.
-        var banner = TryReadGdbVersion(gdbPath);
-        if (banner is null)
-            Warn("gdb version", CliText.Get("Doctor.GdbVersionUnknown"));
-        else
-            Pass("gdb version", banner);
+        try
+        {
+            var provenance = GdbDiscovery.Inspect(gdbPath);
+            if (provenance.IsTrustedLocation)
+                Pass("gdb provenance", provenance.CanonicalPath);
+            else
+                Warn("gdb provenance", "untrusted location accepted by an explicit lab-only override");
+            Pass("gdb sha256", provenance.Sha256);
+            if (provenance.VersionBanner is null)
+                Warn("gdb version", CliText.Get("Doctor.GdbVersionUnknown"));
+            else
+                Pass("gdb version", provenance.VersionBanner);
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            Warn("gdb provenance", ex.Message);
+        }
     }
 
     var probes = ProbeDiscovery.FindGdbPorts();
@@ -1259,40 +1264,6 @@ static int Doctor(string[] args)
     return 1;
 }
 
-/// <summary>
-/// Reads the toolchain's own version banner. Best-effort and short-fused: a
-/// diagnostic must never hang on a wedged executable.
-/// </summary>
-static string? TryReadGdbVersion(string gdbPath)
-{
-    try
-    {
-        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = gdbPath,
-            Arguments = "--version",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        });
-        if (process is null) return null;
-
-        var firstLine = process.StandardOutput.ReadLine();
-        if (!process.WaitForExit(5000))
-        {
-            process.Kill(entireProcessTree: true);
-            return null;
-        }
-
-        return string.IsNullOrWhiteSpace(firstLine) ? null : firstLine.Trim();
-    }
-    catch
-    {
-        return null;
-    }
-}
-
 static void WriteDoctorLine(string status, string name, string detail)
 {
     var line = $"[{status}] {name}";
@@ -1339,4 +1310,13 @@ static bool CanWriteDirectory(string dir, out string? error)
 static void PrintUsage()
 {
     Console.WriteLine(CliText.Get("Help"));
+}
+
+file sealed class DelegateRemoteFirmwareProvider(
+    Func<FirmwareRelease, CancellationToken, Task<string>> acquire)
+    : IRemoteFirmwareProvider
+{
+    public Task<string> AcquireAsync(
+        FirmwareRelease release,
+        CancellationToken cancellationToken) => acquire(release, cancellationToken);
 }

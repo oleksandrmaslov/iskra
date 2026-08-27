@@ -15,7 +15,12 @@ public enum GdbEventKind
     Warning,
 }
 
-public sealed record GdbEvent(GdbEventKind Kind, string Detail, int LineNumber);
+public sealed record GdbEvent(
+    GdbEventKind Kind,
+    string Detail,
+    int LineNumber,
+    ulong? Address = null,
+    ulong? Length = null);
 
 /// <summary>
 /// Parses Black Magic Probe gdb stdout/stderr into typed events. Pure (no IO);
@@ -28,7 +33,9 @@ public static class GdbOutputParser
         new(@"^\s*\d+\s+(?<name>.+?)\s*$", RegexOptions.Compiled);
 
     private static readonly Regex LoadingSectionRegex =
-        new(@"^Loading section\s+(?<sec>\S+?)\s*,", RegexOptions.Compiled);
+        new(
+            @"^Loading section\s+(?<sec>\S+?)\s*,\s*size\s+0x(?<size>[0-9a-f]+)\s+lma\s+0x(?<lma>[0-9a-f]+)\s*$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex SectionMatchedRegex =
         new(@"Section\s+(?<sec>\S+?)\s*,.*?:\s*matched\.", RegexOptions.Compiled);
@@ -112,7 +119,24 @@ public static class GdbOutputParser
             var lm = LoadingSectionRegex.Match(t);
             if (lm.Success)
             {
-                events.Add(new GdbEvent(GdbEventKind.LoadingSection, lm.Groups["sec"].Value, idx));
+                if (ulong.TryParse(
+                        lm.Groups["size"].Value,
+                        System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var size)
+                    && ulong.TryParse(
+                        lm.Groups["lma"].Value,
+                        System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var address))
+                {
+                    events.Add(new GdbEvent(
+                        GdbEventKind.LoadingSection,
+                        lm.Groups["sec"].Value,
+                        idx,
+                        address,
+                        size));
+                }
                 continue;
             }
 

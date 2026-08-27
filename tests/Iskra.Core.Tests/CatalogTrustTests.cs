@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.InteropServices;
 using Iskra.Core;
 
 namespace Iskra.Core.Tests;
@@ -73,6 +74,76 @@ public class CatalogTrustTests : IDisposable
         Assert.Equal(CatalogTrustResult.Verified, result.TrustResult);
         Assert.True(result.CatalogBytes.HasValue);
         Assert.Equal(verifiedBytes, result.CatalogBytes.Value.ToArray());
+    }
+
+    [Fact]
+    public void Verification_snapshot_cannot_be_mutated_through_readonly_memory()
+    {
+        var kp = CatalogSignature.GenerateKeypair();
+        var verifiedBytes = File.ReadAllBytes(_catalogPath);
+        File.WriteAllText(
+            _sigPath,
+            Convert.ToBase64String(CatalogSignature.Sign(verifiedBytes, kp.PrivateKey)));
+        var result = CatalogTrust.ReadAndVerifyCatalogFile(
+            _catalogPath,
+            requireSigned: true,
+            publicKey: kp.PublicKey);
+
+        var exposedCopy = result.CatalogBytes!.Value;
+        Assert.True(MemoryMarshal.TryGetArray(exposedCopy, out var segment));
+        segment.Array![segment.Offset] ^= 0xFF;
+
+        Assert.Equal(verifiedBytes, result.CatalogBytes!.Value.ToArray());
+    }
+
+    [Fact]
+    public void Public_verification_api_cannot_substitute_an_attacker_key()
+    {
+        var publicOverloads = typeof(CatalogTrust)
+            .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(method => method.Name is nameof(CatalogTrust.VerifyCatalogFile)
+                or nameof(CatalogTrust.ReadAndVerifyCatalogFile))
+            .ToArray();
+
+        Assert.Equal(2, publicOverloads.Length);
+        Assert.All(publicOverloads, method => Assert.Equal(2, method.GetParameters().Length));
+    }
+
+    [Fact]
+    public void Catalog_source_allowlist_is_not_backed_by_a_mutable_array()
+    {
+        Assert.False(CatalogTrust.AllowedCatalogSources is (string Owner, string Repo)[]);
+        var list = Assert.IsAssignableFrom<IList<(string Owner, string Repo)>>(
+            CatalogTrust.AllowedCatalogSources);
+        Assert.True(list.IsReadOnly);
+        Assert.Throws<NotSupportedException>(() =>
+            list[0] = ("attacker", "catalog"));
+        Assert.True(CatalogTrust.IsAllowedCatalogSource("oleksandrmaslov", "iskra-catalog"));
+    }
+
+    [Fact]
+    public void Production_remote_catalog_constructor_has_no_key_or_policy_override()
+    {
+        var constructors = typeof(RemoteCatalogClient).GetConstructors();
+        var constructor = Assert.Single(constructors);
+        var parameter = Assert.Single(constructor.GetParameters());
+        Assert.Equal(typeof(HttpClient), parameter.ParameterType);
+    }
+
+    [Fact]
+    public void Raw_physical_flash_driver_is_not_exported_as_public_api()
+    {
+        Assert.False(typeof(GdbProcess).IsPublic);
+        Assert.False(typeof(FlashStateMachine).IsPublic);
+    }
+
+    [Fact]
+    public void Shared_catalog_serializer_options_are_not_publicly_mutable()
+    {
+        var property = typeof(CatalogJson).GetProperty(
+            "DefaultOptions",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        Assert.Null(property);
     }
 
     [Fact]

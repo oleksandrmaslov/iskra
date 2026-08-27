@@ -175,7 +175,10 @@ public sealed class SettingsWorkflow
             return Invalid(SettingsField.BmpFrequencyHz);
         if (!TryIntRange(draft.TimeoutSeconds, FlashOptions.MaxTimeoutSeconds, out var timeout))
             return Invalid(SettingsField.TimeoutSeconds);
-        if (!TryPositiveInt(draft.LogShipIntervalMinutes, out var interval))
+        if (!TryIntRange(
+                draft.LogShipIntervalMinutes,
+                AppSettings.MaxLogShipIntervalMinutes,
+                out var interval))
             return Invalid(SettingsField.LogShipIntervalMinutes);
 
         var candidate = current.Clone();

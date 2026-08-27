@@ -62,10 +62,11 @@ public sealed record StoredTokens(
 }
 
 /// <summary>
-/// Per-machine token store backed by <c>%PROGRAMDATA%\Iskra\auth.bin</c>.
-/// Uses Windows DPAPI <see cref="DataProtectionScope.LocalMachine"/> so any
-/// Windows user on the station can use the cached credentials — operators
-/// don't need to re-auth when Windows account-switches.
+/// Per-user token store backed by <c>%LOCALAPPDATA%\Iskra\auth.bin</c>.
+/// Uses Windows DPAPI <see cref="DataProtectionScope.CurrentUser"/> so another
+/// local account cannot decrypt or race the GitHub credentials. A station that
+/// changes its locked-down Windows operator account must authenticate once for
+/// that account instead of sharing a machine-wide bearer token.
 /// <para>Atomic write: serialize → encrypt → write to <c>.tmp</c> → rename.</para>
 /// </summary>
 [SupportedOSPlatform("windows")]
@@ -85,19 +86,23 @@ public sealed class TokenStore : ITokenStore
     public string Path { get; }
     public DataProtectionScope Scope { get; }
 
-    public TokenStore(
-        string? overridePath = null,
-        DataProtectionScope scope = DataProtectionScope.LocalMachine)
+    public TokenStore(string? overridePath = null)
     {
         Path = overridePath ?? DefaultPath();
+        Scope = DataProtectionScope.CurrentUser;
+    }
+
+    internal TokenStore(string overridePath, DataProtectionScope scope)
+    {
+        Path = overridePath;
         Scope = scope;
     }
 
-    /// <summary><c>%PROGRAMDATA%\Iskra\auth.bin</c> on Windows.</summary>
+    /// <summary><c>%LOCALAPPDATA%\Iskra\auth.bin</c> on Windows.</summary>
     public static string DefaultPath()
     {
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-        return System.IO.Path.Combine(programData, DefaultDirectoryName, DefaultFileName);
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return System.IO.Path.Combine(local, DefaultDirectoryName, DefaultFileName);
     }
 
     public bool Exists() => File.Exists(Path);

@@ -26,6 +26,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Iskra.Core.Tests" />
+    <InternalsVisibleTo Include="Iskra.Application" />
+    <InternalsVisibleTo Include="Iskra.Application.Tests" />
+    <InternalsVisibleTo Include="Iskra.Cli" />
+    <InternalsVisibleTo Include="Iskra.Desktop.Tests" />
   </ItemGroup>
 
 </Project>

@@ -24,7 +24,9 @@ public sealed record FlashOptions(
     // --target mode leaves these null, which limits validation to total size.
     ulong? TargetFlashOrigin = null,
     ulong? TargetRamOrigin = null,
-    int? TargetRamKb = null)
+    int? TargetRamKb = null,
+    string? ProbeLockIdentity = null,
+    IReadOnlyList<FirmwareLoadSection>? ExpectedLoadSections = null)
 {
     public const int MaxBmpFrequencyHz = 50_000_000;
     public const int MaxTimeoutSeconds = 3_600;

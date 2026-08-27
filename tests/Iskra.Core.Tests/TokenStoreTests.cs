@@ -6,8 +6,8 @@ namespace Iskra.Core.Tests;
 
 /// <summary>
 /// Round-trip tests for <see cref="TokenStore"/>. Use <see cref="DataProtectionScope.CurrentUser"/>
-/// + a temp-file override so the suite doesn't pollute %PROGRAMDATA% or
-/// need admin. Production wiring uses <c>LocalMachine</c>.
+/// + a temp-file override so the suite doesn't pollute the user's real store.
+/// Production wiring uses the same per-user scope.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public class TokenStoreTests : IDisposable
@@ -179,12 +179,13 @@ public class TokenStoreTests : IDisposable
     }
 
     [Fact]
-    public void DefaultPath_is_under_ProgramData_Iskra()
+    public void DefaultPath_is_under_LocalAppData_Iskra_and_scope_is_current_user()
     {
         var p = TokenStore.DefaultPath();
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-        Assert.StartsWith(programData, p);
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        Assert.StartsWith(local, p);
         Assert.EndsWith(@"Iskra\auth.bin", p);
+        Assert.Equal(DataProtectionScope.CurrentUser, new TokenStore(_path).Scope);
     }
 
     [Fact]

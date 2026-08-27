@@ -1,12 +1,23 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 using Iskra.Application;
 using Iskra.Core;
+using Microsoft.Data.Sqlite;
 
 namespace Iskra.Application.Tests;
 
 public sealed class FlashWorkflowTests
 {
+    [Fact]
+    public void Production_workflow_exposes_no_gdb_factory_injection_constructor()
+    {
+        var constructor = Assert.Single(typeof(FlashWorkflow).GetConstructors());
+        Assert.DoesNotContain(
+            constructor.GetParameters(),
+            parameter => parameter.ParameterType.Name.Contains("GdbProcessFactory", StringComparison.Ordinal));
+    }
+
     // A real minimal ELF32 with one PT_LOAD segment. The workflow now validates
     // the image's load map against the catalog target, so a magic-bytes-only
     // stub is no longer accepted as valid firmware.
@@ -15,9 +26,15 @@ public sealed class FlashWorkflowTests
     private static byte[] MinimalElf32(uint loadAddress, uint length)
     {
         const int headerSize = 52;
-        const int entrySize = 32;
-        var dataOffset = headerSize + entrySize;
-        var bytes = new byte[checked(dataOffset + (int)length)];
+        const int programEntrySize = 32;
+        const int sectionEntrySize = 40;
+        var names = Encoding.ASCII.GetBytes("\0.shstrtab\0.text\0");
+        const uint shstrtabName = 1;
+        const uint textName = 11;
+        var namesOffset = headerSize + programEntrySize;
+        var dataOffset = (namesOffset + names.Length + 3) & ~3;
+        var sectionOffset = (checked(dataOffset + (int)length) + 3) & ~3;
+        var bytes = new byte[checked(sectionOffset + sectionEntrySize * 3)];
 
         bytes[0] = 0x7F; bytes[1] = (byte)'E'; bytes[2] = (byte)'L'; bytes[3] = (byte)'F';
         bytes[4] = 1; // ELF32
@@ -26,8 +43,12 @@ public sealed class FlashWorkflowTests
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(16), 2);           // e_type = ET_EXEC
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(18), 40);          // e_machine = ARM
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28), headerSize);  // e_phoff
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(42), entrySize);   // e_phentsize
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(32), (uint)sectionOffset); // e_shoff
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(42), programEntrySize); // e_phentsize
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(44), 1);           // e_phnum
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(46), sectionEntrySize);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(48), 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(50), 1);
 
         var entry = bytes.AsSpan(headerSize);
         BinaryPrimitives.WriteUInt32LittleEndian(entry, 1);                      // p_type = PT_LOAD
@@ -36,6 +57,21 @@ public sealed class FlashWorkflowTests
         BinaryPrimitives.WriteUInt32LittleEndian(entry[12..], loadAddress);      // p_paddr
         BinaryPrimitives.WriteUInt32LittleEndian(entry[16..], length);           // p_filesz
         BinaryPrimitives.WriteUInt32LittleEndian(entry[20..], length);           // p_memsz
+        names.CopyTo(bytes, namesOffset);
+
+        var namesSection = bytes.AsSpan(sectionOffset + sectionEntrySize, sectionEntrySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(namesSection, shstrtabName);
+        BinaryPrimitives.WriteUInt32LittleEndian(namesSection[4..], 3);
+        BinaryPrimitives.WriteUInt32LittleEndian(namesSection[16..], (uint)namesOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(namesSection[20..], (uint)names.Length);
+        var textSection = bytes.AsSpan(sectionOffset + sectionEntrySize * 2, sectionEntrySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection, textName);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[4..], 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[8..], 0x2);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[12..], loadAddress);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[16..], (uint)dataOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[20..], length);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[32..], 4);
         return bytes;
     }
 
@@ -58,6 +94,24 @@ public sealed class FlashWorkflowTests
     }
 
     [Fact]
+    public async Task Invalid_mutable_settings_are_blocked_at_workflow_boundary()
+    {
+        using var scope = new TempScope();
+        var firmware = scope.WriteFirmware(ValidElf);
+        var gdb = new FakeGdbProcess();
+        var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
+        var request = scope.Request(firmware);
+        request.Settings.BmpFrequencyHz = FlashOptions.MaxBmpFrequencyHz + 1;
+
+        var result = await workflow.ExecuteAsync(request);
+
+        Assert.Equal(FlashWorkflowStatus.Blocked, result.Status);
+        Assert.Equal("E_SETTINGS_INVALID", result.Outcome.ErrorCode);
+        Assert.Equal(0, gdb.ScanCalls);
+        Assert.False(File.Exists(scope.DatabasePath));
+    }
+
+    [Fact]
     public async Task Valid_local_firmware_runs_two_phase_flash_and_logs_pass()
     {
         using var scope = new TempScope();
@@ -69,7 +123,7 @@ public sealed class FlashWorkflowTests
         var product = request.Catalog.Products.Single();
         request = request with
         {
-            Catalog = request.Catalog with
+            CatalogPermit = CatalogActivationPermit.ForTests(request.Catalog with
             {
                 Products =
                 [
@@ -84,7 +138,7 @@ public sealed class FlashWorkflowTests
                         },
                     },
                 ],
-            },
+            }),
         };
 
         var result = await workflow.ExecuteAsync(
@@ -101,6 +155,9 @@ public sealed class FlashWorkflowTests
         Assert.Equal(2_000_000, gdb.LastFrequencyHz);
         Assert.True(gdb.LastConnectUnderReset);
         Assert.Equal(TimeSpan.FromSeconds(23), gdb.LastFlashTimeout);
+        Assert.NotEqual(firmware, gdb.LastFirmwarePath);
+        Assert.Equal(ValidElf, gdb.LastFirmwareBytes);
+        Assert.False(File.Exists(gdb.LastFirmwarePath));
         Assert.Contains(FlashWorkflowStage.ValidatingFirmware, progress.Stages);
         Assert.Contains(FlashWorkflowStage.Flashing, progress.Stages);
 
@@ -120,7 +177,8 @@ public sealed class FlashWorkflowTests
         var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
         var request = scope.Request(firmware) with
         {
-            Catalog = scope.CatalogFor(firmware, expectedHash: new string('0', 64)),
+            CatalogPermit = CatalogActivationPermit.ForTests(
+                scope.CatalogFor(firmware, expectedHash: new string('0', 64))),
         };
 
         var result = await workflow.ExecuteAsync(request);
@@ -172,10 +230,10 @@ public sealed class FlashWorkflowTests
         var product = request.Catalog.Products.Single();
         request = request with
         {
-            Catalog = request.Catalog with
+            CatalogPermit = CatalogActivationPermit.ForTests(request.Catalog with
             {
                 Products = [product with { Target = product.Target with { FlashOrigin = 0x00000000 } }],
-            },
+            }),
         };
 
         var result = await workflow.ExecuteAsync(request);
@@ -198,10 +256,10 @@ public sealed class FlashWorkflowTests
         var product = request.Catalog.Products.Single();
         request = request with
         {
-            Catalog = request.Catalog with
+            CatalogPermit = CatalogActivationPermit.ForTests(request.Catalog with
             {
                 Products = [product with { Target = product.Target with { FlashOrigin = 0x08000000 } }],
-            },
+            }),
         };
 
         var result = await workflow.ExecuteAsync(request);
@@ -219,7 +277,12 @@ public sealed class FlashWorkflowTests
         var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
         var request = scope.Request(firmware);
         request.Settings.DbPath = Path.Combine(scope.DirectoryPath, "audit.db");
-        gdb.BeforeReturn = () => Directory.CreateDirectory(request.Settings.DbPath);
+        gdb.BeforeReturn = () =>
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(request.Settings.DbPath);
+            Directory.CreateDirectory(request.Settings.DbPath);
+        };
 
         var result = await workflow.ExecuteAsync(request);
 
@@ -228,7 +291,64 @@ public sealed class FlashWorkflowTests
         Assert.False(result.IsPass);
         Assert.False(result.AttemptLogged);
         Assert.Equal("E_AUDIT_WRITE_FAILED", result.Outcome.ErrorCode);
-        Assert.Contains("flashed and verified", result.Outcome.ErrorMessage);
+        Assert.Contains("attempt ended with PASS", result.Outcome.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Started_row_exists_before_gdb_and_same_row_becomes_terminal()
+    {
+        using var scope = new TempScope();
+        var firmware = scope.WriteFirmware(ValidElf);
+        var gdb = new FakeGdbProcess();
+        var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
+        long startedId = 0;
+        gdb.BeforeScan = () =>
+        {
+            using var store = new SqliteLogStore(scope.DatabasePath);
+            var row = Assert.Single(store.QueryStartedAttempts());
+            startedId = row.Id;
+            Assert.Equal(FlashAttemptStates.Started, row.AttemptState);
+            Assert.Empty(store.GetUnsynced());
+        };
+
+        var result = await workflow.ExecuteAsync(scope.Request(firmware));
+
+        Assert.True(result.IsPass);
+        using var reopened = new SqliteLogStore(scope.DatabasePath);
+        var terminal = Assert.Single(reopened.QueryRecent());
+        Assert.Equal(startedId, terminal.Id);
+        Assert.Equal(FlashAttemptStates.Terminal, terminal.AttemptState);
+        Assert.Empty(reopened.QueryStartedAttempts());
+    }
+
+    [Fact]
+    public async Task Cancellation_after_start_is_persisted_before_it_is_rethrown()
+    {
+        using var scope = new TempScope();
+        var remote = scope.ReleaseFor("remote.elf", new string('a', 64)) with
+        {
+            ElfSource = new GitHubReleaseRef("owner/repo", "v1.0.0", "remote.elf"),
+        };
+        var request = scope.Request(scope.WriteFirmware(ValidElf, "unused.elf")) with
+        {
+            CatalogPermit = CatalogActivationPermit.ForTests(scope.CatalogWith(remote)),
+        };
+        using var cancellation = new CancellationTokenSource();
+        var workflow = new FlashWorkflow(
+            new WaitingRemoteProvider(),
+            new FakeGdbFactory(new FakeGdbProcess()));
+
+        var running = workflow.ExecuteAsync(request, cancellationToken: cancellation.Token);
+        await WaitingRemoteProvider.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        using var store = new SqliteLogStore(scope.DatabasePath);
+        var row = Assert.Single(store.QueryRecent());
+        Assert.Equal(FlashAttemptStates.Terminal, row.AttemptState);
+        Assert.Equal("FAIL", row.Result);
+        Assert.Equal("E_CANCELLED", row.ErrorCode);
+        Assert.Empty(store.QueryStartedAttempts());
     }
 
     [Fact]
@@ -271,10 +391,10 @@ public sealed class FlashWorkflowTests
         var request = scope.Request(firmware, batchesEnabled: true, batch: "LOT-REVOKED");
         request = request with
         {
-            Catalog = request.Catalog with
+            CatalogPermit = CatalogActivationPermit.ForTests(request.Catalog with
             {
                 Revoked = [new RevokedRelease("ci-clop", "1.0.0", "safety recall")],
-            },
+            }),
         };
         var gdb = new FakeGdbProcess();
         var workflow = new FlashWorkflow(gdbProcessFactory: new FakeGdbFactory(gdb));
@@ -304,7 +424,7 @@ public sealed class FlashWorkflowTests
             new FakeGdbFactory(gdb));
         var request = scope.Request(scope.WriteFirmware(ValidElf, "unused.elf")) with
         {
-            Catalog = catalog,
+            CatalogPermit = CatalogActivationPermit.ForTests(catalog),
         };
 
         var result = await workflow.ExecuteAsync(request);
@@ -346,8 +466,9 @@ public sealed class FlashWorkflowTests
                 BatchesEnabled = batchesEnabled,
                 TimeoutSeconds = 15,
             };
+            var catalog = CatalogFor(firmwarePath);
             return new FlashWorkflowRequest(
-                CatalogFor(firmwarePath),
+                CatalogActivationPermit.ForTests(catalog),
                 DirectoryPath,
                 "ci-clop",
                 "1.0.0",
@@ -404,7 +525,10 @@ public sealed class FlashWorkflowTests
         public int LastFrequencyHz { get; private set; }
         public bool LastConnectUnderReset { get; private set; }
         public TimeSpan LastFlashTimeout { get; private set; }
+        public string? LastFirmwarePath { get; private set; }
+        public byte[]? LastFirmwareBytes { get; private set; }
         public Action? BeforeReturn { get; set; }
+        public Action? BeforeScan { get; set; }
 
         public override Task<GdbGuardedRunResult> RunGuardedAsync(
             string endpoint,
@@ -416,8 +540,10 @@ public sealed class FlashWorkflowTests
             TimeSpan flashTimeout,
             Func<GdbRunResult, bool> scanGate,
             Action<GdbLine>? onLine = null,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            string? probeLockIdentity = null)
         {
+            BeforeScan?.Invoke();
             ScanCalls++;
             LastPower = power;
             LastFrequencyHz = frequencyHz;
@@ -432,9 +558,16 @@ public sealed class FlashWorkflowTests
 
             FlashCalls++;
             LastFlashTimeout = flashTimeout;
-            var flash = Result(
-                "Loading section .text, size 0x8 lma 0x8000000",
-                "Section .text, range 0x8000000 -- 0x8000008: matched.");
+            LastFirmwarePath = firmwarePath;
+            LastFirmwareBytes = File.ReadAllBytes(firmwarePath);
+            var image = FirmwareImage.Read(firmwarePath, FirmwareKind.Elf);
+            var output = new List<string>();
+            foreach (var section in image.LoadSections)
+            {
+                output.Add($"Loading section {section.Name}, size 0x{section.Length:x} lma 0x{section.Address:x}");
+                output.Add($"Section {section.Name}, range 0x{section.Address:x} -- 0x{section.Address + section.Length:x}: matched.");
+            }
+            var flash = Result(output.ToArray());
             foreach (var line in flash.Output) onLine?.Invoke(line);
             BeforeReturn?.Invoke();
             return Task.FromResult(new GdbGuardedRunResult(scan, flash));
@@ -489,6 +622,22 @@ public sealed class FlashWorkflowTests
             false,
             TimeSpan.FromMilliseconds(20),
             lines.Select(text => new GdbLine(DateTime.UtcNow, GdbStream.Stdout, text)).ToArray());
+    }
+
+    private sealed class WaitingRemoteProvider : IRemoteFirmwareProvider
+    {
+        public static TaskCompletionSource Started { get; private set; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<string> AcquireAsync(
+            FirmwareRelease release,
+            CancellationToken cancellationToken)
+        {
+            Started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("unreachable");
+        }
     }
 
     private sealed class ProgressCollector : IProgress<FlashWorkflowProgress>

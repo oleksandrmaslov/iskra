@@ -54,6 +54,19 @@ public class CatalogJsonTests
     }
 
     [Fact]
+    public void Parsed_catalog_collections_cannot_be_mutated_after_trust()
+    {
+        var catalog = CatalogJson.Parse(ValidJson);
+        var products = Assert.IsAssignableFrom<IList<Product>>(catalog.Products);
+        var releases = Assert.IsAssignableFrom<IList<FirmwareRelease>>(catalog.Products[0].Releases);
+
+        Assert.Throws<NotSupportedException>(() => products.Clear());
+        Assert.Throws<NotSupportedException>(() => releases.Clear());
+        Assert.Single(catalog.Products);
+        Assert.Single(catalog.Products[0].Releases);
+    }
+
+    [Fact]
     public void FindProduct_is_case_insensitive()
     {
         var c = CatalogJson.Parse(ValidJson);
@@ -126,6 +139,17 @@ public class CatalogJsonTests
         var bad = ValidJson.Replace(find, replace);
         var ex = Assert.Throws<CatalogParseException>(() => CatalogJson.Parse(bad));
         Assert.Contains(expectedInMsg, ex.Message);
+    }
+
+    [Fact]
+    public void Invalid_numeric_power_mode_is_rejected()
+    {
+        var bad = ValidJson.Replace(
+            "\"flash_kb\": 32,",
+            "\"flash_kb\": 32, \"power_mode\": 999,");
+
+        var ex = Assert.Throws<CatalogParseException>(() => CatalogJson.Parse(bad));
+        Assert.Contains("power_mode invalid", ex.Message);
     }
 
     [Fact]

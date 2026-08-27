@@ -24,7 +24,11 @@ public static class CatalogJson
     /// </summary>
     public const int MaxCatalogBytes = 4 * 1024 * 1024;
 
-    public static JsonSerializerOptions DefaultOptions { get; } = new()
+    // Keep the shared parser configuration inside the trusted assembly. A
+    // public mutable JsonSerializerOptions instance could be given a custom
+    // Catalog converter before first use and reinterpret signature-verified
+    // bytes as attacker-selected metadata.
+    internal static JsonSerializerOptions DefaultOptions { get; } = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         PropertyNameCaseInsensitive = true,
@@ -51,7 +55,7 @@ public static class CatalogJson
         }
         if (c is null) throw new CatalogParseException("catalog deserialised to null");
         Validate(c);
-        return c;
+        return Freeze(c);
     }
 
     /// <summary>Deserializes and validates one already-captured UTF-8 snapshot.</summary>
@@ -82,7 +86,7 @@ public static class CatalogJson
 
         if (c is null) throw new CatalogParseException("catalog deserialised to null");
         Validate(c);
-        return c;
+        return Freeze(c);
     }
 
     public static Catalog ParseFile(string path)
@@ -110,6 +114,27 @@ public static class CatalogJson
 
     public static byte[] WriteUtf8(Catalog catalog)
         => JsonSerializer.SerializeToUtf8Bytes(catalog, DefaultOptions);
+
+    /// <summary>
+    /// Deep-copies every collection into a read-only wrapper. Catalog records
+    /// are immutable, but JSON normally backs <see cref="IReadOnlyList{T}"/>
+    /// properties with mutable lists that a caller could cast and change after
+    /// signature verification.
+    /// </summary>
+    internal static Catalog Freeze(Catalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var products = Array.AsReadOnly(catalog.Products
+            .Select(product => product with
+            {
+                Releases = Array.AsReadOnly(product.Releases.ToArray()),
+            })
+            .ToArray());
+        var revoked = catalog.Revoked is null
+            ? null
+            : Array.AsReadOnly(catalog.Revoked.ToArray());
+        return catalog with { Products = products, Revoked = revoked };
+    }
 
     /// <summary>
     /// Applies the stricter path policy used after a catalog has crossed the
@@ -205,6 +230,8 @@ public static class CatalogJson
         if (p.Target.TimeoutSeconds is > FlashOptions.MaxTimeoutSeconds)
             throw new CatalogParseException(
                 $"{p.ProductId}: target.timeout_s must be <= {FlashOptions.MaxTimeoutSeconds}");
+        if (p.Target.PowerMode is { } powerMode && !Enum.IsDefined(powerMode))
+            throw new CatalogParseException($"{p.ProductId}: target.power_mode invalid");
 
         // The optional memory map is all-or-nothing per region: a half-declared
         // RAM window would silently widen or narrow the accepted address space.

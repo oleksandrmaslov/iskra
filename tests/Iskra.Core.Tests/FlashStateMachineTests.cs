@@ -179,6 +179,44 @@ public class FlashStateMachineTests
     }
 
     [Fact]
+    public void Exact_validated_load_plan_must_match_gdb_name_address_and_size()
+    {
+        var expected = new[]
+        {
+            new FirmwareLoadSection(".text", 0x08000000, 0x1234),
+            new FirmwareLoadSection(".data", 0x08001234, 0x100),
+        };
+
+        var pass = FlashStateMachine.Classify(Run(HappyPath), "PY32F", expected);
+        Assert.True(pass.IsPass);
+
+        var changedAddress = HappyPath
+            .Select(line => line.Replace(
+                "Loading section .data, size 0x100 lma 0x8001234",
+                "Loading section .data, size 0x100 lma 0x8002234",
+                StringComparison.Ordinal));
+        var fail = FlashStateMachine.Classify(Run(changedAddress), "PY32F", expected);
+        Assert.False(fail.IsPass);
+        Assert.Equal("E_LOAD_FAILED", fail.ErrorCode);
+        Assert.Contains("load plan differs", fail.ErrorMessage);
+    }
+
+    [Fact]
+    public void Unexpected_gdb_loaded_section_is_rejected_even_when_it_verifies()
+    {
+        var expected = new[]
+        {
+            new FirmwareLoadSection(".text", 0x08000000, 0x1234),
+        };
+
+        var fail = FlashStateMachine.Classify(Run(HappyPath), "PY32F", expected);
+
+        Assert.False(fail.IsPass);
+        Assert.Equal("E_LOAD_FAILED", fail.ErrorCode);
+        Assert.Contains("unexpected", fail.ErrorMessage);
+    }
+
+    [Fact]
     public void Happy_path_but_nonzero_exit_yields_gdb_crashed()
     {
         var outcome = FlashStateMachine.Classify(Run(HappyPath, exitCode: 1), "PY32F002A");
@@ -360,7 +398,8 @@ public class FlashStateMachineTests
             string endpoint, PowerMode power, int frequencyHz, bool connectUnderReset,
             string firmwarePath, TimeSpan scanTimeout, TimeSpan flashTimeout,
             Func<GdbRunResult, bool> scanGate, Action<GdbLine>? onLine = null,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            string? probeLockIdentity = null)
         {
             GuardedCalls++;
             ScanCalls++;

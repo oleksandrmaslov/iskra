@@ -17,11 +17,43 @@ goals and acceptance gates live here.
   desktop UI. `Iskra.Desktop` has functional workflow parity and portable/native
   package definitions, but it is not a replacement or a claim of platform/HIL
   parity until the acceptance matrix passes.
-- Security audit status (2026-08-26): **2.2.0 is complete as a labelled
+- Security audit status (2026-08-27): **2.2.1 is complete as a labelled
   engineering release and remains STOP-SHIP for factory production** until the owner,
   infrastructure, signing, and HIL gates in Sprint 9 are closed. The full audit
   is in `docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md`; exact local evidence
-  and artifact hashes are in `docs/RELEASE_EVIDENCE_2.2.0.md`.
+  and artifact hashes are in `docs/RELEASE_EVIDENCE_2.2.1.md`.
+
+## 2026-08-27 security-closure slice
+
+- Reconciled preflight with the exact GDB/BFD load plan: allocatable,
+  file-backed ELF sections are mapped through `PT_LOAD` LMA and compared to
+  GDB's runtime name/address/size multiset. Firmware is copied, flushed, and
+  re-hashed into a random private staging lease before GDB opens it.
+- Made catalog provenance explicit at the flash boundary with an opaque
+  `CatalogActivationPermit`; deep-froze parsed collections; sealed production
+  constructors/policy injection; and moved the remote cache to digest-bound
+  atomic generations plus a timestamp+digest rollback floor.
+- Added a committed audit lifecycle (`STARTED` before external work, same-row
+  `TERMINAL` finalization, explicit cancellation and abandoned-attempt state),
+  so crashes cannot erase evidence that a transaction began.
+- Made probe exclusion machine-wide and physical-identity based. Windows COM
+  aliases, Linux symlinks, and macOS IOKit endpoint identities converge on the
+  same BMP VID/PID+serial lease. Native multi-user/reconnect evidence remains in
+  the HIL matrix.
+- Added bounded GDB/MI line ingestion and UI retention, bounded HEX/sysfs/helper
+  reads, fail-closed settings loading, exact GitHub URL-origin policies, trusted
+  GDB roots with canonical hash/version evidence, and per-user cross-process
+  serialization for every credential mutation.
+- Implemented the persisted cloud-log interval scheduler and release SPDX SBOM
+  plus build/SBOM attestation workflow. The central log transport itself remains
+  non-production until shared mutable GitHub Contents writes are replaced.
+- Broadened `.deb` dependency alternatives to the official .NET 10 library sets
+  for Ubuntu 22.04/24.04 and Debian 12/13. Native package execution remains an
+  acceptance requirement, not a Windows cross-publish claim.
+- Final 2.2.1 verification: locked Release build with zero warnings, 713/713
+  automated tests, and zero known vulnerable NuGet packages. Official signing,
+  native clean-machine/HIL, production catalog key, append-only central audit,
+  and trustworthy board identity remain STOP-SHIP gates.
 
 ## 2026-08-25 release-hardening slice
 
@@ -54,8 +86,8 @@ goals and acceptance gates live here.
 - Avalonia now refuses to close during an active flash, matching WPF, and refuses
   to silently discard invalid settings on exit.
 - Code and cross-publish support are complete enough for an engineering release.
-  Production signing, native clean-machine execution, stable macOS USB identity,
-  full HIL, SBOM/provenance, central log redesign, production catalog-key
+  Production signing, native clean-machine execution, native macOS USB evidence,
+  full HIL, central log redesign, production catalog-key
   rotation, and board identity remain open.
 - Final 2.2.0 verification: locked Release build with zero warnings, 626/626
   automated tests, zero known vulnerable NuGet packages, 16/16 release checksum
@@ -141,10 +173,10 @@ goals and acceptance gates live here.
    polish. `bmp_match` identifies only an MCU family and cannot distinguish two
    products built on the same chip. Add a signed catalog board-ID/UID policy and
    read it before any flash write.
-4. ✅ **Done (2026-08-08).** ELF/HEX load-range validation against
+4. ✅ **Done and reconciled with GDB (2026-08-27).** ELF/HEX load-range validation against
    catalog-declared flash/RAM address ranges. `FirmwareImage` reads the real
-   load map (ELF PT_LOAD physical addresses and file sizes; Intel HEX data
-   records with extended segment/linear addressing), and `FirmwareRangeCheck`
+   load map (file-backed allocatable ELF sections mapped through `PT_LOAD` LMA;
+   Intel HEX data records with extended segment/linear addressing), and `FirmwareRangeCheck`
    refuses anything that cannot belong to the target: `E_FW_TOO_LARGE` when the
    image exceeds `flash_kb`, `E_FW_ADDRESS_RANGE` when a segment falls outside a
    declared window. Wired into both `FlashWorkflow` and the CLI, after the
@@ -194,9 +226,9 @@ the upgrade does not waive the remaining feature-parity and HIL gates.
   `/usr/bin/secret-tool`, and macOS login Keychain through `/usr/bin/security`.
   Helper calls are fixed-path, bounded, and stdin-only; no plaintext fallback.
   Signed-app/real-keyring behavior still belongs to native acceptance.
-- Probe discovery: Windows registry and Linux sysfs/udev exist. macOS currently
-  uses `/dev/cu.usbmodem*`; implement IOKit VID/PID/interface/serial matching to
-  preserve stable physical identity across reconnects before production.
+- ✅ Probe discovery: Windows registry, Linux sysfs/udev, and macOS bounded
+  IOKit plist discovery bind endpoints to BMP VID/PID/interface/serial or stable
+  physical fallback identity. Native reconnect and multi-probe HIL is pending.
 - Platform paths, file dialogs, browser launch, clipboard, sound, and update
   package selection become interfaces.
 - ✅ **`--doctor` extended (2026-08-08)** with the current runtime identifier and
@@ -277,8 +309,9 @@ setup EXEs cannot ship different compilers.
   gates. They must execute on matching native hosts.
 - ✅ Windows/Linux/macOS CI definitions use locked restores, warnings-as-errors,
   vulnerability checks, native tests, publish, and CLI smoke tests.
-- ⏳ Supply-chain SBOM/provenance, official signing credentials, clean-machine
-  package runs, and per-OS/architecture BMP HIL remain.
+- ✅ SPDX SBOM generation/validation and GitHub build/SBOM attestations are
+  defined with pinned tooling/actions. Official signing credentials,
+  clean-machine package runs, and per-OS/architecture BMP HIL remain.
 - ✅ **`.editorconfig` baseline added (2026-08-08)**, describing the house style
   with every rule at `suggestion` severity. It is intentionally not a gate: the
   repository still has pre-existing drift, so a formatting sweep must land

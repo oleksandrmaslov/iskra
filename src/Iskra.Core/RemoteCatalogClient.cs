@@ -34,6 +34,7 @@ public enum RemoteCatalogStatus
     ParseError,           // catalog.json downloaded but failed to parse
     SourceNotAllowed,     // owner/repo isn't in CatalogTrust.AllowedCatalogSources
     RollbackRejected,     // signed catalog's generated_at <= last accepted (anti-rollback)
+    CacheError,           // local transactional cache could not be read/committed safely
 }
 
 /// <summary>
@@ -41,9 +42,10 @@ public enum RemoteCatalogStatus
 /// <para>The repo is public so the GET is anonymous. The signature is verified
 /// against <see cref="CatalogTrust.EmbeddedPublicKey"/>; if it doesn't match,
 /// the download is discarded and the cache is left untouched.</para>
-/// <para>Cache layout: <c>%LOCALAPPDATA%\Iskra\catalog\latest.json</c> +
-/// <c>latest.json.sig</c> + <c>latest.tag</c> (just the tag name, so a future
-/// poll can short-circuit when nothing has changed).</para>
+/// <para>Cache layout is generation-based. A complete signed catalog,
+/// signature, and tag are written beneath <c>generations/&lt;id&gt;</c>; one small
+/// atomically replaced <c>current.json</c> pointer activates the generation.
+/// Legacy <c>latest.*</c> files remain readable only when no pointer exists.</para>
 /// </summary>
 public sealed class RemoteCatalogClient
 {
@@ -56,6 +58,9 @@ public sealed class RemoteCatalogClient
     /// <c>generated_at</c>. We refuse to overwrite the cache with an older catalog even
     /// when the signature is valid.</summary>
     public const string GeneratedAtFileName    = "latest.generated_at";
+    public const string CurrentPointerFileName = "current.json";
+    public const string GenerationsDirectoryName = "generations";
+    public const string CacheLockFileName = ".cache.lock";
 
     public const string ApiBaseUrl  = "https://api.github.com";
     public const string ApiAccept   = "application/vnd.github+json";
@@ -70,7 +75,22 @@ public sealed class RemoteCatalogClient
     private readonly string _cacheDir;
     private readonly byte[] _verificationPublicKey;
 
-    public RemoteCatalogClient(
+    /// <summary>
+    /// Creates the production client. Source allowlisting and the embedded
+    /// verification key are not caller-configurable on this public surface.
+    /// </summary>
+    public RemoteCatalogClient(HttpClient http)
+        : this(
+            http,
+            owner: CatalogTrust.OfficialCatalogSource.Owner,
+            repo: CatalogTrust.OfficialCatalogSource.Repo,
+            cacheDirOverride: null,
+            enforceAllowlist: true,
+            verificationPublicKey: null)
+    {
+    }
+
+    internal RemoteCatalogClient(
         HttpClient http,
         string? owner = null,
         string? repo  = null,
@@ -106,10 +126,83 @@ public sealed class RemoteCatalogClient
         return Path.Combine(local, DefaultDirectoryName, DefaultSubdirectoryName);
     }
 
-    public string CatalogPath        => Path.Combine(_cacheDir, CatalogFileName);
-    public string SignaturePath      => Path.Combine(_cacheDir, SignatureFileName);
-    public string TagPath            => Path.Combine(_cacheDir, TagFileName);
+    public string CatalogPath        => ResolveActivePaths(_cacheDir).CatalogPath;
+    public string SignaturePath      => ResolveActivePaths(_cacheDir).SignaturePath;
+    public string TagPath            => ResolveActivePaths(_cacheDir).TagPath;
     public string GeneratedAtPath    => Path.Combine(_cacheDir, GeneratedAtFileName);
+    public string CurrentPointerPath => Path.Combine(_cacheDir, CurrentPointerFileName);
+
+    public static string ActiveCatalogPath(string? cacheDirOverride = null) =>
+        ResolveActivePaths(cacheDirOverride ?? DefaultCacheDir()).CatalogPath;
+
+    private sealed record CachePaths(
+        string CatalogPath,
+        string SignaturePath,
+        string TagPath,
+        string? ExpectedDigest,
+        bool IsPointerGeneration);
+
+    private static CachePaths ResolveActivePaths(string cacheDir)
+    {
+        var pointerPath = Path.Combine(cacheDir, CurrentPointerFileName);
+        if (!File.Exists(pointerPath))
+        {
+            return new CachePaths(
+                Path.Combine(cacheDir, CatalogFileName),
+                Path.Combine(cacheDir, SignatureFileName),
+                Path.Combine(cacheDir, TagFileName),
+                null,
+                false);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(ReadFileLimited(pointerPath, 4096));
+            var root = document.RootElement;
+            var generation = root.GetProperty("generation").GetString();
+            var digest = root.GetProperty("catalog_sha256").GetString();
+            if (root.GetProperty("schema_version").GetInt32() != 1
+                || !IsSafeGenerationName(generation)
+                || !FirmwareIntegrity.IsValidSha256Hex(digest))
+            {
+                throw new FormatException("catalog cache pointer is malformed");
+            }
+
+            var generationDirectory = Path.Combine(
+                cacheDir,
+                GenerationsDirectoryName,
+                generation!);
+            return new CachePaths(
+                Path.Combine(generationDirectory, "catalog.json"),
+                Path.Combine(generationDirectory, "catalog.json.sig"),
+                Path.Combine(generationDirectory, "catalog.tag"),
+                digest!.ToLowerInvariant(),
+                true);
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or JsonException
+            or InvalidOperationException
+            or KeyNotFoundException
+            or FormatException)
+        {
+            // A pointer means generation mode is authoritative. Never fall
+            // through to legacy latest.* files when that pointer is corrupt,
+            // because doing so could silently reactivate older signed data.
+            var invalid = Path.Combine(cacheDir, ".invalid-current");
+            return new CachePaths(
+                Path.Combine(invalid, "catalog.json"),
+                Path.Combine(invalid, "catalog.json.sig"),
+                Path.Combine(invalid, "catalog.tag"),
+                null,
+                true);
+        }
+    }
+
+    private static bool IsSafeGenerationName(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Length <= 160
+        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
     /// <summary>
     /// Reads the cached anti-rollback floor (catalog <c>generated_at</c> of the
@@ -124,7 +217,12 @@ public sealed class RemoteCatalogClient
         try
         {
             var s = System.Text.Encoding.UTF8.GetString(
-                ReadFileLimited(GeneratedAtPath, 128)).Trim();
+                ReadFileLimited(GeneratedAtPath, 512)).Trim();
+            if (s.StartsWith('{'))
+            {
+                using var document = JsonDocument.Parse(s);
+                s = document.RootElement.GetProperty("generated_at_utc").GetString() ?? "";
+            }
             if (DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.AssumeUniversal
                     | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt))
@@ -141,16 +239,28 @@ public sealed class RemoteCatalogClient
     /// </summary>
     public Catalog? LoadCached()
     {
-        if (!File.Exists(CatalogPath) || !File.Exists(SignaturePath)) return null;
+        var paths = ResolveActivePaths(_cacheDir);
+        if (!File.Exists(paths.CatalogPath) || !File.Exists(paths.SignaturePath)) return null;
         try
         {
-            var bytes = ReadFileLimited(CatalogPath, MaxCatalogBytes);
+            var bytes = ReadFileLimited(paths.CatalogPath, MaxCatalogBytes);
+            var digest = CatalogActivationPolicy.ComputeCatalogSha256(bytes);
+            if (paths.ExpectedDigest is not null
+                && !FirmwareIntegrity.HashesMatch(digest, paths.ExpectedDigest))
+            {
+                return null;
+            }
             var sigText = System.Text.Encoding.UTF8.GetString(
-                ReadFileLimited(SignaturePath, MaxSignatureBytes)).Trim();
+                ReadFileLimited(paths.SignaturePath, MaxSignatureBytes)).Trim();
             var sig = Convert.FromBase64String(sigText);
             if (!CatalogSignature.Verify(bytes, sig, _verificationPublicKey)) return null;
             var catalog = CatalogJson.Parse(bytes);
             CatalogJson.ValidateTrustedArtifactPaths(catalog);
+            var activation = CatalogActivationPolicy.ValidateAndAdvance(
+                catalog.GeneratedAt,
+                GeneratedAtPath,
+                catalogSha256: digest);
+            if (!activation.IsAccepted) return null;
             return catalog;
         }
         catch (Exception ex) when (ex is IOException
@@ -166,11 +276,12 @@ public sealed class RemoteCatalogClient
 
     public string? CachedTag()
     {
-        if (!File.Exists(TagPath)) return null;
+        var paths = ResolveActivePaths(_cacheDir);
+        if (!File.Exists(paths.TagPath)) return null;
         try
         {
             return System.Text.Encoding.UTF8.GetString(
-                ReadFileLimited(TagPath, 1024)).Trim();
+                ReadFileLimited(paths.TagPath, 1024)).Trim();
         }
         catch { return null; }
     }
@@ -249,15 +360,27 @@ public sealed class RemoteCatalogClient
             if (catalogUrl is null || sigUrl is null)
                 return Failure(RemoteCatalogStatus.AssetsMissing,
                     $"{tagName} is missing catalog.json or catalog.json.sig");
+            if (!GitHubUrlPolicy.IsTrustedWebUrl(catalogUrl)
+                || !GitHubUrlPolicy.IsTrustedWebUrl(sigUrl))
+            {
+                return Failure(
+                    RemoteCatalogStatus.AssetsMissing,
+                    $"{tagName} contains a catalog asset URL outside the trusted github.com HTTPS origin");
+            }
 
             if (string.Equals(cachedTag, tagName, StringComparison.Ordinal) && File.Exists(CatalogPath))
             {
                 var cached = LoadCached();
                 if (cached is not null)
+                {
+                    var active = ResolveActivePaths(_cacheDir);
                     return new RemoteCatalogResult(
-                        Catalog: cached, LocalCatalogPath: CatalogPath, LocalSignaturePath: SignaturePath,
+                        Catalog: cached,
+                        LocalCatalogPath: active.CatalogPath,
+                        LocalSignaturePath: active.SignaturePath,
                         TagName: tagName, ChangedFromCached: false,
                         Status: RemoteCatalogStatus.AlreadyUpToDate, Message: null);
+                }
             }
 
             // 2) Download the two assets to disk (anonymous; public repo).
@@ -296,26 +419,147 @@ public sealed class RemoteCatalogClient
             // the most recently committed catalog — protects against an
             // attacker re-serving an older signed catalog (e.g. one whose
             // revocation list hasn't yet blocked a since-revoked release).
-            var activation = CatalogActivationPolicy.ValidateAndAdvance(
-                catalog.GeneratedAt,
-                GeneratedAtPath,
-                requireNewer: true);
-            if (!activation.IsAccepted)
-                return Failure(RemoteCatalogStatus.RollbackRejected,
-                    activation.Diagnostic ?? activation.Status.ToString());
+            var digest = CatalogActivationPolicy.ComputeCatalogSha256(catalogBytes);
+            try
+            {
+                Directory.CreateDirectory(_cacheDir);
+                using var cacheLock = new FileStream(
+                    Path.Combine(_cacheDir, CacheLockFileName),
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.None);
 
-            // 5) Atomic commit: write .tmp files then rename.
-            Directory.CreateDirectory(_cacheDir);
-            WriteAtomic(CatalogPath,   catalogBytes);
-            WriteAtomic(SignaturePath, sigBytes);
-            WriteAtomic(TagPath,       System.Text.Encoding.UTF8.GetBytes(tagName));
+                // Another process may have committed while this process was
+                // downloading. Re-check under the cache lock before creating a
+                // new generation.
+                if (string.Equals(CachedTag(), tagName, StringComparison.Ordinal))
+                {
+                    var cached = LoadCached();
+                    if (cached is not null)
+                    {
+                        var cachedPaths = ResolveActivePaths(_cacheDir);
+                        return new RemoteCatalogResult(
+                            cached,
+                            cachedPaths.CatalogPath,
+                            cachedPaths.SignaturePath,
+                            tagName,
+                            false,
+                            RemoteCatalogStatus.AlreadyUpToDate,
+                            null);
+                    }
+                }
 
-            return new RemoteCatalogResult(
-                Catalog: catalog, LocalCatalogPath: CatalogPath, LocalSignaturePath: SignaturePath,
-                TagName: tagName, ChangedFromCached: cachedTag != tagName,
-                Status: RemoteCatalogStatus.Updated, Message: null);
+                var validation = CatalogActivationPolicy.ValidateAndAdvance(
+                    catalog.GeneratedAt,
+                    GeneratedAtPath,
+                    requireNewer: true,
+                    catalogSha256: digest,
+                    advance: false);
+                if (!validation.IsAccepted)
+                {
+                    return Failure(RemoteCatalogStatus.RollbackRejected,
+                        validation.Diagnostic ?? validation.Status.ToString());
+                }
+
+                var committed = WriteGeneration(catalogBytes, sigBytes, tagName, digest);
+
+                // Advance the signed timestamp+digest floor before activating
+                // the pointer. A crash in between therefore fails closed on
+                // the old generation; it can never activate the new catalog
+                // without its rollback floor.
+                var activation = CatalogActivationPolicy.ValidateAndAdvance(
+                    catalog.GeneratedAt,
+                    GeneratedAtPath,
+                    requireNewer: true,
+                    catalogSha256: digest);
+                if (!activation.IsAccepted)
+                {
+                    return Failure(RemoteCatalogStatus.RollbackRejected,
+                        activation.Diagnostic ?? activation.Status.ToString());
+                }
+
+                var pointer = JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    schema_version = 1,
+                    generation = Path.GetFileName(Path.GetDirectoryName(committed.CatalogPath)),
+                    catalog_sha256 = digest,
+                    generated_at_utc = catalog.GeneratedAt.ToUniversalTime().ToString("O"),
+                    tag = tagName,
+                });
+                WriteAtomic(CurrentPointerPath, pointer);
+                var active = ResolveActivePaths(_cacheDir);
+
+                return new RemoteCatalogResult(
+                    Catalog: catalog,
+                    LocalCatalogPath: active.CatalogPath,
+                    LocalSignaturePath: active.SignaturePath,
+                    TagName: tagName,
+                    ChangedFromCached: cachedTag != tagName,
+                    Status: RemoteCatalogStatus.Updated,
+                    Message: null);
+            }
+            catch (Exception ex) when (ex is IOException
+                or UnauthorizedAccessException
+                or JsonException)
+            {
+                return Failure(RemoteCatalogStatus.CacheError, ex.Message);
+            }
             }
         }
+    }
+
+    private CachePaths WriteGeneration(
+        byte[] catalogBytes,
+        byte[] signatureBytes,
+        string tagName,
+        string digest)
+    {
+        var generations = Path.Combine(_cacheDir, GenerationsDirectoryName);
+        Directory.CreateDirectory(generations);
+        var generationName = $"g-{DateTime.UtcNow:yyyyMMddTHHmmssfff}-{digest[..16]}-{Guid.NewGuid():N}";
+        var temporaryDirectory = Path.Combine(generations, ".tmp-" + Guid.NewGuid().ToString("N"));
+        var generationDirectory = Path.Combine(generations, generationName);
+        try
+        {
+            Directory.CreateDirectory(temporaryDirectory);
+            WriteNewDurable(Path.Combine(temporaryDirectory, "catalog.json"), catalogBytes);
+            WriteNewDurable(Path.Combine(temporaryDirectory, "catalog.json.sig"), signatureBytes);
+            WriteNewDurable(
+                Path.Combine(temporaryDirectory, "catalog.tag"),
+                System.Text.Encoding.UTF8.GetBytes(tagName));
+            Directory.Move(temporaryDirectory, generationDirectory);
+            return new CachePaths(
+                Path.Combine(generationDirectory, "catalog.json"),
+                Path.Combine(generationDirectory, "catalog.json.sig"),
+                Path.Combine(generationDirectory, "catalog.tag"),
+                digest,
+                true);
+        }
+        catch
+        {
+            try
+            {
+                if (Directory.Exists(temporaryDirectory))
+                    Directory.Delete(temporaryDirectory, recursive: true);
+            }
+            catch { }
+            throw;
+        }
+    }
+
+    private static void WriteNewDurable(string path, byte[] bytes)
+    {
+        using var stream = new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            Options = FileOptions.WriteThrough,
+        });
+        stream.Write(bytes);
+        stream.Flush(flushToDisk: true);
     }
 
     private async Task<byte[]> GetBytesAsync(
@@ -388,8 +632,18 @@ public sealed class RemoteCatalogClient
 
     private static void WriteAtomic(string path, byte[] bytes)
     {
-        var tmp = path + ".tmp";
-        File.WriteAllBytes(tmp, bytes);
+        var tmp = path + $".{Guid.NewGuid():N}.tmp";
+        using (var stream = new FileStream(tmp, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            Options = FileOptions.WriteThrough,
+        }))
+        {
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
+        }
         try { File.Move(tmp, path, overwrite: true); }
         catch
         {

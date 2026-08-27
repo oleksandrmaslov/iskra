@@ -84,7 +84,7 @@ Priority: optional
 Architecture: $deb_arch
 Installed-Size: $installed_size
 Maintainer: Iskra maintainers <noreply@github.com>
-Depends: ca-certificates, libc6, libgcc-s1, libgssapi-krb5-2, libicu74, libssl3t64, libstdc++6, tzdata, zlib1g, libx11-6, libice6, libsm6, libfontconfig1, libsecret-tools, gdb-multiarch | gdb-arm-none-eabi
+Depends: ca-certificates, libc6, libgcc-s1, libgssapi-krb5-2, libicu76 | libicu74 | libicu72 | libicu70, libssl3t64 | libssl3, libstdc++6, tzdata, zlib1g, libx11-6, libice6, libsm6, libfontconfig1, libsecret-tools, gdb-multiarch | gdb-arm-none-eabi
 Homepage: https://github.com/oleksandrmaslov/iskra
 Description: Factory firmware flasher for Black Magic Probe
  Iskra verifies signed firmware catalogs, flashes ARM Cortex-M targets through

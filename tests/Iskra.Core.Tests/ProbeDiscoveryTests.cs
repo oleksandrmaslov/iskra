@@ -52,6 +52,30 @@ public class ProbeDiscoveryTests
         Assert.Equal(expected, ProbeDiscovery.StableSerialFromInstanceName(instanceName, parentPrefix));
     }
 
+    [Fact]
+    public void Probe_lock_identity_uses_vid_pid_and_normalized_serial_before_endpoint()
+    {
+        var first = new ProbeInfo(
+            "COM30", "BMP", "instance-a", ProbeInterface.Gdb, " bmp-001 ");
+        var reenumerated = new ProbeInfo(
+            "COM77", "BMP", "instance-b", ProbeInterface.Gdb, "BMP-001");
+
+        Assert.Equal(
+            "usb:1d50:6018:serial:BMP-001",
+            ProbeDiscovery.ProbeLockIdentity(first));
+        Assert.Equal(
+            ProbeDiscovery.ProbeLockIdentity(first),
+            ProbeDiscovery.ProbeLockIdentity(reenumerated));
+    }
+
+    [Fact]
+    public void Windows_com_endpoint_aliases_have_one_canonical_lock_identity()
+    {
+        Assert.Equal(
+            ProbeDiscovery.ResolveProbeLockIdentity("com030"),
+            ProbeDiscovery.ResolveProbeLockIdentity(@"\\.\COM30"));
+    }
+
     [Theory]
     [InlineData("00", ProbeInterface.Gdb)]
     [InlineData("02", ProbeInterface.Uart)]
@@ -82,6 +106,29 @@ public class ProbeDiscoveryTests
             Assert.Equal(ProbeInterface.Gdb, probes[0].Interface);
             Assert.Equal("BMP-SERIAL", probes[0].SerialNumber);
             Assert.Equal(ProbeInterface.Uart, probes[1].Interface);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindLinux_rejects_oversized_sysfs_metadata_without_throwing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-sysfs-{Guid.NewGuid():N}");
+        var sysTty = Path.Combine(root, "sys", "class", "tty");
+        try
+        {
+            CreateLinuxTtyFixture(
+                sysTty,
+                "ttyACM0",
+                new string('1', 4_097),
+                "6018",
+                "00",
+                "BMP-SERIAL");
+
+            Assert.Empty(ProbeDiscovery.FindLinux(sysTty, Path.Combine(root, "dev")));
         }
         finally
         {

@@ -140,8 +140,11 @@ public sealed class AppUpdateClient
                 if (releaseVersion.StartsWith('v') || releaseVersion.StartsWith('V'))
                     releaseVersion = releaseVersion[1..];
 
-                var htmlUrl = root.TryGetProperty("html_url", out var htmlEl)
+                var htmlUrlCandidate = root.TryGetProperty("html_url", out var htmlEl)
                     ? htmlEl.GetString()
+                    : null;
+                var htmlUrl = GitHubUrlPolicy.IsTrustedWebUrl(htmlUrlCandidate)
+                    ? htmlUrlCandidate
                     : null;
 
                 DateTime? publishedAt = null;
@@ -170,6 +173,8 @@ public sealed class AppUpdateClient
                             ? urlEl.GetString()
                             : null;
                         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(downloadUrl))
+                            continue;
+                        if (!GitHubUrlPolicy.IsTrustedWebUrl(downloadUrl))
                             continue;
 
                         switch (runtime)

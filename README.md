@@ -5,13 +5,13 @@ Magic Probe. It verifies a signed firmware catalog, checks firmware integrity
 and memory ranges, drives a guarded `gdb` transaction, and records every attempt
 in SQLite.
 
-> **Status (2026-08-26): 2.2.0 engineering release, not factory-approved.**
+> **Status (2026-08-27): 2.2.1 engineering release, not factory-approved.**
 > WPF remains the supported Windows variant. The Avalonia app and CLI now build
 > for Windows, Linux, and macOS and share the same flash workflow, but production
 > signing, clean-machine/HIL evidence, catalog-key rotation, board identity, and
 > append-only central audit logging remain release gates. See
 > [`docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md`](docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md)
-> and [`docs/RELEASE_EVIDENCE_2.2.0.md`](docs/RELEASE_EVIDENCE_2.2.0.md).
+> and [`docs/RELEASE_EVIDENCE_2.2.1.md`](docs/RELEASE_EVIDENCE_2.2.1.md).
 
 Release history is in [`CHANGELOG.md`](CHANGELOG.md); forward gates are in
 [`ROADMAP.md`](ROADMAP.md).
@@ -54,15 +54,16 @@ firmware until that gate accepts the target.
 
 | Platform | UI/package path | Secure GitHub token store | Current acceptance |
 |---|---|---|---|
-| Windows x64 | WPF and Avalonia; MSI/Burn setup | DPAPI machine store | Code/tests and local packaging; renewed HIL and Authenticode pending |
+| Windows x64 | WPF and Avalonia; MSI/Burn setup | Per-user DPAPI store | Code/tests and local packaging; renewed HIL and Authenticode pending |
 | Linux x64/arm64 | Avalonia + CLI; portable tar and native `.deb` | Secret Service via `secret-tool` | Code/cross-publish complete; native clean-machine, udev, keyring, and HIL pending |
-| macOS arm64/x64 | Avalonia `.app` + CLI; tar/zip/DMG | Login Keychain via `/usr/bin/security` | Code/cross-publish complete; native signing/notarization, USB identity, Keychain, and HIL pending |
+| macOS arm64/x64 | Avalonia `.app` + CLI; tar/zip/DMG | Login Keychain via `/usr/bin/security` | IOKit-backed code/cross-publish complete; native signing/notarization, Keychain, and HIL pending |
 
 There is no plaintext credential fallback. Missing or locked platform credential
 services disable sign-in and private firmware acquisition. Linux packages use a
 least-privilege udev rule (`0660`, `uaccess`) rather than world-writable serial
-devices. macOS probe discovery currently uses `/dev/cu.usbmodem*`; stable IOKit
-VID/PID/serial identity is still an acceptance gap.
+devices. macOS probe discovery binds `/dev/cu.usbmodem*` to IOKit
+VID/PID/interface/serial or location identity and refuses unidentified
+endpoints; native reconnect/contention HIL remains an acceptance gate.
 
 Operator presentation supports Ukrainian (default), English, and German in WPF,
 Avalonia, and CLI (`--lang uk|en|de`). Protocol values, CLI flags, hashes, error
@@ -99,30 +100,30 @@ Run station diagnostics:
 Build a self-contained Windows x64 bundle containing WPF, Avalonia, and CLI:
 
 ```powershell
-pwsh ./installer/build-localized-exes.ps1 -Version 2.2.0
+pwsh ./installer/build-localized-exes.ps1 -Version 2.2.1
 ```
 
 Build the WPF and side-by-side Avalonia Windows installers:
 
 ```powershell
-pwsh ./installer/build-installer.ps1 -Version 2.2.0
-pwsh ./installer/build-avalonia-installer.ps1 -Version 2.2.0
+pwsh ./installer/build-installer.ps1 -Version 2.2.1
+pwsh ./installer/build-avalonia-installer.ps1 -Version 2.2.1
 ```
 
 Build deterministic portable Linux/macOS bundles from any host:
 
 ```powershell
-pwsh ./installer/build-unix-bundles.ps1 -Version 2.2.0 -AllowDirty
+pwsh ./installer/build-unix-bundles.ps1 -Version 2.2.1 -AllowDirty
 ```
 
 Native `.deb` and macOS DMG creation must run on matching native hosts:
 
 ```bash
 # Linux x64 or arm64
-ISKRA_ALLOW_UNSIGNED=1 bash installer/build-linux-package.sh 2.2.0
+ISKRA_ALLOW_UNSIGNED=1 bash installer/build-linux-package.sh 2.2.1
 
 # macOS arm64 or x64
-ISKRA_ALLOW_UNSIGNED=1 bash installer/build-macos-package.sh 2.2.0
+ISKRA_ALLOW_UNSIGNED=1 bash installer/build-macos-package.sh 2.2.1
 ```
 
 `ISKRA_ALLOW_UNSIGNED=1` is for clearly labelled engineering artifacts only.
@@ -131,6 +132,14 @@ builds require a Developer ID identity and notarization profile. Tagged Windows
 publication is intentionally blocked until Authenticode and timestamping are
 configured. The required environment, secrets, and fail-closed policy are
 documented in [`docs/RELEASE_SIGNING.md`](docs/RELEASE_SIGNING.md).
+
+Generate and validate an SPDX SBOM for any unpacked release drop:
+
+```powershell
+pwsh ./installer/generate-sbom.ps1 -Version 2.2.1 `
+  -BuildDropPath ./artifacts/Iskra-2.2.1-win-x64 `
+  -OutputPath ./artifacts/Iskra-2.2.1-win-x64.spdx.json
+```
 
 The CI matrix builds/tests Windows x64, Ubuntu x64/arm64, and macOS arm64/x64
 natively. The release workflow creates native packages only on the corresponding

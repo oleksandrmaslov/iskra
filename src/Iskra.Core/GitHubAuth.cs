@@ -219,6 +219,9 @@ public sealed class GitHubDeviceFlow
             throw new GitHubAuthException("device code response: user_code missing");
         if (string.IsNullOrEmpty(r.VerificationUri))
             throw new GitHubAuthException("device code response: verification_uri missing");
+        if (!GitHubUrlPolicy.IsTrustedWebUrl(r.VerificationUri))
+            throw new GitHubAuthException(
+                "device code response: verification_uri is outside the trusted github.com HTTPS origin");
         if (r.ExpiresIn <= 0)
             throw new GitHubAuthException("device code response: expires_in must be > 0");
         if (r.Interval <= 0)

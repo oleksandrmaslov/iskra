@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -390,16 +391,24 @@ public sealed class MainWindowViewModelTests : IDisposable
     private static byte[] MinimalElf32(uint loadAddress, uint length)
     {
         const int headerSize = 52;
-        const int entrySize = 32;
-        var dataOffset = headerSize + entrySize;
-        var bytes = new byte[checked(dataOffset + (int)length)];
+        const int programEntrySize = 32;
+        const int sectionEntrySize = 40;
+        var names = Encoding.ASCII.GetBytes("\0.shstrtab\0.text\0");
+        var namesOffset = headerSize + programEntrySize;
+        var dataOffset = (namesOffset + names.Length + 3) & ~3;
+        var sectionOffset = (checked(dataOffset + (int)length) + 3) & ~3;
+        var bytes = new byte[checked(sectionOffset + sectionEntrySize * 3)];
         bytes[0] = 0x7F; bytes[1] = (byte)'E'; bytes[2] = (byte)'L'; bytes[3] = (byte)'F';
         bytes[4] = 1; bytes[5] = 1; bytes[6] = 1;
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(16), 2);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(18), 40);
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28), headerSize);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(42), entrySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(32), (uint)sectionOffset);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(42), programEntrySize);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(44), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(46), sectionEntrySize);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(48), 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(50), 1);
         var entry = bytes.AsSpan(headerSize);
         BinaryPrimitives.WriteUInt32LittleEndian(entry, 1);
         BinaryPrimitives.WriteUInt32LittleEndian(entry[4..], (uint)dataOffset);
@@ -407,6 +416,20 @@ public sealed class MainWindowViewModelTests : IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(entry[12..], loadAddress);
         BinaryPrimitives.WriteUInt32LittleEndian(entry[16..], length);
         BinaryPrimitives.WriteUInt32LittleEndian(entry[20..], length);
+        names.CopyTo(bytes, namesOffset);
+        var namesSection = bytes.AsSpan(sectionOffset + sectionEntrySize, sectionEntrySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(namesSection, 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(namesSection[4..], 3);
+        BinaryPrimitives.WriteUInt32LittleEndian(namesSection[16..], (uint)namesOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(namesSection[20..], (uint)names.Length);
+        var textSection = bytes.AsSpan(sectionOffset + sectionEntrySize * 2, sectionEntrySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection, 11);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[4..], 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[8..], 0x2);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[12..], loadAddress);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[16..], (uint)dataOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[20..], length);
+        BinaryPrimitives.WriteUInt32LittleEndian(textSection[32..], 4);
         return bytes;
     }
 
@@ -452,7 +475,8 @@ public sealed class MainWindowViewModelTests : IDisposable
                 directory,
                 CatalogTrustResult.Verified,
                 false,
-                null);
+                null,
+                CatalogActivationPermit.ForTests(catalog));
     }
 
     private sealed class FakeGdbFactory : IGdbProcessFactory
@@ -476,7 +500,8 @@ public sealed class MainWindowViewModelTests : IDisposable
             TimeSpan flashTimeout,
             Func<GdbRunResult, bool> scanGate,
             Action<GdbLine>? onLine = null,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            string? probeLockIdentity = null)
         {
             var scan = Replay(onLine,
                 "Target voltage: 3.3V",

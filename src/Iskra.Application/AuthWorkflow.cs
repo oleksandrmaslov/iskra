@@ -122,7 +122,11 @@ public sealed class AuthWorkflow
 
         try
         {
-            _store.Delete();
+            TokenStoreOperationLock.Run(_store, () =>
+            {
+                _store.Delete();
+                return true;
+            });
         }
         catch (Exception ex)
         {
@@ -130,6 +134,23 @@ public sealed class AuthWorkflow
         }
 
         return Evaluate();
+    }
+
+    /// <summary>
+    /// Persists a newly completed Device Flow session under the same
+    /// cross-process mutation lock used by refresh and sign-out.
+    /// </summary>
+    public void SaveTokens(StoredTokens tokens)
+    {
+        ArgumentNullException.ThrowIfNull(tokens);
+        if (_store is null)
+            throw new PlatformNotSupportedException("no encrypted token store on this platform");
+
+        TokenStoreOperationLock.Run(_store, () =>
+        {
+            _store.Save(tokens);
+            return true;
+        });
     }
 
     private static AuthSnapshot Simple(AuthStatus status) => new(status, false, null, null, null);

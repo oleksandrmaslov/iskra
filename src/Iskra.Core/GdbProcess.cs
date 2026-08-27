@@ -28,10 +28,11 @@ public sealed record GdbRunResult(
 /// so scan and flash share one GDB/remote connection; the batch helpers remain
 /// for diagnostics and compatibility only.
 /// </summary>
-public class GdbProcess
+internal class GdbProcess
 {
-    public const int MaxCapturedLines = 10_000;
-    public const int MaxCapturedLineChars = 16_384;
+    public const int MaxCapturedLines = 4_096;
+    public const int MaxCapturedLineChars = 8_192;
+    public const int MaxCapturedChars = 1_048_576;
 
     private readonly string _gdbExe;
 
@@ -61,47 +62,46 @@ public class GdbProcess
         };
         foreach (var a in processArgs) psi.ArgumentList.Add(a);
 
-        var lines = new Queue<GdbLine>();
-        var sync = new object();
+        var lines = new BoundedGdbLineBuffer();
 
-        void Capture(string? text, GdbStream stream)
+        void Capture(BoundedProcessLine captured, GdbStream stream)
         {
-            if (text is null) return;
-            if (text.Length > MaxCapturedLineChars)
-                text = text[..MaxCapturedLineChars] + "…[truncated]";
-            var line = new GdbLine(DateTime.UtcNow, stream, text);
-            lock (sync)
-            {
-                if (lines.Count == MaxCapturedLines) lines.Dequeue();
-                lines.Enqueue(line);
-            }
-            onLine?.Invoke(line);
+            var line = new GdbLine(DateTime.UtcNow, stream, captured.Text);
+            lines.Add(line);
+            try { onLine?.Invoke(line); }
+            catch { }
         }
 
         using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        proc.OutputDataReceived += (_, e) => Capture(e.Data, GdbStream.Stdout);
-        proc.ErrorDataReceived  += (_, e) => Capture(e.Data, GdbStream.Stderr);
 
         var sw = Stopwatch.StartNew();
         if (!proc.Start())
             throw new InvalidOperationException($"Failed to start gdb: {_gdbExe}");
 
-        proc.BeginOutputReadLine();
-        proc.BeginErrorReadLine();
-
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout);
+        var stdoutTask = BoundedProcessLineReader.ReadAsync(
+            proc.StandardOutput,
+            line => Capture(line, GdbStream.Stdout),
+            cts.Token);
+        var stderrTask = BoundedProcessLineReader.ReadAsync(
+            proc.StandardError,
+            line => Capture(line, GdbStream.Stderr),
+            cts.Token);
 
         bool timedOut = false;
         try
         {
             await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+            cts.CancelAfter(Timeout.InfiniteTimeSpan);
+            await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             var callerCancelled = ct.IsCancellationRequested;
             timedOut = !callerCancelled;
             await GdbMiSession.TerminateProcessTreeAsync(proc, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            await ObserveReadersAsync(stdoutTask, stderrTask).ConfigureAwait(false);
             if (callerCancelled) throw;
         }
         catch
@@ -110,22 +110,28 @@ public class GdbProcess
             // shutdown/caller cancellation must not leave GDB running against
             // a target in the background.
             await GdbMiSession.TerminateProcessTreeAsync(proc, TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            cts.Cancel();
+            await ObserveReadersAsync(stdoutTask, stderrTask).ConfigureAwait(false);
             throw;
         }
 
         sw.Stop();
 
-        // Drain any buffered async output before snapshotting.
-        try { proc.WaitForExit(); } catch { /* already exited */ }
-
-        IReadOnlyList<GdbLine> snapshot;
-        lock (sync) snapshot = lines.ToArray();
+        var snapshot = lines.Snapshot();
 
         return new GdbRunResult(
             ExitCode: timedOut ? -1 : proc.ExitCode,
             TimedOut: timedOut,
             Duration: sw.Elapsed,
             Output: snapshot);
+    }
+
+    private static async Task ObserveReadersAsync(params Task[] readers)
+    {
+        try { await Task.WhenAll(readers).ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
     }
 
     /// <summary>
@@ -145,7 +151,8 @@ public class GdbProcess
         TimeSpan flashTimeout,
         Func<GdbRunResult, bool> scanGate,
         Action<GdbLine>? onLine = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? probeLockIdentity = null)
     {
         return GdbMiSession.RunAsync(
             _gdbExe,
@@ -158,7 +165,8 @@ public class GdbProcess
             flashTimeout,
             scanGate,
             onLine,
-            ct);
+            ct,
+            probeLockIdentity);
     }
 
     /// <summary>
@@ -196,5 +204,62 @@ public class GdbProcess
         var args = GdbCommandBuilder.BuildScanProcessArgs(
             comPort, power, frequencyHz, connectUnderReset);
         return RunAsync(args, timeout, onLine, ct);
+    }
+}
+
+/// <summary>
+/// Thread-safe recent-output retention shared by batch and MI process capture.
+/// Both line count and aggregate characters are bounded, so many maximum-size
+/// child-process lines cannot consume hundreds of MiB.
+/// </summary>
+internal sealed class BoundedGdbLineBuffer
+{
+    private const string TruncationSuffix = "…[truncated]";
+    private readonly Queue<GdbLine> _lines = new();
+    private readonly object _sync = new();
+    private int _retainedChars;
+
+    public void Add(GdbLine line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        line = line with { Text = TruncateLine(line.Text) };
+        lock (_sync)
+        {
+            while (_lines.Count > 0
+                && (_lines.Count >= GdbProcess.MaxCapturedLines
+                    || _retainedChars + line.Text.Length > GdbProcess.MaxCapturedChars))
+            {
+                _retainedChars -= _lines.Dequeue().Text.Length;
+            }
+            _lines.Enqueue(line);
+            _retainedChars += line.Text.Length;
+        }
+    }
+
+    public IReadOnlyList<GdbLine> Snapshot()
+    {
+        lock (_sync) return _lines.ToArray();
+    }
+
+    internal int RetainedChars
+    {
+        get { lock (_sync) return _retainedChars; }
+    }
+
+    internal static string TruncateLine(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Length <= GdbProcess.MaxCapturedLineChars) return text;
+        return text[..(GdbProcess.MaxCapturedLineChars - TruncationSuffix.Length)]
+            + TruncationSuffix;
+    }
+
+    internal static string MarkTruncated(string retainedPrefix)
+    {
+        ArgumentNullException.ThrowIfNull(retainedPrefix);
+        var prefixLength = Math.Min(
+            retainedPrefix.Length,
+            GdbProcess.MaxCapturedLineChars - TruncationSuffix.Length);
+        return retainedPrefix[..prefixLength] + TruncationSuffix;
     }
 }

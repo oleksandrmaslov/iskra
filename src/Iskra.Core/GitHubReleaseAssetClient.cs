@@ -117,7 +117,12 @@ public sealed class GitHubReleaseAssetClient
             if (!string.Equals(n.GetString(), assetName, StringComparison.Ordinal)) continue;
             if (!a.TryGetProperty("url", out var u) || u.ValueKind != JsonValueKind.String)
                 throw new GitHubAssetNotFoundException(repo, tag, assetName, "asset has no url field");
-            return u.GetString()!;
+            var assetUrl = u.GetString();
+            if (!GitHubUrlPolicy.IsTrustedApiAssetUrl(assetUrl))
+                throw new GitHubApiException(
+                    0,
+                    "GitHub returned an asset URL outside the trusted api.github.com HTTPS origin");
+            return assetUrl!;
         }
         throw new GitHubAssetNotFoundException(repo, tag, assetName, "no asset with that name");
     }
@@ -136,6 +141,10 @@ public sealed class GitHubReleaseAssetClient
     {
         if (string.IsNullOrWhiteSpace(assetApiUrl))
             throw new ArgumentException("assetApiUrl required", nameof(assetApiUrl));
+        if (!GitHubUrlPolicy.IsTrustedApiAssetUrl(assetApiUrl))
+            throw new ArgumentException(
+                "assetApiUrl must be a GitHub API release-asset HTTPS URL",
+                nameof(assetApiUrl));
         if (destination is null) throw new ArgumentNullException(nameof(destination));
         if (string.IsNullOrWhiteSpace(accessToken))
             throw new ArgumentException("accessToken required", nameof(accessToken));

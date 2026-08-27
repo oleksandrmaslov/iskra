@@ -24,10 +24,10 @@
 #     manager or Homebrew.
 #
 # Usage:
-#   pwsh ./installer/build-unix-bundles.ps1 -Version 2.2.0
+#   pwsh ./installer/build-unix-bundles.ps1 -Version 2.2.1
 
 param(
-    [string] $Version = "2.2.0",
+    [string] $Version = "2.2.1",
     [string] $Configuration = "Release",
     [string[]] $Runtimes = @("linux-x64", "linux-arm64", "osx-arm64", "osx-x64"),
     [switch] $AllowDirty,
@@ -284,9 +284,10 @@ native checksum manifest; the builder fails closed for unsigned tag releases.
 
 Run:  open Iskra.app        (or ./Iskra.app/Contents/MacOS/Iskra from a terminal)
 
-Probe discovery reads /dev/cu.usbmodem*, using the trailing interface digit
-(1 = GDB, 3 = UART). Production acceptance still requires IOKit identity and
-real-probe HIL on each supported macOS architecture.
+Probe discovery binds each /dev/cu.usbmodem endpoint to IOKit USB VID/PID,
+interface number, serial/location identity, and refuses unidentified endpoints.
+Production acceptance still requires real-probe reconnect/contention HIL on
+each supported macOS architecture.
 "@ } else { @"
 UNSIGNED BUILD. Signing, notarization, and DMG creation require a macOS release
 runner and an Apple Developer ID. Gatekeeper can therefore quarantine this
@@ -294,9 +295,10 @@ engineering archive; do not weaken a production station to run it.
 
 Run:  open Iskra.app        (or ./Iskra.app/Contents/MacOS/Iskra from a terminal)
 
-Probe discovery reads /dev/cu.usbmodem*, using the trailing interface digit
-(1 = GDB, 3 = UART). The naming convention is unit-tested, but it has never
-been run against a probe on real hardware.
+Probe discovery binds each /dev/cu.usbmodem endpoint to IOKit USB VID/PID,
+interface number, serial/location identity, and refuses unidentified endpoints.
+The native adapter is fixture-tested but still needs real-probe HIL on each
+supported macOS architecture.
 "@ }
 
     $linuxNotes = @"

@@ -134,6 +134,21 @@ public sealed class AuthAndCloudWorkflowTests : IDisposable
     }
 
     [Fact]
+    public void Saving_a_completed_device_flow_persists_the_new_session()
+    {
+        var store = new FakeTokenStore();
+        var workflow = new AuthWorkflow(store, clientConfigured: true);
+        var tokens = Tokens(
+            accessExpires: Now.AddHours(6),
+            refreshExpires: Now.AddDays(90));
+
+        workflow.SaveTokens(tokens);
+
+        Assert.Same(tokens, store.Tokens);
+        Assert.Equal(AuthStatus.SignedIn, workflow.Evaluate(Now).Status);
+    }
+
+    [Fact]
     public void A_failed_delete_is_surfaced_instead_of_pretending_to_be_signed_out()
     {
         var store = new FakeTokenStore

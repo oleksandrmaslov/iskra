@@ -69,8 +69,8 @@ public class RemoteCatalogClientTests : IDisposable
         {
           "tag_name": "{{tag}}",
           "assets": [
-            { "name": "catalog.json",     "browser_download_url": "https://dl/catalog.json" },
-            { "name": "catalog.json.sig", "browser_download_url": "https://dl/catalog.json.sig" }
+            { "name": "catalog.json",     "browser_download_url": "https://github.com/o/r/releases/download/v1/catalog.json" },
+            { "name": "catalog.json.sig", "browser_download_url": "https://github.com/o/r/releases/download/v1/catalog.json.sig" }
           ]
         }
         """;
@@ -108,6 +108,21 @@ public class RemoteCatalogClientTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchAsync_refuses_catalog_asset_urls_outside_github_https()
+    {
+        var release = ReleaseJson().Replace(
+            "https://github.com/o/r/releases/download/v1/catalog.json",
+            "https://evil.example/catalog.json",
+            StringComparison.Ordinal);
+        var handler = new StubHandler(JsonResp(release));
+
+        var result = await NewClient(handler).FetchAsync();
+
+        Assert.Equal(RemoteCatalogStatus.AssetsMissing, result.Status);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public async Task FetchAsync_commits_valid_signed_catalog_and_rollback_floor()
     {
         var generatedAt = DateTime.UtcNow.AddHours(-1);
@@ -127,6 +142,15 @@ public class RemoteCatalogClientTests : IDisposable
         Assert.Equal(tag, File.ReadAllText(client.TagPath));
         Assert.Equal(generatedAt, client.CachedGeneratedAt());
         Assert.NotNull(client.LoadCached());
+        Assert.True(File.Exists(client.CurrentPointerPath));
+        Assert.Equal(
+            Path.GetDirectoryName(client.CatalogPath),
+            Path.GetDirectoryName(client.SignaturePath));
+        Assert.Contains(
+            RemoteCatalogClient.GenerationsDirectoryName,
+            client.CatalogPath,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(_cacheDir, RemoteCatalogClient.CatalogFileName)));
     }
 
     [Theory]
@@ -304,6 +328,57 @@ public class RemoteCatalogClientTests : IDisposable
 
         File.WriteAllBytes(client.SignaturePath,
             new byte[RemoteCatalogClient.MaxSignatureBytes + 1]);
+        Assert.Null(client.LoadCached());
+    }
+
+    [Fact]
+    public void Corrupt_generation_pointer_never_falls_back_to_valid_legacy_cache()
+    {
+        var client = NewClient(new StubHandler());
+        Directory.CreateDirectory(_cacheDir);
+        var signature = CatalogSignature.Sign(SampleCatalogBytes, _kp.PrivateKey);
+        File.WriteAllBytes(
+            Path.Combine(_cacheDir, RemoteCatalogClient.CatalogFileName),
+            SampleCatalogBytes);
+        File.WriteAllText(
+            Path.Combine(_cacheDir, RemoteCatalogClient.SignatureFileName),
+            Convert.ToBase64String(signature));
+        File.WriteAllText(client.CurrentPointerPath, "{ definitely-not-json");
+
+        Assert.Null(client.LoadCached());
+        Assert.Contains(".invalid-current", client.CatalogPath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Incomplete_active_generation_fails_closed_without_mixing_files()
+    {
+        var generatedAt = DateTime.UtcNow.AddHours(-1);
+        var client = NewClient(SignedCatalogHandler(
+            CatalogBytesAt(generatedAt),
+            "catalog-generation-integrity"));
+        Assert.Equal(RemoteCatalogStatus.Updated, (await client.FetchAsync()).Status);
+
+        File.Delete(client.SignaturePath);
+
+        Assert.Null(client.LoadCached());
+        Assert.True(File.Exists(client.CatalogPath));
+        Assert.False(File.Exists(client.SignaturePath));
+    }
+
+    [Fact]
+    public async Task Active_generation_older_than_floor_is_not_returned()
+    {
+        var generatedAt = DateTime.UtcNow.AddHours(-2);
+        var client = NewClient(SignedCatalogHandler(
+            CatalogBytesAt(generatedAt),
+            "catalog-floor-binding"));
+        Assert.Equal(RemoteCatalogStatus.Updated, (await client.FetchAsync()).Status);
+        CatalogActivationPolicy.ValidateAndAdvance(
+            generatedAt.AddHours(1),
+            client.GeneratedAtPath,
+            DateTime.UtcNow,
+            catalogSha256: new string('f', 64));
+
         Assert.Null(client.LoadCached());
     }
 

@@ -24,9 +24,30 @@ public enum CatalogTrustResult
 /// <see cref="TrustResult"/> is <see cref="CatalogTrustResult.Verified"/>, or
 /// the caller has explicitly enabled the unsigned lab policy.
 /// </summary>
-public sealed record CatalogFileVerificationResult(
-    CatalogTrustResult TrustResult,
-    ReadOnlyMemory<byte>? CatalogBytes);
+public sealed record CatalogFileVerificationResult
+{
+    private readonly byte[]? _catalogBytes;
+
+    internal CatalogFileVerificationResult(
+        CatalogTrustResult trustResult,
+        byte[]? catalogBytes)
+    {
+        TrustResult = trustResult;
+        _catalogBytes = catalogBytes is null ? null : (byte[])catalogBytes.Clone();
+    }
+
+    public CatalogTrustResult TrustResult { get; }
+    // Return a fresh copy so MemoryMarshal.TryGetArray cannot mutate the exact
+    // private snapshot whose signature produced TrustResult.Verified.
+    internal ReadOnlyMemory<byte>? CatalogBytes
+    {
+        get
+        {
+            if (_catalogBytes is null) return (ReadOnlyMemory<byte>?)null;
+            return new ReadOnlyMemory<byte>((byte[])_catalogBytes.Clone());
+        }
+    }
+}
 
 /// <summary>
 /// File-level trust policy for <c>catalog.json</c>. The signature is a
@@ -92,10 +113,10 @@ public static class CatalogTrust
     /// so we never make an HTTP request to a non-official endpoint.</para>
     /// </summary>
     public static readonly IReadOnlyList<(string Owner, string Repo)> AllowedCatalogSources =
-        new[]
+        Array.AsReadOnly(new[]
         {
             ("oleksandrmaslov", "iskra-catalog"),
-        };
+        });
 
     /// <summary>The canonical official catalog source — first entry of the allowlist.</summary>
     public static (string Owner, string Repo) OfficialCatalogSource => AllowedCatalogSources[0];
@@ -115,8 +136,13 @@ public static class CatalogTrust
 
     public static CatalogTrustResult VerifyCatalogFile(
         string catalogPath,
+        bool requireSigned)
+        => ReadAndVerifyCatalogFile(catalogPath, requireSigned).TrustResult;
+
+    internal static CatalogTrustResult VerifyCatalogFile(
+        string catalogPath,
         bool requireSigned,
-        byte[]? publicKey = null)
+        byte[]? publicKey)
         => ReadAndVerifyCatalogFile(catalogPath, requireSigned, publicKey).TrustResult;
 
     /// <summary>
@@ -127,10 +153,14 @@ public static class CatalogTrust
     /// </summary>
     public static CatalogFileVerificationResult ReadAndVerifyCatalogFile(
         string catalogPath,
+        bool requireSigned)
+        => ReadAndVerifyCatalogFile(catalogPath, requireSigned, EmbeddedPublicKey);
+
+    internal static CatalogFileVerificationResult ReadAndVerifyCatalogFile(
+        string catalogPath,
         bool requireSigned,
-        byte[]? publicKey = null)
+        byte[]? publicKey)
     {
-        publicKey ??= EmbeddedPublicKey;
         var sigPath = SignaturePathFor(catalogPath);
 
         byte[] catalogBytes;
@@ -149,21 +179,20 @@ public static class CatalogTrust
             return new CatalogFileVerificationResult(CatalogTrustResult.IoError, null);
         }
 
-        var snapshot = new ReadOnlyMemory<byte>(catalogBytes);
         if (!File.Exists(sigPath))
         {
             return new CatalogFileVerificationResult(
                 requireSigned
                     ? CatalogTrustResult.UnsignedRejected
                     : CatalogTrustResult.UnsignedAllowed,
-                snapshot);
+                catalogBytes);
         }
 
         if (publicKey is null)
         {
             return new CatalogFileVerificationResult(
                 CatalogTrustResult.NoPublicKeyConfigured,
-                snapshot);
+                catalogBytes);
         }
 
         byte[] encodedSignature;
@@ -175,11 +204,11 @@ public static class CatalogTrust
         }
         catch (IOException)
         {
-            return new CatalogFileVerificationResult(CatalogTrustResult.IoError, snapshot);
+            return new CatalogFileVerificationResult(CatalogTrustResult.IoError, catalogBytes);
         }
         catch (UnauthorizedAccessException)
         {
-            return new CatalogFileVerificationResult(CatalogTrustResult.IoError, snapshot);
+            return new CatalogFileVerificationResult(CatalogTrustResult.IoError, catalogBytes);
         }
 
         byte[] sigBytes;
@@ -194,15 +223,15 @@ public static class CatalogTrust
         }
         catch (DecoderFallbackException)
         {
-            return new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, snapshot);
+            return new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, catalogBytes);
         }
         catch (FormatException)
         {
-            return new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, snapshot);
+            return new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, catalogBytes);
         }
 
         return CatalogSignature.Verify(catalogBytes, sigBytes, publicKey)
-            ? new CatalogFileVerificationResult(CatalogTrustResult.Verified, snapshot)
-            : new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, snapshot);
+            ? new CatalogFileVerificationResult(CatalogTrustResult.Verified, catalogBytes)
+            : new CatalogFileVerificationResult(CatalogTrustResult.BadSignature, catalogBytes);
     }
 }

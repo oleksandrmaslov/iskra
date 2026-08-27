@@ -11,4 +11,9 @@
     <ProjectReference Include="..\Iskra.Core\Iskra.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Iskra.Application.Tests" />
+    <InternalsVisibleTo Include="Iskra.Desktop.Tests" />
+  </ItemGroup>
+
 </Project>

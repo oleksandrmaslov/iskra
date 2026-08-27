@@ -42,6 +42,81 @@ public sealed class FirmwareRangeTests : IDisposable
     }
 
     [Fact]
+    public void Uses_allocatable_file_backed_sections_not_pt_load_padding()
+    {
+        var path = WriteElf32([(0x08000000u, 0x100u)]);
+        var bytes = File.ReadAllBytes(path);
+        var sectionTable = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(32)));
+        const int sectionEntrySize = 40;
+        var loadSection = bytes.AsSpan(sectionTable + sectionEntrySize * 2, sectionEntrySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(loadSection[20..], 0x20u);
+        File.WriteAllBytes(path, bytes);
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Elf);
+
+        Assert.Equal(FirmwareImageStatus.Ok, image.Status);
+        Assert.Equal(0x20u, image.TotalBytes);
+        var plan = Assert.Single(image.LoadSections);
+        Assert.Equal(".load0", plan.Name);
+        Assert.Equal(0x08000000u, plan.Address);
+        Assert.Equal(0x20u, plan.Length);
+    }
+
+    [Fact]
+    public void Derives_section_lma_from_pt_load_physical_mapping()
+    {
+        var path = WriteElf32([(0x08001000u, 0x80u)]);
+        var bytes = File.ReadAllBytes(path);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(52 + 8), 0x20000000u); // p_vaddr
+        var sectionTable = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(32)));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(sectionTable + 40 * 2 + 12),
+            0x20000000u); // sh_addr
+        File.WriteAllBytes(path, bytes);
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Elf);
+
+        Assert.Equal(FirmwareImageStatus.Ok, image.Status);
+        Assert.Equal(0x08001000u, Assert.Single(image.LoadSections).Address);
+    }
+
+    [Fact]
+    public void Rejects_allocatable_section_not_covered_by_pt_load_mapping()
+    {
+        var path = WriteElf32([(0x08000000u, 0x100u)]);
+        var bytes = File.ReadAllBytes(path);
+        var sectionTable = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(32)));
+        var loadSectionOffset = sectionTable + 40 * 2;
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(loadSectionOffset + 16),
+            (uint)(bytes.Length - 0x20));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(loadSectionOffset + 20), 0x20u);
+        File.WriteAllBytes(path, bytes);
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Elf);
+
+        Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
+        Assert.Contains("not covered", image.Diagnostic);
+    }
+
+    [Fact]
+    public void Rejects_section_vma_that_disagrees_with_pt_load_mapping()
+    {
+        var path = WriteElf32([(0x08000000u, 0x100u)]);
+        var bytes = File.ReadAllBytes(path);
+        var sectionTable = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(32)));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(sectionTable + 40 * 2 + 12),
+            0x08000100u);
+        File.WriteAllBytes(path, bytes);
+
+        var image = FirmwareImage.Read(path, FirmwareKind.Elf);
+
+        Assert.Equal(FirmwareImageStatus.Malformed, image.Status);
+        Assert.Contains("not covered", image.Diagnostic);
+    }
+
+    [Fact]
     public void Skips_non_loadable_and_zero_length_segments()
     {
         // A PT_LOAD with filesz 0 is .bss: allocated on the device, never written
@@ -445,19 +520,38 @@ public sealed class FirmwareRangeTests : IDisposable
     }
 
     /// <summary>
-    /// Minimal little-endian ELF32 with a program header table. Enough structure
-    /// for the reader under test; not a linkable object.
+    /// Minimal little-endian ELF32 with PT_LOAD and matching SHF_ALLOC section
+    /// headers. Enough structure to model the BFD load plan; not linkable.
     /// </summary>
     private string WriteElf32((uint Paddr, uint Filesz)[] segments)
     {
         const int headerSize = 52;
-        const int entrySize = 32;
-        var table = new byte[entrySize * segments.Length];
-        var dataOffset = checked(headerSize + table.Length);
-        var nextDataOffset = dataOffset;
+        const int programEntrySize = 32;
+        const int sectionEntrySize = 40;
+        var programTable = new byte[programEntrySize * segments.Length];
+
+        var nameBytes = new List<byte> { 0 };
+        static uint AddName(List<byte> bytes, string value)
+        {
+            var offset = checked((uint)bytes.Count);
+            bytes.AddRange(Encoding.ASCII.GetBytes(value));
+            bytes.Add(0);
+            return offset;
+        }
+        var shstrtabName = AddName(nameBytes, ".shstrtab");
+        var loadNames = segments
+            .Select((segment, index) => segment.Filesz == 0
+                ? 0u
+                : AddName(nameBytes, $".load{index}"))
+            .ToArray();
+
+        var namesOffset = checked(headerSize + programTable.Length);
+        var nextDataOffset = Align4(checked(namesOffset + nameBytes.Count));
+        var dataOffsets = new int[segments.Length];
         for (var i = 0; i < segments.Length; i++)
         {
-            var e = table.AsSpan(i * entrySize);
+            dataOffsets[i] = nextDataOffset;
+            var e = programTable.AsSpan(i * programEntrySize);
             BinaryPrimitives.WriteUInt32LittleEndian(e, 1);                      // p_type = PT_LOAD
             BinaryPrimitives.WriteUInt32LittleEndian(e[4..], (uint)nextDataOffset);// p_offset
             BinaryPrimitives.WriteUInt32LittleEndian(e[8..], segments[i].Paddr); // p_vaddr
@@ -467,7 +561,10 @@ public sealed class FirmwareRangeTests : IDisposable
             nextDataOffset = checked(nextDataOffset + (int)segments[i].Filesz);
         }
 
-        var bytes = new byte[nextDataOffset];
+        var sectionTableOffset = Align4(nextDataOffset);
+        var fileBackedCount = segments.Count(segment => segment.Filesz > 0);
+        var sectionCount = checked(2 + fileBackedCount); // null + shstrtab + load sections
+        var bytes = new byte[checked(sectionTableOffset + sectionCount * sectionEntrySize)];
         bytes[0] = 0x7F; bytes[1] = (byte)'E'; bytes[2] = (byte)'L'; bytes[3] = (byte)'F';
         bytes[4] = 1; // ELF32
         bytes[5] = 1; // little endian
@@ -475,14 +572,44 @@ public sealed class FirmwareRangeTests : IDisposable
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(16), 2);   // e_type = ET_EXEC
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(18), 40);  // e_machine = ARM
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28), headerSize); // e_phoff
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(42), entrySize);  // e_phentsize
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(32), (uint)sectionTableOffset); // e_shoff
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(42), programEntrySize);  // e_phentsize
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(44), (ushort)segments.Length);
-        table.CopyTo(bytes, headerSize);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(46), sectionEntrySize); // e_shentsize
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(48), (ushort)sectionCount);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(50), 1); // e_shstrndx
+        programTable.CopyTo(bytes, headerSize);
+        nameBytes.CopyTo(bytes, namesOffset);
+
+        var nameSection = bytes.AsSpan(sectionTableOffset + sectionEntrySize, sectionEntrySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(nameSection, shstrtabName);
+        BinaryPrimitives.WriteUInt32LittleEndian(nameSection[4..], 3); // SHT_STRTAB
+        BinaryPrimitives.WriteUInt32LittleEndian(nameSection[16..], (uint)namesOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(nameSection[20..], (uint)nameBytes.Count);
+
+        var outputIndex = 2;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (segments[i].Filesz == 0) continue;
+            var section = bytes.AsSpan(
+                sectionTableOffset + outputIndex * sectionEntrySize,
+                sectionEntrySize);
+            BinaryPrimitives.WriteUInt32LittleEndian(section, loadNames[i]);
+            BinaryPrimitives.WriteUInt32LittleEndian(section[4..], 1); // SHT_PROGBITS
+            BinaryPrimitives.WriteUInt32LittleEndian(section[8..], 0x2); // SHF_ALLOC
+            BinaryPrimitives.WriteUInt32LittleEndian(section[12..], segments[i].Paddr);
+            BinaryPrimitives.WriteUInt32LittleEndian(section[16..], (uint)dataOffsets[i]);
+            BinaryPrimitives.WriteUInt32LittleEndian(section[20..], segments[i].Filesz);
+            BinaryPrimitives.WriteUInt32LittleEndian(section[32..], 4); // sh_addralign
+            outputIndex++;
+        }
 
         var path = NewTempFile(".elf");
         File.WriteAllBytes(path, bytes);
         return path;
     }
+
+    private static int Align4(int value) => checked((value + 3) & ~3);
 
     private static string HexRecord(ushort address, byte type, byte[] data)
     {

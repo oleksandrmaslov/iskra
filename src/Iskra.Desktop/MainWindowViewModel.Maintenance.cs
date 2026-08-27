@@ -20,6 +20,7 @@ public sealed partial class MainWindowViewModel
     private readonly ITokenStore? _tokenStore;
     private readonly AuthWorkflow _authWorkflow;
     private readonly CloudLogWorkflow _cloudLogWorkflow = new();
+    private CloudLogScheduler? _cloudLogScheduler;
 
     private AuthSnapshot? _authSnapshot;
     private string _authStatusText = string.Empty;
@@ -67,6 +68,24 @@ public sealed partial class MainWindowViewModel
             CatalogUpdateNoticeText = string.Empty;
             RefreshReadiness();
         });
+    }
+
+    public void StartBackgroundServices()
+    {
+        if (_cloudLogScheduler is not null) return;
+        _cloudLogScheduler = new CloudLogScheduler(
+            () => _settings.Clone(),
+            (settings, cancellationToken) => _cloudLogWorkflow.ShipAsync(
+                settings,
+                cancellationToken: cancellationToken),
+            _ => Avalonia.Threading.Dispatcher.UIThread.Post(RefreshCloudStatus));
+        _cloudLogScheduler.Start();
+    }
+
+    public void StopBackgroundServices()
+    {
+        _cloudLogScheduler?.Dispose();
+        _cloudLogScheduler = null;
     }
 
     public RelayCommand ReloadCatalogCommand { get; private set; } = null!;
@@ -194,9 +213,7 @@ public sealed partial class MainWindowViewModel
 
     private void SaveTokens(StoredTokens tokens)
     {
-        if (_tokenStore is null)
-            throw new PlatformNotSupportedException("no encrypted token store on this platform");
-        _tokenStore.Save(tokens);
+        _authWorkflow.SaveTokens(tokens);
     }
 
     private void SignOut()

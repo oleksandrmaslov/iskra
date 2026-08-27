@@ -21,7 +21,6 @@ public sealed class RefreshTokenExpiredException : Exception
 public sealed class AccessTokenProvider
 {
     private static readonly TimeSpan DefaultRefreshSkew = TimeSpan.FromMinutes(5);
-
     private readonly ITokenStore _store;
     private readonly GitHubDeviceFlow _flow;
     private readonly Func<DateTime> _now;
@@ -41,6 +40,17 @@ public sealed class AccessTokenProvider
 
     public async Task<string> GetFreshAccessTokenAsync(CancellationToken ct = default)
     {
+        return await TokenStoreOperationLock.RunAsync(
+            _store,
+            GetFreshAccessTokenInsideGateAsync,
+            ct).ConfigureAwait(false);
+    }
+
+    internal static string RefreshMutexName(string storeIdentity) =>
+        TokenStoreOperationLock.MutexName(storeIdentity);
+
+    private async Task<string> GetFreshAccessTokenInsideGateAsync(CancellationToken ct)
+    {
         var stored = _store.Load()
             ?? throw new NotSignedInException();
 
@@ -50,7 +60,7 @@ public sealed class AccessTokenProvider
 
         if (stored.RefreshTokenIsExpired(now))
         {
-            _store.Delete();
+            DeleteOnlyIfRefreshTokenIsCurrent(stored.RefreshToken);
             throw new RefreshTokenExpiredException();
         }
 
@@ -58,13 +68,43 @@ public sealed class AccessTokenProvider
         try { refreshed = await _flow.RefreshTokenAsync(stored.RefreshToken, ct).ConfigureAwait(false); }
         catch (GitHubAuthException ex) when (ex.ErrorCode is "bad_refresh_token" or "invalid_grant")
         {
-            // GitHub considers the refresh token unusable — drop the file and force re-auth.
-            _store.Delete();
+            // Another process may have rotated and saved a replacement while
+            // this request was in flight. Never delete credentials unless the
+            // rejected refresh token is still the current value.
+            var current = _store.Load();
+            if (current is not null
+                && !string.Equals(current.RefreshToken, stored.RefreshToken, StringComparison.Ordinal))
+            {
+                return current.AccessToken;
+            }
+
+            DeleteOnlyIfRefreshTokenIsCurrent(stored.RefreshToken);
             throw new RefreshTokenExpiredException();
         }
 
         var rotated = StoredTokens.From(refreshed, now);
+
+        // Optimistic cross-process guard: if another process already rotated
+        // the token, its value is authoritative. Saving our response here could
+        // overwrite the only refresh token GitHub still accepts.
+        var latest = _store.Load();
+        if (latest is not null
+            && !string.Equals(latest.RefreshToken, stored.RefreshToken, StringComparison.Ordinal))
+        {
+            return latest.AccessToken;
+        }
+
         _store.Save(rotated);
         return rotated.AccessToken;
+    }
+
+    private void DeleteOnlyIfRefreshTokenIsCurrent(string rejectedRefreshToken)
+    {
+        var current = _store.Load();
+        if (current is not null
+            && string.Equals(current.RefreshToken, rejectedRefreshToken, StringComparison.Ordinal))
+        {
+            _store.Delete();
+        }
     }
 }

@@ -24,6 +24,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     environment: release-signing
     timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
       ISKRA_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
       ISKRA_ALLOW_UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
@@ -94,6 +98,33 @@ jobs:
         shell: bash
         run: bash installer/build-linux-package.sh "${{ steps.release.outputs.version }}" "${{ matrix.rid }}"
 
+      - name: Generate and validate SPDX SBOM
+        shell: pwsh
+        run: |
+          ./installer/generate-sbom.ps1 `
+            -Version "${{ steps.release.outputs.version }}" `
+            -BuildDropPath artifacts `
+            -OutputPath "artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-sbom.spdx.json"
+
+      - name: Attest Linux build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: |
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.tar.gz
+            artifacts/iskra_${{ steps.release.outputs.version }}_*.deb
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-native-SHA256SUMS.txt*
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-sbom.spdx.json
+          create-storage-record: false
+
+      - name: Attest Linux SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: |
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.tar.gz
+            artifacts/iskra_${{ steps.release.outputs.version }}_*.deb
+          sbom-path: artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-sbom.spdx.json
+          create-storage-record: false
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -105,12 +136,17 @@ jobs:
             artifacts/iskra_${{ steps.release.outputs.version }}_*.deb
             artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-native-SHA256SUMS.txt
             artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-native-SHA256SUMS.txt.asc
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-sbom.spdx.json
 
   macos:
     name: ${{ matrix.rid }} (.app/DMG + portable archives)
     runs-on: ${{ matrix.os }}
     environment: release-signing
     timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
       ISKRA_REQUIRE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
       ISKRA_ALLOW_UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
@@ -217,6 +253,35 @@ jobs:
         shell: bash
         run: bash installer/build-macos-package.sh "${{ steps.release.outputs.version }}" "${{ matrix.rid }}"
 
+      - name: Generate and validate SPDX SBOM
+        shell: pwsh
+        run: |
+          ./installer/generate-sbom.ps1 `
+            -Version "${{ steps.release.outputs.version }}" `
+            -BuildDropPath artifacts `
+            -OutputPath "artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-sbom.spdx.json"
+
+      - name: Attest macOS build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: |
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.tar.gz
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.zip
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.dmg
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-native-SHA256SUMS.txt
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-sbom.spdx.json
+          create-storage-record: false
+
+      - name: Attest macOS SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: |
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.tar.gz
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.zip
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.dmg
+          sbom-path: artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-sbom.spdx.json
+          create-storage-record: false
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -228,6 +293,7 @@ jobs:
             artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.zip
             artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}.dmg
             artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-native-SHA256SUMS.txt
+            artifacts/Iskra-${{ steps.release.outputs.version }}-${{ matrix.rid }}-sbom.spdx.json
 
       - name: Remove temporary Apple keychain
         if: always()
@@ -241,6 +307,10 @@ jobs:
     name: Windows x64 (WPF + Avalonia installers)
     runs-on: windows-2025
     timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
       - name: Check out source
@@ -298,6 +368,39 @@ jobs:
           ./installer/build-installer.ps1 -Version "${{ steps.release.outputs.version }}"
           ./installer/build-avalonia-installer.ps1 -Version "${{ steps.release.outputs.version }}"
 
+      - name: Generate and validate SPDX SBOM
+        shell: pwsh
+        run: |
+          ./installer/generate-sbom.ps1 `
+            -Version "${{ steps.release.outputs.version }}" `
+            -BuildDropPath installer/out `
+            -OutputPath "installer/out/Iskra-${{ steps.release.outputs.version }}-win-x64-sbom.spdx.json"
+
+      - name: Attest Windows build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: |
+            installer/out/Iskra-${{ steps.release.outputs.version }}-x64.msi
+            installer/out/Iskra-${{ steps.release.outputs.version }}-setup-x64.exe
+            installer/out/Iskra-${{ steps.release.outputs.version }}-preinstall-check.ps1
+            installer/out/Iskra-${{ steps.release.outputs.version }}-SHA256SUMS.txt
+            installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-x64.msi
+            installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-setup-x64.exe
+            installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-SHA256SUMS.txt
+            installer/out/Iskra-${{ steps.release.outputs.version }}-win-x64-sbom.spdx.json
+          create-storage-record: false
+
+      - name: Attest Windows SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: |
+            installer/out/Iskra-${{ steps.release.outputs.version }}-x64.msi
+            installer/out/Iskra-${{ steps.release.outputs.version }}-setup-x64.exe
+            installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-x64.msi
+            installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-setup-x64.exe
+          sbom-path: installer/out/Iskra-${{ steps.release.outputs.version }}-win-x64-sbom.spdx.json
+          create-storage-record: false
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -312,3 +415,4 @@ jobs:
             installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-x64.msi
             installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-setup-x64.exe
             installer/out/Iskra-Avalonia-${{ steps.release.outputs.version }}-SHA256SUMS.txt
+            installer/out/Iskra-${{ steps.release.outputs.version }}-win-x64-sbom.spdx.json

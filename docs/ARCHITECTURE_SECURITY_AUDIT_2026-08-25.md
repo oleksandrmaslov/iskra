@@ -76,8 +76,8 @@ Primary trust boundaries:
    is mutable and uses a shared station-app key.
 
 The documented threat model does **not** promise safety after full compromise of
-the station's operating-system account. Such an attacker can replace a local
-GDB executable or race firmware files after validation. Production controls
+the station's operating-system account. Such an attacker can replace trusted
+runtime/toolchain components or interfere with the operator session. Production controls
 must therefore also include locked-down station accounts, signed/pinned
 binaries, controlled GDB provenance, and re-imaging procedures.
 
@@ -102,6 +102,14 @@ binaries, controlled GDB provenance, and re-imaging procedures.
 | SEC-15 | Medium | Bounded readers still requested buffered HTTP completion first, and one file-size comparison could overflow an `int`. | All bounded HTTP consumers request headers-only completion before reading through explicit ceilings; file length comparisons use `long` arithmetic. |
 | SEC-16 | Medium | Sanitized station IDs could collapse distinct values or preserve `.`/`..` path semantics in central log paths. | Normalized log path segments reject traversal names and carry a SHA-256 suffix whenever normalization changes the station ID, preserving a stable injective mapping. |
 | SEC-17 | Medium | Unbounded frequency/timeout settings and preflight failures taking a batch reservation could create denial-of-service or poison a batch before a flash attempt. | CLI, catalog, and settings validation cap SWD frequency at 50 MHz and timeout at one hour; preflight and batch-conflict audit rows no longer reserve the batch lock. |
+| SEC-18 | High | macOS discovery trusted a filename convention instead of proving USB VID/PID/interface identity. | A bounded, DTD-disabled `ioreg` plist adapter binds each callout endpoint to official BMP VID/PID, interface number, serial/location identity, and rejects unidentified endpoints. |
+| SEC-19 | High | Probe exclusion was per-user/endpoint based, so aliases or another OS session could contend for one physical probe. | A machine-wide named mutex is keyed by normalized physical identity. Windows COM aliases, Linux symlinks, and macOS endpoint aliases converge on VID/PID+serial or a stable physical fallback. |
+| SEC-20 | High | A crash/cancellation could leave no durable evidence that a physical transaction had begun. | The workflow commits a `STARTED` row before firmware/network/GDB work and transactionally finalizes the same row. Cancellation becomes terminal `E_CANCELLED`; a hard crash intentionally leaves a visible `STARTED` row with an explicit recovery API. |
+| SEC-21 | High | ELF range checks did not prove that the sections GDB/BFD chose to load matched the preflight map, and firmware could change before GDB opened it. | Iskra maps allocatable file-backed sections through `PT_LOAD` LMA, compares the exact runtime name/address/size multiset, and gives GDB only a random private, flushed, re-hashed firmware snapshot lease. |
+| SEC-22 | High | A future caller could bypass verified-session policy with a raw mutable `Catalog`, and the multi-file cache/floor was not digest-bound transactionally. | `FlashWorkflow` requires an opaque activation permit; parsed collections are deep-frozen; production trust/GDB injection APIs are sealed; cache generations use a digest-bound current pointer and timestamp+digest rollback floor. |
+| SEC-23 | High | Corrupt settings, concurrent rotating-token mutations, unbounded process/UI lines, and the missing interval scheduler could silently weaken or exhaust a station. | Unsafe settings are preserved and block startup/flash; login/logout/refresh share a per-user cross-process lock; process/UI/HEX/sysfs input is bounded before allocation; the persisted scheduler runs immediately and at the configured interval without overlap. |
+| SEC-24 | High | URLs inside GitHub responses could direct bearer tokens or operator browser/update actions to an attacker-controlled origin. | Authenticated asset requests require exact `https://api.github.com` release-asset paths; Device Flow, catalog assets, and update/browser links require exact GitHub HTTPS origins. Adversarial host/userinfo/scheme cases fail closed. |
+| SEC-25 | Medium | Release output lacked a machine-readable component inventory and signed workflow provenance. | A pinned Microsoft SBOM tool generates and validates SPDX 2.2 manifests; the native release matrix emits build and SBOM attestations through a SHA-pinned GitHub action. Official trust still depends on a clean tag and configured signing identities. |
 
 ## Open stop-ship findings
 
@@ -114,51 +122,21 @@ binaries, controlled GDB provenance, and re-imaging procedures.
 | OPEN-05 | High | Configure Authenticode plus trusted timestamping for WPF/Avalonia/CLI/MSI/Burn. Tagged Windows publication is intentionally blocked until then. | Release owner; signature verification from a clean Windows station. |
 | OPEN-06 | High | Configure Developer ID signing and Apple notarization/stapling for both architectures; validate Keychain behavior from the signed app and CLI. | Apple/release owner; Gatekeeper and notarization evidence on clean macOS hosts. |
 | OPEN-07 | High | Configure Linux GPG/repository signing and validate `.deb` install/remove/upgrade, udev permissions, desktop entry, Secret Service, and GDB dependency on clean x64/arm64 hosts. | Linux release owner; native package and HIL logs. |
-| OPEN-08 | High | Replace macOS filename-only probe discovery with IOKit VID/PID/interface/serial identity, including multiple-probe and reconnect behavior. | Platform/HIL; unit fixture plus real USB tests. |
-| OPEN-09 | High | Pin and verify Unix GDB/toolchain provenance. A settings-selected arbitrary local binary remains inside the station account trust boundary. | Release/operations; controlled package/version/hash policy and `--doctor` evidence. |
-| OPEN-10 | High | Run clean-machine and HIL acceptance on Windows x64, Linux x64/arm64, and macOS arm64/x64: success, wrong target, unplug, timeout, cancel, power loss/recovery, offline, rollback, revocation, secure-store, and update selection. | QA/HIL matrix with retained logs. |
+| OPEN-09 | High | Approve and pin Unix GDB/toolchain package versions and hashes. Code now restricts production discovery to administrator/package roots and `--doctor` reports canonical path/hash/version, but the operational allowlist is not signed release policy yet. | Release/operations; controlled package/version/hash policy and retained `--doctor` evidence. |
+| OPEN-10 | High | Run clean-machine and HIL acceptance on Windows x64, Linux x64/arm64, and macOS arm64/x64: success, exact GDB load plan, multi-user/alias/reconnect probe contention, wrong target, unplug, timeout, cancel, crash/power-loss recovery, offline, rollback, revocation, secure-store, and update selection. | QA/HIL matrix with retained logs. |
 | OPEN-11 | High | Repeat 50 consecutive PASS cycles with one real BMP and known-good board after the guarded GDB change, using the exact signed release candidate. | Factory engineering; 50 durable PASS records and zero parser/process anomalies. |
 | OPEN-12 | High | If batch mode is enabled across stations, implement the documented fail-closed shared reservation. Local SQLite locks alone do not prevent cross-station split brain. | Factory architecture; concurrency and offline-failure tests. |
-| OPEN-13 | High | Make probe exclusivity system-wide and identity-based. The current per-user lock can be bypassed by another OS account or by opening one probe through endpoint aliases. | Platform/security; multi-user and alias/reconnect contention tests on every OS. |
-| OPEN-14 | High | Persist an audit `STARTED` row before external work and finalize it transactionally. A process crash, forced termination, or some exception/cancellation paths can currently leave a physical attempt without a durable terminal record. | Audit architecture; crash/power-loss/cancellation fault-injection evidence. |
-| OPEN-15 | High | Reconcile the firmware map Iskra validates with the exact sections GDB/BFD will load. The current ELF preflight validates `PT_LOAD` segments while `gdb load` may use allocatable sections. | Firmware/GDB; adversarial ELF fixtures plus controlled GDB load-plan evidence. |
 
 ## Residual medium-risk items
 
-- Firmware is hashed before GDB opens it. A same-user local attacker can still
-  replace bytes between validation and GDB open; eliminate this only with a
-  controlled immutable staging handle/path or by placing station account
-  compromise explicitly outside the supported threat model.
-- The catalog cache consists of multiple files (`json`, signature, tag, floor),
-  so a crash can require recovery even though the activation floor fails closed.
-  The floor can advance before the cache generation is fully committed, and an
-  equal timestamp is not bound to an equal catalog digest. A transactional,
-  digest-bound cache generation would improve recovery and ambiguity handling.
-- Windows credential storage deliberately uses machine-scope DPAPI so factory
-  operator-account changes do not invalidate the login. A station must
-  therefore use one locked-down operator account and restrictive ACLs on
-  `%PROGRAMDATA%\Iskra\auth.bin`; a general multi-user workstation is outside
-  this credential model.
 - Add parser fuzzing for catalog, GDB output/MI framing, ELF, HEX, and JSONL;
   current adversarial unit cases are useful but not coverage-guided fuzzing.
-- Produce and publish an SBOM plus signed build provenance. CI currently audits
-  NuGet vulnerabilities but does not create supply-chain attestations.
-- Application cancellation during firmware acquisition is not recorded as a
-  flash attempt; define whether pre-write user cancellations belong in the
-  production audit schema.
-- Corrupt settings currently fall back to defaults. Preserve and surface the
-  corrupt file instead so an operator cannot unknowingly run with a different
-  station policy.
-- Serialize refresh-token rotation. Two concurrent refreshes can otherwise race
-  and a losing caller may delete credentials saved by the winner.
-- Bound retained GDB/MI and UI console output, not only process lifetime. A
-  malicious or malfunctioning GDB can still drive substantial in-memory output.
-- Make catalog trust provenance an explicit type at the `FlashWorkflow` API.
-  Accepting a raw `Catalog` leaves a seam where a future caller could bypass the
-  verified-session policy.
-- The log-shipping interval setting is not yet backed by a durable scheduler;
-  shipping remains startup/after-flash/manual behavior. Document that truth or
-  implement and test the promised interval semantics.
+- Define and rehearse the supervisor policy for classifying durable `STARTED`
+  rows after a real station crash/power loss. The recovery API requires an
+  explicit cutoff so one process cannot mark another live attempt abandoned.
+- SBOM/build attestations exist in CI, but a dirty, untagged local engineering
+  build cannot carry trusted provenance. Production evidence must originate
+  from the protected tagged workflow with official signing identities.
 
 ## Cross-platform acceptance matrix
 
@@ -166,7 +144,7 @@ binaries, controlled GDB provenance, and re-imaging procedures.
 |---|---:|---:|---:|---:|---:|
 | Compiles/publishes | Yes | Yes, cross-published | Yes, cross-published | Yes, cross-published | Yes, cross-published |
 | Native CI definition | Yes | Yes | Yes | Yes | Yes |
-| Secure-store implementation | DPAPI | Secret Service | Secret Service | Keychain | Keychain |
+| Secure-store implementation | DPAPI CurrentUser | Secret Service | Secret Service | Keychain | Keychain |
 | Native package definition | MSI/Burn | `.deb` | `.deb` | `.app`/DMG | `.app`/DMG |
 | Official code/package signing | Pending | Pending | Pending | Pending | Pending |
 | Clean-machine package test | Pending | Pending | Pending | Pending | Pending |
@@ -179,18 +157,19 @@ open.
 
 ## Local verification record
 
-The 2.2.0 engineering release was verified locally on 2026-08-26. Exact commands,
+The 2.2.1 engineering release was verified locally on 2026-08-27. Exact commands,
 artifact sizes, and SHA-256 values are retained in
-`docs/RELEASE_EVIDENCE_2.2.0.md`. The following gates were green:
+`docs/RELEASE_EVIDENCE_2.2.1.md`. The following gates were green:
 
 - locked restore with .NET SDK 10.0.301;
 - Release solution build with warnings treated as errors;
-- Core 527/527, Application 78/78, and headless Avalonia 21/21 test suites
-  (626 total, no failures or skips);
+- Core 600/600, Application 92/92, and headless Avalonia 21/21 test suites
+  (713 total, no failures or skips);
 - NuGet direct/transitive vulnerability query (zero known vulnerable packages);
 - PowerShell parser validation, Bash `-n`, and workflow YAML parse;
-- four cross-published Unix archives, the Windows portable ZIP, and both Windows
-  MSI/Burn installer pairs; all 16 published checksum entries were reverified;
+- four cross-published Unix archives, the Windows portable ZIP, both Windows
+  MSI/Burn installer pairs, and validated SPDX SBOMs; published checksum entries
+  were recomputed and matched;
 - packaged CLI help and Release lab-gate smoke tests.
 
 All inspected Windows EXE/MSI files report `NotSigned`. No claim of HIL, native

@@ -222,6 +222,7 @@ public sealed partial class MainWindowViewModel
 
             default:
                 _settings = result.Settings!;
+                _cloudLogScheduler?.NotifySettingsChanged();
                 IsSettingsDirty = false;
                 SetSettingsStatus(Text.SettingsSaved, StatusOkBrush);
                 OnSettingsPersisted();

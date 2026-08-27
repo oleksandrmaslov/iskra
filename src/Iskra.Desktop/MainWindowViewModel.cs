@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Windows.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -38,7 +37,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private readonly HistoryWorkflow _historyWorkflow;
     private readonly SettingsWorkflow _settingsWorkflow;
     private readonly FlashWorkflow _flashWorkflow;
-    private readonly StringBuilder _gdbLog = new();
+    private readonly BoundedTextBuffer _gdbLog = new();
 
     private DesktopText _text = DesktopLocalization.For(DesktopLocalization.DefaultLanguageCode);
     private LanguageOption _selectedLanguage = DesktopLocalization.Languages[0];
@@ -59,6 +58,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // Flash-tab state.
     private Catalog? _catalog;
+    private CatalogActivationPermit? _catalogPermit;
     private string? _catalogDirectory;
     private string? _gdbPath;
     private string? _port;
@@ -328,8 +328,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     SetBannerNeutral(Text.FlashRunning, warning: false);
             });
 
+            if (_catalogPermit is null)
+            {
+                ShowFail("E_CATALOG_UNTRUSTED", "Catalog activation permit is unavailable.");
+                return;
+            }
             var request = new FlashWorkflowRequest(
-                Catalog: _catalog,
+                CatalogPermit: _catalogPermit,
                 CatalogDirectory: _catalogDirectory,
                 ProductId: productId,
                 FirmwareVersion: version,
@@ -441,8 +446,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void AppendGdbLine(string text)
     {
-        _gdbLog.AppendLine(text);
-        GdbLogText = _gdbLog.ToString();
+        GdbLogText = _gdbLog.AppendLine(text);
     }
 
     /// <summary>
@@ -563,6 +567,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var catalog = snapshot.Catalog.Catalog!;
             _catalog = catalog;
+            _catalogPermit = snapshot.Catalog.Permit;
             _catalogDirectory = snapshot.Catalog.SourceDirectory;
             foreach (var product in catalog.Products)
                 Products.Add(new ProductSummaryViewModel(product, Text, catalog)
@@ -586,6 +591,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         else
         {
             _catalog = null;
+            _catalogPermit = null;
             _catalogDirectory = null;
             issues.Add(Text.CatalogIssue);
             CatalogStatusText = snapshot.Catalog.Status switch

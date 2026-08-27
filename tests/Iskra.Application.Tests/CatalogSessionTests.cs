@@ -104,9 +104,43 @@ public sealed class CatalogSessionTests
         var result = session.Load(new AppSettings());
 
         Assert.True(result.IsReady);
-        Assert.Same(ValidCatalog, result.Catalog);
+        Assert.Equal(ValidCatalog.Products.Count, result.Catalog!.Products.Count);
         Assert.Equal("good.json", result.SourcePath);
         Assert.Same(result, session.Current);
+        Assert.NotNull(result.Permit);
+        Assert.Same(result.Catalog, result.Permit!.Catalog);
+        Assert.Equal(CatalogTrustResult.Verified, result.Permit.TrustResult);
+        Assert.True(FirmwareIntegrity.IsValidSha256Hex(result.Permit.CatalogSha256));
+    }
+
+    [Fact]
+    public void Catalog_activation_permit_has_no_public_constructor()
+    {
+        Assert.Empty(typeof(CatalogActivationPermit).GetConstructors());
+    }
+
+    [Fact]
+    public void Production_catalog_session_exposes_no_policy_injection_constructor()
+    {
+        var constructor = Assert.Single(typeof(CatalogSession).GetConstructors());
+        Assert.Empty(constructor.GetParameters());
+    }
+
+    [Fact]
+    public void Catalog_activation_permit_detaches_from_mutable_input_lists()
+    {
+        var products = new List<Product>();
+        var source = new Catalog(1, DateTime.UnixEpoch, products);
+        var permit = CatalogActivationPermit.ForTests(source);
+
+        products.Add(new Product(
+            "mutated",
+            "Mutated after permit",
+            new TargetDescriptor("TEST", "TEST", 1),
+            Array.Empty<FirmwareRelease>(),
+            "missing"));
+
+        Assert.Empty(permit.Catalog.Products);
     }
 
     [Fact]
@@ -243,7 +277,7 @@ public sealed class CatalogSessionTests
             directoryExists: _ => false,
             readAndVerifyCatalog: (_, _) => new CatalogFileVerificationResult(
                 CatalogTrustResult.Verified,
-                ReadOnlyMemory<byte>.Empty),
+                Array.Empty<byte>()),
             parseCatalog: _ => ValidCatalog,
             activateCatalog: catalog => new CatalogActivationResult(
                 CatalogActivationStatus.RollbackRejected,
@@ -276,7 +310,7 @@ public sealed class CatalogSessionTests
             directoryExists: path => directories.Contains(path),
             readAndVerifyCatalog: (path, requireSigned) => new CatalogFileVerificationResult(
                 (trust ?? ((_, _) => CatalogTrustResult.Verified))(path, requireSigned),
-                ReadOnlyMemory<byte>.Empty),
+                Array.Empty<byte>()),
             parseCatalog: parseCatalog ?? (_ => ValidCatalog),
             buildSideload: buildSideload ?? (_ => ValidCatalog),
             unsignedLabModeEnabled: () => labMode,

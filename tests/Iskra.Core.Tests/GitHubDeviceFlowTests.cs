@@ -81,6 +81,21 @@ public class GitHubDeviceFlowTests
     }
 
     [Fact]
+    public async Task RequestDeviceCode_rejects_a_browser_uri_outside_github_https()
+    {
+        var malicious = DeviceCodeOk.Replace(
+            "https://github.com/login/device",
+            "https://github.com.evil.example/steal-code",
+            StringComparison.Ordinal);
+        var h = new StubHandler(JsonResp(malicious));
+
+        var ex = await Assert.ThrowsAsync<GitHubAuthException>(() =>
+            Flow(h).RequestDeviceCodeAsync());
+
+        Assert.Contains("verification_uri", ex.Message);
+    }
+
+    [Fact]
     public async Task PollForToken_returns_token_on_success()
     {
         var h = new StubHandler(JsonResp(TokenOk));

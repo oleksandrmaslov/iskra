@@ -28,7 +28,7 @@ public enum FlashWorkflowStatus
 /// again from the trusted catalog so a frontend cannot supply detached metadata.
 /// </summary>
 public sealed record FlashWorkflowRequest(
-    Catalog Catalog,
+    CatalogActivationPermit CatalogPermit,
     string? CatalogDirectory,
     string ProductId,
     string? FirmwareVersion,
@@ -37,7 +37,10 @@ public sealed record FlashWorkflowRequest(
     string? EnteredBatchId,
     string? GdbPath,
     string? Port,
-    string? ProbeSerial);
+    string? ProbeSerial)
+{
+    public Catalog Catalog => CatalogPermit.Catalog;
+}
 
 public sealed record FlashWorkflowResult(
     FlashWorkflowStatus Status,
@@ -46,7 +49,8 @@ public sealed record FlashWorkflowResult(
     FirmwareRelease? Release,
     string EffectiveBatchId,
     string? FirmwarePath,
-    bool AttemptLogged)
+    bool AttemptLogged,
+    long? AttemptId = null)
 {
     public bool IsBlocked => Status == FlashWorkflowStatus.Blocked;
     public bool IsPass => Status == FlashWorkflowStatus.Passed;
@@ -62,12 +66,12 @@ public interface IRemoteFirmwareProvider
     Task<string> AcquireAsync(FirmwareRelease release, CancellationToken cancellationToken);
 }
 
-public interface IGdbProcessFactory
+internal interface IGdbProcessFactory
 {
     GdbProcess Create(string gdbPath);
 }
 
-public sealed class GdbProcessFactory : IGdbProcessFactory
+internal sealed class GdbProcessFactory : IGdbProcessFactory
 {
     public GdbProcess Create(string gdbPath) => new(gdbPath);
 }
@@ -81,13 +85,20 @@ public sealed class FlashWorkflow
 {
     private readonly IRemoteFirmwareProvider? _remoteFirmwareProvider;
     private readonly IGdbProcessFactory _gdbProcessFactory;
+    private readonly bool _enforceGdbTrust;
 
-    public FlashWorkflow(
+    public FlashWorkflow(IRemoteFirmwareProvider? remoteFirmwareProvider = null)
+        : this(remoteFirmwareProvider, gdbProcessFactory: null)
+    {
+    }
+
+    internal FlashWorkflow(
         IRemoteFirmwareProvider? remoteFirmwareProvider = null,
         IGdbProcessFactory? gdbProcessFactory = null)
     {
         _remoteFirmwareProvider = remoteFirmwareProvider;
         _gdbProcessFactory = gdbProcessFactory ?? new GdbProcessFactory();
+        _enforceGdbTrust = gdbProcessFactory is null;
     }
 
     public async Task<FlashWorkflowResult> ExecuteAsync(
@@ -97,8 +108,24 @@ public sealed class FlashWorkflow
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(request.Catalog);
+        ArgumentNullException.ThrowIfNull(request.CatalogPermit);
         ArgumentNullException.ThrowIfNull(request.Settings);
+
+        // AppSettings is mutable for UI binding. Freeze one validated clone at
+        // the application boundary so a concurrent settings save cannot change
+        // station identity or policy part-way through an attempt.
+        try
+        {
+            var settingsSnapshot = request.Settings.Clone();
+            AppSettingsStore.Validate(settingsSnapshot);
+            request = request with { Settings = settingsSnapshot };
+        }
+        catch (Exception ex) when (ex is InvalidDataException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            return Blocked("E_SETTINGS_INVALID", ex.Message);
+        }
 
         var product = request.Catalog.FindProduct(request.ProductId);
         if (product is null)
@@ -121,7 +148,10 @@ public sealed class FlashWorkflow
             return Blocked(batchPolicy.ErrorCode!, "batch ID is required when batch mode is enabled", product, release);
 
         var batch = batchPolicy.EffectiveBatchId;
-        if (string.IsNullOrWhiteSpace(request.GdbPath))
+        var gdbPath = _enforceGdbTrust
+            ? GdbDiscovery.Find(request.GdbPath)
+            : request.GdbPath;
+        if (string.IsNullOrWhiteSpace(gdbPath))
             return Blocked("E_GDB_NOT_FOUND", "arm-none-eabi-gdb was not found", product, release, batch);
         if (string.IsNullOrWhiteSpace(request.Port))
             return Blocked("E_PROBE_NOT_FOUND", "exactly one Black Magic Probe is required", product, release, batch);
@@ -172,6 +202,41 @@ public sealed class FlashWorkflow
             }
         }
 
+        var flash = EffectiveFlashSettings(request.Settings, product);
+        long attemptId;
+        try
+        {
+            using var store = new SqliteLogStore(databasePath);
+            attemptId = store.BeginAttempt(new FlashAttemptStartRecord(
+                TsUtc: DateTime.UtcNow,
+                Operator: op,
+                StationId: request.Settings.StationId,
+                BatchId: batch,
+                ProductId: product.ProductId,
+                FirmwareVersion: release.Version,
+                FirmwareSha256: release.ElfSha256,
+                TargetBmpMatch: product.Target.BmpMatch,
+                TargetFlashKb: product.Target.FlashKb,
+                ComPort: request.Port,
+                ProbeSerial: request.ProbeSerial,
+                Power: flash.Power,
+                ConnectRst: flash.ConnectReset,
+                BmpFrequencyHz: flash.FrequencyHz),
+                // Batch policy made the only allowed reservation above.
+                reserveBatchLock: false);
+        }
+        catch (Exception ex)
+        {
+            return Failed(
+                "E_AUDIT_START_FAILED",
+                $"the audit STARTED row could not be persisted; no external work was performed: {ex.Message}",
+                product,
+                release,
+                batch);
+        }
+
+        try
+        {
         progress?.Report(new FlashWorkflowProgress(FlashWorkflowStage.AcquiringFirmware));
         string firmwarePath;
         try
@@ -187,73 +252,73 @@ public sealed class FlashWorkflow
         }
         catch (NotSignedInException)
         {
-            return FailureWithLog(request, product, release, batch,
-                "E_NOT_SIGNED_IN", "remote firmware requires GitHub sign-in");
+            return FinalizeAttemptResult(databasePath, attemptId, product, release, batch,
+                FailOutcome("E_NOT_SIGNED_IN", "remote firmware requires GitHub sign-in"));
         }
         catch (RefreshTokenExpiredException)
         {
-            return FailureWithLog(request, product, release, batch,
-                "E_AUTH_EXPIRED", "GitHub refresh token expired");
+            return FinalizeAttemptResult(databasePath, attemptId, product, release, batch,
+                FailOutcome("E_AUTH_EXPIRED", "GitHub refresh token expired"));
         }
         catch (GitHubRepoAccessDeniedException ex)
         {
             // Distinct from a download failure: nothing about the network or
             // the artefact is wrong, this account simply is not approved for
             // the firmware repository.
-            return FailureWithLog(request, product, release, batch,
-                "E_NO_REPO_ACCESS", ex.Message);
+            return FinalizeAttemptResult(databasePath, attemptId, product, release, batch,
+                FailOutcome("E_NO_REPO_ACCESS", ex.Message));
         }
         catch (GitHubAssetNotFoundException ex)
         {
-            return FailureWithLog(request, product, release, batch,
-                "E_ASSET_NOT_FOUND", ex.Message);
+            return FinalizeAttemptResult(databasePath, attemptId, product, release, batch,
+                FailOutcome("E_ASSET_NOT_FOUND", ex.Message));
         }
         catch (Exception ex)
         {
             var code = release.IsRemote ? "E_FW_DOWNLOAD_FAILED" : "E_FW_NOT_FOUND";
-            return FailureWithLog(request, product, release, batch, code, ex.Message);
+            return FinalizeAttemptResult(databasePath, attemptId, product, release, batch,
+                FailOutcome(code, ex.Message));
         }
 
         progress?.Report(new FlashWorkflowProgress(FlashWorkflowStage.ValidatingFirmware));
-        var preflight = FirmwarePreflight.Check(firmwarePath, release.FirmwareKind);
-        if (preflight != FirmwarePreflight.CheckResult.Ok)
-        {
-            var kind = FirmwarePreflight.DisplayName(release.FirmwareKind);
-            var (code, message) = preflight switch
-            {
-                FirmwarePreflight.CheckResult.NotFound =>
-                    ("E_FW_NOT_FOUND", $"firmware file not found: {firmwarePath}"),
-                FirmwarePreflight.CheckResult.IoError =>
-                    ("E_FW_READ_FAILED", $"firmware file could not be read: {firmwarePath}"),
-                _ => ("E_FW_BAD_FORMAT", $"file is not a valid {kind} image: {firmwarePath}"),
-            };
-            return FailureWithLog(request, product, release, batch, code, message, firmwarePath);
-        }
-
-        string computedHash;
+        VerifiedFirmwareSnapshot snapshot;
         try
         {
-            computedHash = FirmwareIntegrity.ComputeSha256Hex(firmwarePath);
+            snapshot = await VerifiedFirmwareSnapshot.CreateAsync(
+                firmwarePath,
+                FirmwareIntegrity.IsValidSha256Hex(release.ElfSha256)
+                    ? release.ElfSha256
+                    : null,
+                release.FirmwareKind,
+                cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return FailureWithLog(request, product, release, batch,
-                "E_FW_READ_FAILED", ex.Message, firmwarePath);
+            throw;
+        }
+        catch (FirmwareSnapshotException ex)
+        {
+            var code = ex.Status switch
+            {
+                FirmwareSnapshotStatus.NotFound => "E_FW_NOT_FOUND",
+                FirmwareSnapshotStatus.ReadFailed => "E_FW_READ_FAILED",
+                FirmwareSnapshotStatus.TooLarge => "E_FW_TOO_LARGE",
+                FirmwareSnapshotStatus.HashMismatch => "E_FW_HASH_MISMATCH",
+                _ => "E_FW_BAD_FORMAT",
+            };
+            return FinalizeAttemptResult(databasePath, attemptId, product, release, batch,
+                FailOutcome(code, ex.Message), firmwarePath);
         }
 
-        if (!FirmwareIntegrity.HashesMatch(computedHash, release.ElfSha256))
+        using (snapshot)
         {
-            var message = $"computed {computedHash}, expected {release.ElfSha256.ToLowerInvariant()}";
-            return FailureWithLog(request, product, release, batch,
-                "E_FW_HASH_MISMATCH", message, firmwarePath);
-        }
 
         // Integrity proves the file is the one the catalog names. This proves
         // the named file can physically belong to the target in front of the
         // operator: BMP's bmp_match only identifies an MCU family, so a build
         // for a larger sibling part, or for a different memory map entirely,
         // reaches this point looking perfectly valid.
-        var range = FirmwareRangeCheck.Validate(firmwarePath, release.FirmwareKind, product.Target);
+        var range = FirmwareRangeCheck.Validate(snapshot.Image, product.Target);
         if (!range.IsAcceptable)
         {
             var code = range.Status switch
@@ -262,13 +327,12 @@ public sealed class FlashWorkflow
                 FirmwareRangeStatus.OutsideDeclaredMemory => "E_FW_ADDRESS_RANGE",
                 _ => "E_FW_BAD_FORMAT",
             };
-            return FailureWithLog(request, product, release, batch,
-                code, range.Diagnostic ?? range.Status.ToString(), firmwarePath);
+            return FinalizeAttemptResult(databasePath, attemptId, product, release, batch,
+                FailOutcome(code, range.Diagnostic ?? range.Status.ToString()), firmwarePath);
         }
 
-        var flash = EffectiveFlashSettings(request.Settings, product);
         var options = new FlashOptions(
-            ElfPath: firmwarePath,
+            ElfPath: snapshot.SnapshotPath,
             Port: request.Port,
             Power: flash.Power,
             BmpFrequencyHz: flash.FrequencyHz,
@@ -281,40 +345,29 @@ public sealed class FlashWorkflow
             TargetFlashKb: product.Target.FlashKb,
             FirmwareVersion: release.Version,
             FirmwareSha256: release.ElfSha256,
-            GdbPath: request.GdbPath,
+            GdbPath: gdbPath,
             DbPath: request.Settings.DbPath,
             FirmwareKind: release.FirmwareKind,
-            TimeoutSeconds: flash.TimeoutSeconds);
+            TimeoutSeconds: flash.TimeoutSeconds,
+            ProbeLockIdentity: ProbeDiscovery.ResolveProbeLockIdentity(
+                request.Port,
+                request.ProbeSerial),
+            ExpectedLoadSections: release.FirmwareKind == FirmwareKind.Elf
+                ? snapshot.Image.LoadSections
+                : null);
 
         progress?.Report(new FlashWorkflowProgress(FlashWorkflowStage.Flashing));
         try
         {
-            var gdb = _gdbProcessFactory.Create(request.GdbPath);
+            var gdb = _gdbProcessFactory.Create(gdbPath);
             var outcome = await FlashStateMachine.RunAsync(
                 gdb,
                 options,
                 timeout: TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds)),
                 onLine: onGdbLine,
                 ct: cancellationToken).ConfigureAwait(false);
-            var logged = TryLogAttempt(request, product, release, batch, outcome, out var logError);
-            if (outcome.IsPass && !logged)
-            {
-                outcome = new FlashOutcome(
-                    FlashResult.Fail,
-                    "E_AUDIT_WRITE_FAILED",
-                    $"firmware was flashed and verified, but the audit record could not be persisted: {logError}",
-                    outcome.DetectedTarget,
-                    outcome.Duration,
-                    outcome.GdbTail);
-            }
-            return new FlashWorkflowResult(
-                outcome.IsPass ? FlashWorkflowStatus.Passed : FlashWorkflowStatus.Failed,
-                outcome,
-                product,
-                release,
-                batch,
-                firmwarePath,
-                logged);
+            return FinalizeAttemptResult(
+                databasePath, attemptId, product, release, batch, outcome, firmwarePath);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -322,7 +375,31 @@ public sealed class FlashWorkflow
         }
         catch (Exception ex)
         {
-            return Failed("E_INTERNAL", ex.Message, product, release, batch, firmwarePath);
+            return FinalizeAttemptResult(
+                databasePath,
+                attemptId,
+                product,
+                release,
+                batch,
+                FailOutcome("E_INTERNAL", ex.Message),
+                firmwarePath);
+        }
+        }
+        }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            TryFinalizeCancellation(databasePath, attemptId, ex);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return FinalizeAttemptResult(
+                databasePath,
+                attemptId,
+                product,
+                release,
+                batch,
+                FailOutcome("E_INTERNAL", ex.Message));
         }
     }
 
@@ -370,6 +447,78 @@ public sealed class FlashWorkflow
             batch,
             firmwarePath,
             logged);
+    }
+
+    private static FlashWorkflowResult FinalizeAttemptResult(
+        string databasePath,
+        long attemptId,
+        Product product,
+        FirmwareRelease release,
+        string batch,
+        FlashOutcome outcome,
+        string? firmwarePath = null)
+    {
+        var logged = TryFinalizeAttempt(databasePath, attemptId, outcome, out var logError);
+        if (!logged)
+        {
+            var priorOutcome = outcome.ErrorCode is null
+                ? outcome.Result.ToString().ToUpperInvariant()
+                : $"{outcome.Result.ToString().ToUpperInvariant()} {outcome.ErrorCode}";
+            outcome = new FlashOutcome(
+                FlashResult.Fail,
+                "E_AUDIT_WRITE_FAILED",
+                $"attempt ended with {priorOutcome}, but its terminal audit record could not be persisted: {logError}",
+                outcome.DetectedTarget,
+                outcome.Duration,
+                outcome.GdbTail);
+        }
+
+        return new FlashWorkflowResult(
+            outcome.IsPass ? FlashWorkflowStatus.Passed : FlashWorkflowStatus.Failed,
+            outcome,
+            product,
+            release,
+            batch,
+            firmwarePath,
+            logged,
+            attemptId);
+    }
+
+    private static bool TryFinalizeAttempt(
+        string databasePath,
+        long attemptId,
+        FlashOutcome outcome,
+        out string? error)
+    {
+        try
+        {
+            using var store = new SqliteLogStore(databasePath);
+            store.FinalizeAttempt(attemptId, new FlashAttemptFinalization(
+                CompletedAtUtc: DateTime.UtcNow,
+                TargetDetected: outcome.DetectedTarget,
+                Result: outcome.Result,
+                ErrorCode: outcome.ErrorCode,
+                ErrorMessage: outcome.ErrorMessage,
+                DurationMs: Math.Max(0, (long)outcome.Duration.TotalMilliseconds),
+                GdbTail: string.IsNullOrEmpty(outcome.GdbTail) ? null : outcome.GdbTail));
+            error = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static void TryFinalizeCancellation(
+        string databasePath,
+        long attemptId,
+        OperationCanceledException cancellation)
+    {
+        var outcome = FailOutcome("E_CANCELLED", "the flash attempt was cancelled");
+        if (!TryFinalizeAttempt(databasePath, attemptId, outcome, out var error))
+            cancellation.Data["IskraAuditFinalizationError"] = error;
     }
 
     private static FlashWorkflowResult Blocked(

@@ -2,6 +2,85 @@
 
 All notable changes to Iskra are documented here.
 
+## [2.2.1] - 2026-08-27
+
+Engineering security release only. This version is not factory-approved until
+the production signing/key-custody, append-only central audit, trustworthy board
+identity, clean-machine, and HIL gates in the architecture/security audit are
+closed.
+
+### Added
+
+- Added a machine-wide, identity-based probe lease. Windows COM aliases, Linux
+  device symlinks, and macOS callout devices resolve to the physical BMP
+  VID/PID plus USB serial (or a stable physical-instance fallback), preventing
+  a second Iskra process or OS session from opening the same probe concurrently.
+- Added a durable audit lifecycle: every accepted transaction commits a
+  `STARTED` SQLite row before firmware/network/GDB work and finalizes that same
+  row to `TERMINAL`. Cancellation is recorded as `E_CANCELLED`; a crash leaves
+  an explicit recoverable `STARTED` record instead of erasing the attempt.
+- Added exact GDB load-plan verification. ELF32 allocatable, file-backed
+  sections are mapped through their containing `PT_LOAD` LMA, range checked,
+  and compared as a name/address/size multiset with the sections GDB reports.
+- Added immutable verified firmware staging. Iskra copies and re-hashes the
+  approved ELF/HEX into a random private lease before GDB can open it, narrowing
+  the validation/use race and ensuring the load plan and flashed bytes refer to
+  one snapshot.
+- Added opaque `CatalogActivationPermit` authorization at the public flash API,
+  digest-bound cache generations/current pointer, and timestamp+digest rollback
+  floors. Signed catalog collections are deep-frozen before reaching a UI.
+- Added an immediate and persisted-interval cloud-log scheduler with settings
+  wake-up, overlap prevention, and shutdown cancellation.
+- Added SPDX SBOM generation/validation plus GitHub build and SBOM attestations
+  to the native release workflow.
+
+### Changed
+
+- macOS probe discovery now uses bounded `ioreg`/IOKit plist data to bind
+  `/dev/cu.usbmodem*` endpoints to USB VID/PID, interface number, serial, and
+  location identity. Unidentified endpoints fail closed.
+- Windows Device Flow credentials moved from machine-scope DPAPI under
+  `%PROGRAMDATA%` to per-user DPAPI under `%LOCALAPPDATA%`. Refresh, login,
+  logout, and replacement writes now share one per-user cross-process mutation
+  lock so a stale refresh cannot resurrect signed-out credentials.
+- GDB discovery now accepts only administrator/package-controlled roots in
+  production, resolves symlink chains, and reports canonical path, SHA-256, and
+  bounded version evidence through `--doctor`. Arbitrary paths remain available
+  only in an explicitly lab-enabled build.
+- GDB/MI, UI-console, native-helper, sysfs, and Intel HEX line retention are
+  bounded before attacker-sized strings can be allocated. Overlong MI records
+  cannot complete a command waiter.
+- Corrupt, oversized, or semantically unsafe station settings are preserved and
+  block startup/flash instead of silently falling back to defaults.
+- Authenticated GitHub asset URLs must use the exact HTTPS API origin before a
+  bearer token is attached. Device Flow browser URIs, catalog assets, and app
+  update links likewise require the exact GitHub HTTPS web origin.
+- Linux `.deb` dependencies now express the official .NET 10 ICU/OpenSSL
+  alternatives for Ubuntu 22.04/24.04 and Debian 12/13.
+- CLI `--dry-run` now exits nonzero when the firmware hash or address-range gate
+  fails instead of printing a refusal while returning success.
+
+### Security
+
+- Production callers can no longer construct a raw flash engine, substitute a
+  catalog key/source policy, inject a GDB factory, mutate shared JSON options,
+  or hand an arbitrary deserialized catalog to `FlashWorkflow`.
+- Firmware acquisition, validation, target gating, GDB load/verify, audit
+  finalization, and cleanup are one fail-closed workflow. A missing terminal
+  audit write converts even a physically verified flash to
+  `E_AUDIT_WRITE_FAILED`.
+- Release/API response URLs are treated as untrusted metadata. Tokens are never
+  sent to a host supplied by a release response, and unsafe update/browser URLs
+  are not exposed to the operator UI.
+
+### Verification
+
+- Locked .NET 10.0.301 Release build: zero warnings and zero errors.
+- Core 600, Application 92, Desktop 21; 713 total automated tests with no
+  failures or skips. NuGet reported zero known vulnerable direct/transitive
+  packages.
+- Classification remains **engineering only / STOP-SHIP for factory use**.
+
 ## [2.2.0] - 2026-08-26
 
 Engineering release only. This version is not factory-approved until the

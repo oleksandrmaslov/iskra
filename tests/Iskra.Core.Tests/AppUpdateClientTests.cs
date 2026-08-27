@@ -27,16 +27,16 @@ public class AppUpdateClientTests
         using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, """
             {
               "tag_name": "v1.2.9",
-              "html_url": "https://github.example/iskra/releases/tag/v1.2.9",
+              "html_url": "https://github.com/iskra/releases/tag/v1.2.9",
               "published_at": "2026-06-01T12:00:00Z",
               "assets": [
                 {
                   "name": "Iskra-1.2.9-setup-x64.exe",
-                  "browser_download_url": "https://github.example/download/setup.exe"
+                  "browser_download_url": "https://github.com/download/setup.exe"
                 },
                 {
                   "name": "Iskra-1.2.9-x64.msi",
-                  "browser_download_url": "https://github.example/download/app.msi"
+                  "browser_download_url": "https://github.com/download/app.msi"
                 }
               ]
             }
@@ -48,32 +48,32 @@ public class AppUpdateClientTests
         Assert.True(result.IsUpdateAvailable);
         Assert.Equal("1.2.9.0", result.LatestVersion);
         Assert.Equal("v1.2.9", result.TagName);
-        Assert.Equal("https://github.example/iskra/releases/tag/v1.2.9", result.ReleaseUrl);
+        Assert.Equal("https://github.com/iskra/releases/tag/v1.2.9", result.ReleaseUrl);
         Assert.Equal("win-x64", result.RuntimeIdentifier);
-        Assert.Equal("https://github.example/download/setup.exe", result.PackageDownloadUrl);
+        Assert.Equal("https://github.com/download/setup.exe", result.PackageDownloadUrl);
         Assert.Null(result.PortableDownloadUrl);
-        Assert.Equal("https://github.example/download/setup.exe", result.SetupDownloadUrl);
-        Assert.Equal("https://github.example/download/app.msi", result.MsiDownloadUrl);
+        Assert.Equal("https://github.com/download/setup.exe", result.SetupDownloadUrl);
+        Assert.Equal("https://github.com/download/app.msi", result.MsiDownloadUrl);
         Assert.Equal(new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc), result.PublishedAtUtc);
     }
 
     [Theory]
     [InlineData(
         "linux-x64",
-        "https://github.example/download/linux-amd64.deb",
-        "https://github.example/download/linux-x64.tar.gz")]
+        "https://github.com/download/linux-amd64.deb",
+        "https://github.com/download/linux-x64.tar.gz")]
     [InlineData(
         "linux-arm64",
-        "https://github.example/download/linux-arm64.deb",
-        "https://github.example/download/linux-arm64.tar.gz")]
+        "https://github.com/download/linux-arm64.deb",
+        "https://github.com/download/linux-arm64.tar.gz")]
     [InlineData(
         "osx-arm64",
-        "https://github.example/download/osx-arm64.dmg",
-        "https://github.example/download/osx-arm64.zip")]
+        "https://github.com/download/osx-arm64.dmg",
+        "https://github.com/download/osx-arm64.zip")]
     [InlineData(
         "osx-x64",
-        "https://github.example/download/osx-x64.dmg",
-        "https://github.example/download/osx-x64.zip")]
+        "https://github.com/download/osx-x64.dmg",
+        "https://github.com/download/osx-x64.zip")]
     public async Task CheckLatestAsync_selects_only_the_exact_unix_runtime_assets(
         string runtimeIdentifier,
         string expectedPackage,
@@ -96,19 +96,19 @@ public class AppUpdateClientTests
         using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, """
             {
               "tag_name": "v1.2.9",
-              "html_url": "https://github.example/release",
+              "html_url": "https://github.com/release",
               "assets": [
                 {
                   "name": "Iskra-1.2.9-linux-x64.tar.gz",
-                  "browser_download_url": "https://github.example/download/wrong-linux.tar.gz"
+                  "browser_download_url": "https://github.com/download/wrong-linux.tar.gz"
                 },
                 {
                   "name": "Iskra-1.2.9-osx-arm64.dmg",
-                  "browser_download_url": "https://github.example/download/wrong-mac.dmg"
+                  "browser_download_url": "https://github.com/download/wrong-mac.dmg"
                 },
                 {
                   "name": "Iskra-1.2.9-setup-x64.exe",
-                  "browser_download_url": "https://github.example/download/wrong-windows.exe"
+                  "browser_download_url": "https://github.com/download/wrong-windows.exe"
                 }
               ]
             }
@@ -138,10 +138,34 @@ public class AppUpdateClientTests
     }
 
     [Fact]
+    public async Task CheckLatestAsync_never_exposes_untrusted_browser_or_download_urls()
+    {
+        using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, """
+            {
+              "tag_name": "v1.2.9",
+              "html_url": "https://evil.example/release",
+              "assets": [
+                {
+                  "name": "Iskra-1.2.9-setup-x64.exe",
+                  "browser_download_url": "https://github.com.evil.example/setup.exe"
+                }
+              ]
+            }
+            """));
+
+        var result = await NewClient(http).CheckLatestForRuntimeAsync("1.2.8", "win-x64");
+
+        Assert.True(result.IsUpdateAvailable);
+        Assert.Null(result.ReleaseUrl);
+        Assert.Null(result.PackageDownloadUrl);
+        Assert.Null(result.SetupDownloadUrl);
+    }
+
+    [Fact]
     public async Task CheckLatestAsync_reports_up_to_date_for_same_version()
     {
         using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, """
-            { "tag_name": "v1.2.8", "html_url": "https://github.example/release", "assets": [] }
+            { "tag_name": "v1.2.8", "html_url": "https://github.com/release", "assets": [] }
             """));
 
         var result = await NewClient(http).CheckLatestAsync("1.2.8");
@@ -165,7 +189,7 @@ public class AppUpdateClientTests
     public async Task CheckLatestAsync_rejects_release_without_parseable_version_tag()
     {
         using var http = new HttpClient(new StaticHandler(HttpStatusCode.OK, """
-            { "tag_name": "latest", "html_url": "https://github.example/release", "assets": [] }
+            { "tag_name": "latest", "html_url": "https://github.com/release", "assets": [] }
             """));
 
         var result = await NewClient(http).CheckLatestAsync("1.2.8");
@@ -178,7 +202,7 @@ public class AppUpdateClientTests
     public async Task CheckLatestAsync_sends_github_headers()
     {
         var handler = new StaticHandler(HttpStatusCode.OK, """
-            { "tag_name": "v1.2.8", "html_url": "https://github.example/release", "assets": [] }
+            { "tag_name": "v1.2.8", "html_url": "https://github.com/release", "assets": [] }
             """);
         using var http = new HttpClient(handler);
 
@@ -197,43 +221,43 @@ public class AppUpdateClientTests
     private const string AllRuntimeAssets = """
         {
           "tag_name": "v1.2.9",
-          "html_url": "https://github.example/release",
+          "html_url": "https://github.com/release",
           "assets": [
             {
               "name": "Iskra-1.2.9-setup-x64.exe",
-              "browser_download_url": "https://github.example/download/windows.exe"
+              "browser_download_url": "https://github.com/download/windows.exe"
             },
             {
               "name": "iskra_1.2.9_amd64.deb",
-              "browser_download_url": "https://github.example/download/linux-amd64.deb"
+              "browser_download_url": "https://github.com/download/linux-amd64.deb"
             },
             {
               "name": "Iskra-1.2.9-linux-x64.tar.gz",
-              "browser_download_url": "https://github.example/download/linux-x64.tar.gz"
+              "browser_download_url": "https://github.com/download/linux-x64.tar.gz"
             },
             {
               "name": "iskra_1.2.9_arm64.deb",
-              "browser_download_url": "https://github.example/download/linux-arm64.deb"
+              "browser_download_url": "https://github.com/download/linux-arm64.deb"
             },
             {
               "name": "Iskra-1.2.9-linux-arm64.tar.gz",
-              "browser_download_url": "https://github.example/download/linux-arm64.tar.gz"
+              "browser_download_url": "https://github.com/download/linux-arm64.tar.gz"
             },
             {
               "name": "Iskra-1.2.9-osx-arm64.dmg",
-              "browser_download_url": "https://github.example/download/osx-arm64.dmg"
+              "browser_download_url": "https://github.com/download/osx-arm64.dmg"
             },
             {
               "name": "Iskra-1.2.9-osx-arm64.zip",
-              "browser_download_url": "https://github.example/download/osx-arm64.zip"
+              "browser_download_url": "https://github.com/download/osx-arm64.zip"
             },
             {
               "name": "Iskra-1.2.9-osx-x64.dmg",
-              "browser_download_url": "https://github.example/download/osx-x64.dmg"
+              "browser_download_url": "https://github.com/download/osx-x64.dmg"
             },
             {
               "name": "Iskra-1.2.9-osx-x64.zip",
-              "browser_download_url": "https://github.example/download/osx-x64.zip"
+              "browser_download_url": "https://github.com/download/osx-x64.zip"
             }
           ]
         }
