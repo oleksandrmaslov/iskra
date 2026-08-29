@@ -6,9 +6,14 @@ using System.Text.Json.Serialization;
 
 namespace Iskra.Core;
 
-public sealed class TokenStoreException : Exception
+public class TokenStoreException : Exception
 {
     public TokenStoreException(string message, Exception? inner = null) : base(message, inner) { }
+}
+
+public sealed class LegacyMachineTokenCleanupException : TokenStoreException
+{
+    public LegacyMachineTokenCleanupException(string message) : base(message) { }
 }
 
 /// <summary>
@@ -85,17 +90,25 @@ public sealed class TokenStore : ITokenStore
 
     public string Path { get; }
     public DataProtectionScope Scope { get; }
+    private readonly string? _legacyMachineTokenPath;
 
     public TokenStore(string? overridePath = null)
     {
         Path = overridePath ?? DefaultPath();
         Scope = DataProtectionScope.CurrentUser;
+        _legacyMachineTokenPath = PathsEqual(Path, DefaultPath())
+            ? LegacyMachineTokenCleanup.DefaultPath()
+            : null;
     }
 
-    internal TokenStore(string overridePath, DataProtectionScope scope)
+    internal TokenStore(
+        string overridePath,
+        DataProtectionScope scope,
+        string? legacyMachineTokenPath = null)
     {
         Path = overridePath;
         Scope = scope;
+        _legacyMachineTokenPath = legacyMachineTokenPath;
     }
 
     /// <summary><c>%LOCALAPPDATA%\Iskra\auth.bin</c> on Windows.</summary>
@@ -105,7 +118,11 @@ public sealed class TokenStore : ITokenStore
         return System.IO.Path.Combine(local, DefaultDirectoryName, DefaultFileName);
     }
 
-    public bool Exists() => File.Exists(Path);
+    public bool Exists()
+    {
+        EnsureLegacyMachineTokenRemoved();
+        return File.Exists(Path);
+    }
 
     /// <summary>
     /// Returns the decrypted snapshot, or <c>null</c> if no file is present.
@@ -115,6 +132,7 @@ public sealed class TokenStore : ITokenStore
     /// </summary>
     public StoredTokens? Load()
     {
+        EnsureLegacyMachineTokenRemoved();
         if (!File.Exists(Path)) return null;
 
         byte[] cipher;
@@ -154,6 +172,7 @@ public sealed class TokenStore : ITokenStore
 
     public void Save(StoredTokens tokens)
     {
+        EnsureLegacyMachineTokenRemoved();
         if (tokens is null) throw new ArgumentNullException(nameof(tokens));
         ValidateLoaded(tokens);
 
@@ -188,8 +207,28 @@ public sealed class TokenStore : ITokenStore
     /// </summary>
     public void Delete()
     {
+        EnsureLegacyMachineTokenRemoved();
         if (File.Exists(Path)) File.Delete(Path);
     }
+
+    private void EnsureLegacyMachineTokenRemoved()
+    {
+        if (_legacyMachineTokenPath is null) return;
+
+        var result = LegacyMachineTokenCleanup.EnsureRemovedAtPath(_legacyMachineTokenPath);
+        if (result.Status != LegacyMachineTokenCleanupStatus.CleanupRequired) return;
+
+        throw new LegacyMachineTokenCleanupException(
+            $"legacy machine-wide GitHub credential at {result.Path} could not be removed: "
+            + $"{result.Diagnostic ?? "no diagnostic"}. Remove that exact file as a station "
+            + "administrator, revoke the old GitHub authorization, and sign in again");
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            System.IO.Path.GetFullPath(left),
+            System.IO.Path.GetFullPath(right),
+            StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateLoaded(StoredTokens t)
     {

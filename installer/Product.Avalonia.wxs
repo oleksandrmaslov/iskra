@@ -94,6 +94,7 @@
       <ComponentGroupRef Id="ExampleFiles" />
       <ComponentGroupRef Id="StationCheckFiles" />
       <ComponentRef Id="AppStartMenuShortcut" />
+      <ComponentRef Id="LegacyMachineTokenCleanup" />
     </Feature>
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -119,6 +120,20 @@
                        Value="1"
                        KeyPath="yes" />
       </Component>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="LegacyCommonDataFolder" Name="Iskra">
+        <Component Id="LegacyMachineTokenCleanup" Guid="9C30F983-5118-41EA-96E4-7C6987E4D0A7">
+          <RemoveFile Id="RemoveLegacyMachineAuth" Name="auth.bin" On="install" />
+          <RegistryValue Root="HKLM"
+                         Key="Software\Iskra"
+                         Name="LegacyMachineTokenCleanupAvalonia"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
     </StandardDirectory>
 
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">

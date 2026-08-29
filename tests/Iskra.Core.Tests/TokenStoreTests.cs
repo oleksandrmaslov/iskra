@@ -189,6 +189,121 @@ public class TokenStoreTests : IDisposable
     }
 
     [Fact]
+    public void Legacy_machine_token_cleanup_is_idempotent_and_preserves_siblings()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-legacy-{Guid.NewGuid():N}");
+        var legacy = Path.Combine(root, LegacyMachineTokenCleanup.LegacyFileName);
+        var sibling = Path.Combine(root, "station-app.pem");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllBytes(legacy, [1, 2, 3]);
+            File.WriteAllText(sibling, "keep");
+
+            var first = LegacyMachineTokenCleanup.EnsureRemovedAtPath(legacy);
+            var second = LegacyMachineTokenCleanup.EnsureRemovedAtPath(legacy);
+
+            Assert.Equal(LegacyMachineTokenCleanupStatus.Removed, first.Status);
+            Assert.Equal(LegacyMachineTokenCleanupStatus.Absent, second.Status);
+            Assert.False(File.Exists(legacy));
+            Assert.Equal("keep", File.ReadAllText(sibling));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Concurrent_legacy_cleanup_removes_only_the_exact_file()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-legacy-race-{Guid.NewGuid():N}");
+        var legacy = Path.Combine(root, LegacyMachineTokenCleanup.LegacyFileName);
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllBytes(legacy, [4, 5, 6]);
+
+            var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+                Task.Run(() => LegacyMachineTokenCleanup.EnsureRemovedAtPath(legacy))));
+
+            Assert.Single(results, r => r.Status == LegacyMachineTokenCleanupStatus.Removed);
+            Assert.All(results, r => Assert.Contains(
+                r.Status,
+                new[]
+                {
+                    LegacyMachineTokenCleanupStatus.Removed,
+                    LegacyMachineTokenCleanupStatus.Absent,
+                }));
+            Assert.False(File.Exists(legacy));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Legacy_machine_scope_blob_is_deleted_not_migrated()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-legacy-dpapi-{Guid.NewGuid():N}");
+        var legacy = Path.Combine(root, LegacyMachineTokenCleanup.LegacyFileName);
+        var current = Path.Combine(root, "current", TokenStore.DefaultFileName);
+        try
+        {
+            Directory.CreateDirectory(root);
+            var plain = System.Text.Encoding.UTF8.GetBytes("legacy bearer credential");
+            var cipher = ProtectedData.Protect(plain, null, DataProtectionScope.LocalMachine);
+            try { File.WriteAllBytes(legacy, cipher); }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(plain);
+                CryptographicOperations.ZeroMemory(cipher);
+            }
+
+            var result = LegacyMachineTokenCleanup.EnsureRemovedAtPath(legacy);
+
+            Assert.Equal(LegacyMachineTokenCleanupStatus.Removed, result.Status);
+            Assert.False(File.Exists(legacy));
+            Assert.False(File.Exists(current));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Token_operations_fail_closed_when_legacy_path_is_not_a_regular_file()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-legacy-blocked-{Guid.NewGuid():N}");
+        var legacy = Path.Combine(root, LegacyMachineTokenCleanup.LegacyFileName);
+        var current = Path.Combine(root, "current.bin");
+        try
+        {
+            Directory.CreateDirectory(legacy);
+            var store = new TokenStore(current, DataProtectionScope.CurrentUser, legacy);
+
+            var ex = Assert.Throws<LegacyMachineTokenCleanupException>(() => store.Load());
+
+            Assert.Contains("legacy machine-wide GitHub credential", ex.Message);
+            Assert.False(File.Exists(current));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Legacy_cleanup_rejects_non_auth_filename()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"iskra-{Guid.NewGuid():N}.bin");
+        Assert.Throws<ArgumentException>(() =>
+            LegacyMachineTokenCleanup.EnsureRemovedAtPath(path));
+    }
+
+    [Fact]
     public void From_TokenResponse_computes_expiry_timestamps()
     {
         var now = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);

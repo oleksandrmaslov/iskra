@@ -10,6 +10,8 @@ public enum AuthStatus
     ClientNotConfigured,
     /// <summary>The native store failed at runtime or its credential payload is invalid.</summary>
     TokenStoreCorrupt,
+    /// <summary>A pre-2.2.1 machine-wide bearer token could not be safely removed.</summary>
+    LegacyTokenCleanupRequired,
     NotSignedIn,
     /// <summary>The refresh token has expired; a new sign-in is required.</summary>
     SessionExpired,
@@ -25,7 +27,9 @@ public sealed record AuthSnapshot(
 {
     /// <summary>Offering sign-in is pointless without a store or a client ID.</summary>
     public bool CanSignIn =>
-        Status is not (AuthStatus.SecureStoreUnavailable or AuthStatus.ClientNotConfigured);
+        Status is not (AuthStatus.SecureStoreUnavailable
+            or AuthStatus.ClientNotConfigured
+            or AuthStatus.LegacyTokenCleanupRequired);
 
     /// <summary>There is something on disk worth deleting.</summary>
     public bool CanSignOut =>
@@ -78,6 +82,15 @@ public sealed class AuthWorkflow
         try
         {
             stored = _store.Load();
+        }
+        catch (LegacyMachineTokenCleanupException ex)
+        {
+            return new AuthSnapshot(
+                AuthStatus.LegacyTokenCleanupRequired,
+                false,
+                null,
+                null,
+                ex.Message);
         }
         catch (TokenStoreException ex)
         {

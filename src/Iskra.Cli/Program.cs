@@ -736,6 +736,14 @@ static async Task<int> LoginAsync()
         return 2;
     }
 
+    try { _ = store.Exists(); }
+    catch (TokenStoreException ex)
+    {
+        Console.Error.WriteLine(CliText.Get("Auth.StoreCorrupt", ex.Message));
+        Console.Error.WriteLine(CliText.Get("Auth.Reauthenticate"));
+        return 5;
+    }
+
     using var http = new HttpClient();
     var flow = new GitHubDeviceFlow(http, GitHubAppConfig.ClientId);
 
@@ -1188,46 +1196,64 @@ static int Doctor(string[] args)
     else
         Fail(localAppDataLabel, localError ?? CliText.Get("Doctor.NotWritable"));
 
-    // WPF/DPAPI intentionally uses machine-wide ProgramData. Unix credentials
-    // live in the per-user Keychain/Secret Service, and a packaged station's
-    // shared files are normally root-owned/read-only, so requiring write access
-    // there would incorrectly fail a healthy locked-down station.
+    LegacyMachineTokenCleanupResult? legacyCleanup = null;
     if (OperatingSystem.IsWindows())
     {
-        var programData = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "Iskra");
-        if (CanWriteDirectory(programData, out var programDataError))
-            Pass("%PROGRAMDATA%\\Iskra", CliText.Get("Doctor.Writable"));
-        else
-            Fail("%PROGRAMDATA%\\Iskra", programDataError ?? CliText.Get("Doctor.NotWritable"));
+        legacyCleanup = LegacyMachineTokenCleanup.EnsureRemoved();
+        switch (legacyCleanup.Status)
+        {
+            case LegacyMachineTokenCleanupStatus.Absent:
+                Pass("Legacy GitHub auth", CliText.Get("Doctor.LegacyTokenAbsent"));
+                break;
+            case LegacyMachineTokenCleanupStatus.Removed:
+                Warn("Legacy GitHub auth", CliText.Get(
+                    "Doctor.LegacyTokenRemoved",
+                    legacyCleanup.Path));
+                break;
+            default:
+                Fail("Legacy GitHub auth", CliText.Get(
+                    "Doctor.LegacyTokenCleanupRequired",
+                    legacyCleanup.Path,
+                    legacyCleanup.Diagnostic ?? ""));
+                break;
+        }
     }
 
     // Same classification the desktop frontends render, so a doctor report and
     // the Settings tab can never disagree about the session state.
-    var authSnapshot = new AuthWorkflow(PlatformTokenStoreFactory.Create()).Evaluate();
-    switch (authSnapshot.Status)
+    if (legacyCleanup?.Status == LegacyMachineTokenCleanupStatus.CleanupRequired)
     {
-        case AuthStatus.SecureStoreUnavailable:
-            Warn("GitHub auth", CliText.Get("Doctor.SecureStoreMissing"));
-            break;
-        case AuthStatus.ClientNotConfigured:
-            Warn("GitHub auth", CliText.Get("Doctor.AuthClientMissing"));
-            break;
-        case AuthStatus.TokenStoreCorrupt:
-            Fail("GitHub auth", authSnapshot.Diagnostic ?? "");
-            break;
-        case AuthStatus.NotSignedIn:
-            Warn("GitHub auth", CliText.Get("Doctor.NotSignedIn"));
-            break;
-        case AuthStatus.SessionExpired:
-            Fail("GitHub auth", CliText.Get("Doctor.RefreshExpired"));
-            break;
-        default:
-            Pass("GitHub auth", CliText.Get(
-                "Doctor.SignedInUntil",
-                authSnapshot.RefreshTokenExpiresAtUtc?.ToString("u") ?? "?"));
-            break;
+        Warn("GitHub auth", CliText.Get("Doctor.LegacyTokenBlocksAuth"));
+    }
+    else
+    {
+        var authSnapshot = new AuthWorkflow(PlatformTokenStoreFactory.Create()).Evaluate();
+        switch (authSnapshot.Status)
+        {
+            case AuthStatus.SecureStoreUnavailable:
+                Warn("GitHub auth", CliText.Get("Doctor.SecureStoreMissing"));
+                break;
+            case AuthStatus.ClientNotConfigured:
+                Warn("GitHub auth", CliText.Get("Doctor.AuthClientMissing"));
+                break;
+            case AuthStatus.TokenStoreCorrupt:
+                Fail("GitHub auth", authSnapshot.Diagnostic ?? "");
+                break;
+            case AuthStatus.LegacyTokenCleanupRequired:
+                Fail("GitHub auth", authSnapshot.Diagnostic ?? "");
+                break;
+            case AuthStatus.NotSignedIn:
+                Warn("GitHub auth", CliText.Get("Doctor.NotSignedIn"));
+                break;
+            case AuthStatus.SessionExpired:
+                Fail("GitHub auth", CliText.Get("Doctor.RefreshExpired"));
+                break;
+            default:
+                Pass("GitHub auth", CliText.Get(
+                    "Doctor.SignedInUntil",
+                    authSnapshot.RefreshTokenExpiresAtUtc?.ToString("u") ?? "?"));
+                break;
+        }
     }
 
     var cloud = new CloudLogWorkflow().Inspect(AppSettingsStore.Load());

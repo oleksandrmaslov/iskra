@@ -52,9 +52,38 @@ try {
     & $dotnet tool restore
     if ($LASTEXITCODE -ne 0) { throw "repository tool restore failed" }
 
+    # Component Detector must not scan artifacts/release: when several SBOMs
+    # are generated in sequence it would otherwise treat earlier manifests as
+    # components of later packages. Stage only dependency/source manifests and
+    # restored NuGet asset graphs in an isolated component root.
+    $componentRoot = Join-Path $tempRoot "components"
+    New-Item -ItemType Directory -Path $componentRoot | Out-Null
+    $componentFiles = @()
+    foreach ($name in @("global.json", "Iskra.sln", "nuget.config", "Directory.Build.props", "Directory.Build.targets")) {
+        $candidate = Join-Path $repoRoot $name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $componentFiles += Get-Item -LiteralPath $candidate }
+    }
+    $toolManifest = Join-Path $repoRoot ".config\dotnet-tools.json"
+    if (Test-Path -LiteralPath $toolManifest -PathType Leaf) { $componentFiles += Get-Item -LiteralPath $toolManifest }
+    foreach ($treeName in @("src", "tests")) {
+        $tree = Join-Path $repoRoot $treeName
+        $componentFiles += Get-ChildItem -LiteralPath $tree -File -Recurse | Where-Object {
+            $_.Name -eq "packages.lock.json" -or
+            $_.Name -eq "project.assets.json" -or
+            $_.Extension -eq ".csproj"
+        }
+    }
+    foreach ($file in $componentFiles) {
+        $relative = [IO.Path]::GetRelativePath($repoRoot, $file.FullName)
+        $destination = Join-Path $componentRoot $relative
+        $destinationDirectory = Split-Path -Parent $destination
+        New-Item -ItemType Directory -Force -Path $destinationDirectory | Out-Null
+        Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
+    }
+
     & $dotnet tool run sbom-tool generate `
         -b $drop `
-        -bc $repoRoot `
+        -bc $componentRoot `
         -m $tempRoot `
         -pn Iskra `
         -pv $Version `

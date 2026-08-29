@@ -73,6 +73,23 @@ public sealed class AuthAndCloudWorkflowTests : IDisposable
     }
 
     [Fact]
+    public void A_blocked_legacy_machine_token_disables_private_authentication()
+    {
+        var store = new FakeTokenStore
+        {
+            LoadThrows = new LegacyMachineTokenCleanupException("remove legacy auth.bin"),
+        };
+
+        var snapshot = new AuthWorkflow(store, clientConfigured: true).Evaluate(Now);
+
+        Assert.Equal(AuthStatus.LegacyTokenCleanupRequired, snapshot.Status);
+        Assert.Equal("remove legacy auth.bin", snapshot.Diagnostic);
+        Assert.False(snapshot.CanSignIn);
+        Assert.False(snapshot.CanSignOut);
+        Assert.False(snapshot.CanFetchRemoteFirmware);
+    }
+
+    [Fact]
     public void An_expired_refresh_token_is_a_session_expiry_not_a_valid_session()
     {
         var store = new FakeTokenStore

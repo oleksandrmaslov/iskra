@@ -143,6 +143,8 @@ public sealed partial class MainWindowViewModel
             AuthStatus.ClientNotConfigured => (Text.AuthClientMissing, StatusErrorBrush),
             AuthStatus.TokenStoreCorrupt =>
                 (Text.AuthTokenCorrupt(_authSnapshot.Diagnostic ?? string.Empty), StatusErrorBrush),
+            AuthStatus.LegacyTokenCleanupRequired =>
+                (Text.AuthTokenCorrupt(_authSnapshot.Diagnostic ?? string.Empty), StatusErrorBrush),
             AuthStatus.NotSignedIn => (Text.AuthNotSignedIn, StatusWarnBrush),
             AuthStatus.SessionExpired => (Text.AuthSessionExpired, StatusErrorBrush),
             _ => (Text.AuthSignedIn(
@@ -219,7 +221,8 @@ public sealed partial class MainWindowViewModel
     private void SignOut()
     {
         var after = _authWorkflow.SignOut();
-        if (after.Status == AuthStatus.TokenStoreCorrupt && after.Diagnostic is { } diagnostic)
+        if ((after.Status is AuthStatus.TokenStoreCorrupt or AuthStatus.LegacyTokenCleanupRequired)
+            && after.Diagnostic is { } diagnostic)
         {
             _authSnapshot = after;
             AuthStatusText = Text.AuthDeleteFailed(diagnostic);

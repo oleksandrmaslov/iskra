@@ -5,7 +5,7 @@ Magic Probe. It verifies a signed firmware catalog, checks firmware integrity
 and memory ranges, drives a guarded `gdb` transaction, and records every attempt
 in SQLite.
 
-> **Status (2026-08-27): 2.2.1 engineering release, not factory-approved.**
+> **Status (2026-08-28): 2.2.1 engineering release, not factory-approved.**
 > WPF remains the supported Windows variant. The Avalonia app and CLI now build
 > for Windows, Linux, and macOS and share the same flash workflow, but production
 > signing, clean-machine/HIL evidence, catalog-key rotation, board identity, and

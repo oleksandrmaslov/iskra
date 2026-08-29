@@ -1176,6 +1176,10 @@ public partial class MainWindow : Window
                 AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
                 AuthStatusLabel.Text = T("Auth.TokenCorrupt", _authSnapshot.Diagnostic ?? "");
                 break;
+            case AuthStatus.LegacyTokenCleanupRequired:
+                AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
+                AuthStatusLabel.Text = T("Auth.TokenCorrupt", _authSnapshot.Diagnostic ?? "");
+                break;
             case AuthStatus.NotSignedIn:
                 AuthStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x66, 0x00));
                 AuthStatusLabel.Text = T("Auth.NotSignedIn");
@@ -1237,7 +1241,8 @@ public partial class MainWindow : Window
     private void AuthLogout_Click(object sender, RoutedEventArgs e)
     {
         var after = _authWorkflow.SignOut();
-        if (after.Status == AuthStatus.TokenStoreCorrupt && after.Diagnostic is { } diagnostic)
+        if ((after.Status is AuthStatus.TokenStoreCorrupt or AuthStatus.LegacyTokenCleanupRequired)
+            && after.Diagnostic is { } diagnostic)
         {
             MessageBox.Show(this, T("Auth.DeleteFailed", diagnostic),
                 T("Auth.SignOut.Title"), MessageBoxButton.OK, MessageBoxImage.Warning);

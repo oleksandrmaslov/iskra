@@ -118,10 +118,16 @@ question for the maintainer, and neither is a network fault.
 
 ## Residual risks
 
-- **The token is decryptable on the station.** `TokenStore` uses DPAPI
-  `LocalMachine`, so any local user or admin on that PC can read it. It is capped
-  at read-only on the artefact repo, but treat a stolen station as a leaked
-  operator credential and revoke that person.
+- **The token is decryptable by the signed-in station account.** Windows uses
+  DPAPI `CurrentUser` under `%LOCALAPPDATA%`, Linux uses Secret Service, and
+  macOS uses the login Keychain. An account or station compromise can still
+  expose that operator credential, so revoke the affected GitHub authorization.
+- **2.2.0 upgrade action.** Older Windows builds stored a shared DPAPI
+  `LocalMachine` blob at `%PROGRAMDATA%\Iskra\auth.bin`. The 2.2.1 installers
+  delete only that exact file, and the app fails private authentication closed
+  if it remains; it is never decrypted or migrated. Deletion cannot revoke a
+  copied token, so revoke the old GitHub Device Flow authorization and sign in
+  again before production use.
 - **No per-station revocation.** GitHub records the Device Flow grant per user,
   not per device. Revoking affects that person on every station they signed into.
   Per-station identity needs a token broker; see Sprint 9.

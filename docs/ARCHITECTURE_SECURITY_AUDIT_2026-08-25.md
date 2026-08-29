@@ -110,6 +110,7 @@ binaries, controlled GDB provenance, and re-imaging procedures.
 | SEC-23 | High | Corrupt settings, concurrent rotating-token mutations, unbounded process/UI lines, and the missing interval scheduler could silently weaken or exhaust a station. | Unsafe settings are preserved and block startup/flash; login/logout/refresh share a per-user cross-process lock; process/UI/HEX/sysfs input is bounded before allocation; the persisted scheduler runs immediately and at the configured interval without overlap. |
 | SEC-24 | High | URLs inside GitHub responses could direct bearer tokens or operator browser/update actions to an attacker-controlled origin. | Authenticated asset requests require exact `https://api.github.com` release-asset paths; Device Flow, catalog assets, and update/browser links require exact GitHub HTTPS origins. Adversarial host/userinfo/scheme cases fail closed. |
 | SEC-25 | Medium | Release output lacked a machine-readable component inventory and signed workflow provenance. | A pinned Microsoft SBOM tool generates and validates SPDX 2.2 manifests; the native release matrix emits build and SBOM attestations through a SHA-pinned GitHub action. Official trust still depends on a clean tag and configured signing identities. |
+| SEC-26 | High | Moving Windows Device Flow credentials from DPAPI LocalMachine to CurrentUser could leave a still-valid shared bearer token orphaned under `%PROGRAMDATA%`, while doctor/UI guidance still expected machine-wide writes. | The exact legacy `auth.bin` is deleted without decryption or migration under a machine-wide lock and by both elevated MSIs. Private auth fails closed if cleanup is ambiguous or denied; doctor and all locales point at the per-user store. Operators must revoke the old grant because deletion cannot invalidate a copied token. |
 
 ## Open stop-ship findings
 
@@ -157,14 +158,14 @@ open.
 
 ## Local verification record
 
-The 2.2.1 engineering release was verified locally on 2026-08-27. Exact commands,
+The 2.2.1 engineering release was verified locally on 2026-08-28. Exact commands,
 artifact sizes, and SHA-256 values are retained in
 `docs/RELEASE_EVIDENCE_2.2.1.md`. The following gates were green:
 
 - locked restore with .NET SDK 10.0.301;
 - Release solution build with warnings treated as errors;
-- Core 600/600, Application 92/92, and headless Avalonia 21/21 test suites
-  (713 total, no failures or skips);
+- Core 605/605, Application 93/93, and headless Avalonia 21/21 test suites
+  (719 total, no failures or skips);
 - NuGet direct/transitive vulnerability query (zero known vulnerable packages);
 - PowerShell parser validation, Bash `-n`, and workflow YAML parse;
 - four cross-published Unix archives, the Windows portable ZIP, both Windows

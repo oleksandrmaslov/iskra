@@ -17,7 +17,7 @@ goals and acceptance gates live here.
   desktop UI. `Iskra.Desktop` has functional workflow parity and portable/native
   package definitions, but it is not a replacement or a claim of platform/HIL
   parity until the acceptance matrix passes.
-- Security audit status (2026-08-27): **2.2.1 is complete as a labelled
+- Security audit status (2026-08-28): **2.2.1 is complete as a labelled
   engineering release and remains STOP-SHIP for factory production** until the owner,
   infrastructure, signing, and HIL gates in Sprint 9 are closed. The full audit
   is in `docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md`; exact local evidence
@@ -50,7 +50,7 @@ goals and acceptance gates live here.
 - Broadened `.deb` dependency alternatives to the official .NET 10 library sets
   for Ubuntu 22.04/24.04 and Debian 12/13. Native package execution remains an
   acceptance requirement, not a Windows cross-publish claim.
-- Final 2.2.1 verification: locked Release build with zero warnings, 713/713
+- Final 2.2.1 verification: locked Release build with zero warnings, 719/719
   automated tests, and zero known vulnerable NuGet packages. Official signing,
   native clean-machine/HIL, production catalog key, append-only central audit,
   and trustworthy board identity remain STOP-SHIP gates.

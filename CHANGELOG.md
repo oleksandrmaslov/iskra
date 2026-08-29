@@ -2,7 +2,7 @@
 
 All notable changes to Iskra are documented here.
 
-## [2.2.1] - 2026-08-27
+## [2.2.1] - 2026-08-28
 
 Engineering security release only. This version is not factory-approved until
 the production signing/key-custody, append-only central audit, trustworthy board
@@ -42,7 +42,10 @@ closed.
 - Windows Device Flow credentials moved from machine-scope DPAPI under
   `%PROGRAMDATA%` to per-user DPAPI under `%LOCALAPPDATA%`. Refresh, login,
   logout, and replacement writes now share one per-user cross-process mutation
-  lock so a stale refresh cannot resurrect signed-out credentials.
+  lock so a stale refresh cannot resurrect signed-out credentials. The exact
+  legacy `%PROGRAMDATA%\Iskra\auth.bin` is deleted without decryption or
+  migration; private authentication fails closed when cleanup needs an
+  administrator, and operators must revoke the old grant and sign in again.
 - GDB discovery now accepts only administrator/package-controlled roots in
   production, resolves symlink chains, and reports canonical path, SHA-256, and
   bounded version evidence through `--doctor`. Arbitrary paths remain available
@@ -72,11 +75,14 @@ closed.
 - Release/API response URLs are treated as untrusted metadata. Tokens are never
   sent to a host supplied by a release response, and unsafe update/browser URLs
   are not exposed to the operator UI.
+- Both Windows MSIs remove only the legacy machine-wide `auth.bin` during an
+  elevated install. `--doctor` reports the migration state and no longer
+  requires general write access to `%PROGRAMDATA%\Iskra`.
 
 ### Verification
 
 - Locked .NET 10.0.301 Release build: zero warnings and zero errors.
-- Core 600, Application 92, Desktop 21; 713 total automated tests with no
+- Core 605, Application 93, Desktop 21; 719 total automated tests with no
   failures or skips. NuGet reported zero known vulnerable direct/transitive
   packages.
 - Classification remains **engineering only / STOP-SHIP for factory use**.
