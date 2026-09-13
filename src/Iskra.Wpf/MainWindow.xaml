@@ -417,6 +417,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="{local:Tr Settings.GdbPath}" VerticalAlignment="Center" Margin="0,4,8,4" />
@@ -424,21 +425,35 @@
                                        ToolTip="{local:Tr Settings.AutoDetect.Tooltip}" />
                             <Button    Grid.Row="0" Grid.Column="2" Content="..." Width="40" Margin="0,4,0,4" Click="PickGdbPath_Click" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Tr Settings.SwdFrequency}" VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <TextBox   Grid.Row="1" Grid.Column="1" x:Name="SettingsBmpFreq" Margin="0,4,8,4" />
+                            <!-- One-click toolchain install. GdbDiscovery only trusts GDB from an
+                                 administrator-controlled location, so this runs the pinned vendor
+                                 MSI and lets Windows raise a single UAC prompt: no terminal, no
+                                 manual download hunt. -->
+                            <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                        Orientation="Horizontal" Margin="0,0,0,6">
+                                <Button x:Name="InstallToolchainButton"
+                                        Content="{local:Tr Settings.InstallToolchain}"
+                                        ToolTip="{local:Tr Settings.InstallToolchain.Tooltip}"
+                                        Padding="12,4" Click="InstallToolchain_Click" />
+                                <TextBlock x:Name="ToolchainStatus" VerticalAlignment="Center"
+                                           Margin="12,0,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="{local:Tr Settings.Power}" VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,4,0,4">
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="{local:Tr Settings.SwdFrequency}" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBox   Grid.Row="2" Grid.Column="1" x:Name="SettingsBmpFreq" Margin="0,4,8,4" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="{local:Tr Settings.Power}" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,4,0,4">
                                 <RadioButton x:Name="SettingsPowerExternal" Content="{local:Tr Settings.Power.External}" GroupName="Power" Margin="0,0,16,0" />
                                 <RadioButton x:Name="SettingsPowerProbe" Content="{local:Tr Settings.Power.Probe}" GroupName="Power" />
                             </StackPanel>
 
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="{local:Tr Settings.ConnectReset}" VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <CheckBox  Grid.Row="3" Grid.Column="1" x:Name="SettingsConnectReset" Margin="0,8,0,4"
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="{local:Tr Settings.ConnectReset}" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <CheckBox  Grid.Row="4" Grid.Column="1" x:Name="SettingsConnectReset" Margin="0,8,0,4"
                                        Content="{local:Tr Settings.ConnectReset.Content}" />
 
-                            <TextBlock Grid.Row="4" Grid.Column="0" Text="{local:Tr Settings.Timeout}" VerticalAlignment="Center" Margin="0,4,8,4" />
-                            <TextBox   Grid.Row="4" Grid.Column="1" x:Name="SettingsTimeout" Margin="0,4,8,4" />
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="{local:Tr Settings.Timeout}" VerticalAlignment="Center" Margin="0,4,8,4" />
+                            <TextBox   Grid.Row="5" Grid.Column="1" x:Name="SettingsTimeout" Margin="0,4,8,4" />
                         </Grid>
 
                         <!-- Logging / Station -->

@@ -2,6 +2,73 @@
 
 All notable changes to Iskra are documented here.
 
+## [2.2.2] - 2026-09-13
+
+Engineering fix release for controlled lab evaluation. **Not factory-approved.**
+Three defects in this release each blocked a station outright on at least one
+platform.
+
+### Fixed
+
+- Fixed GitHub Device Flow authentication on Linux and macOS, where signing in,
+  refreshing a token, and signing out all failed with "could not establish the
+  cross-process GitHub credential lock; authentication is disabled to protect
+  rotating credentials". The cross-process credential lock waited on a named
+  mutex and a cancellation handle together, which throws
+  `PlatformNotSupportedException` on Unix, so every credential mutation was
+  unreachable. The lease now waits on the mutex alone and polls for
+  cancellation. Windows was never affected.
+- The credential-lock failure message now names the underlying cause instead of
+  reporting only that the lock could not be taken, which left the actual reason
+  invisible in support logs.
+- Fixed `target.json` sidecars saved with a UTF-8 BOM failing to parse, which
+  broke catalog generation with `'0xEF' is an invalid start of a value`. These
+  files are hand-authored on Windows, where editors and PowerShell redirection
+  both emit a BOM. Catalog bytes were already BOM-tolerant; sidecars now are
+  too.
+- Fixed the Device Flow user-code panel rendering its copy button as black text
+  on dark navy, measured at 1.21:1 contrast. The Fluent light-theme button fill
+  is translucent, so on a dark parent it composited down to the panel colour.
+  The button now uses the same explicit `on-dark` treatment as the main window
+  header, and a headless render test fails the build if either that button or
+  the user code itself drops below the 4.5:1 minimum.
+
+### Added
+
+- Added an in-app Arm GNU Toolchain install, so a station no longer needs a
+  terminal or a manual vendor download to get `arm-none-eabi-gdb`. Available
+  from the WPF Settings tab and as `Iskra.Cli --install-toolchain`. The pinned
+  vendor installer is verified against its SHA-256 before anything is executed;
+  a mismatched download is deleted, never run, and a verified one is cached so a
+  declined prompt does not re-download it.
+  The install is deliberately elevated rather than per-user: `GdbDiscovery`
+  accepts GDB only from an administrator-controlled location, because GDB is the
+  process that writes firmware, so a per-user install would place a toolchain
+  the app then refuses to use. Windows raises one consent dialog. Linux and
+  macOS report the exact distribution command instead of installing.
+- Added `ArmToolchainPins`, a single in-app source for the pinned toolchain
+  version, filename, URL, and hash, with a test that fails the build if it
+  drifts from `installer/arm-toolchain.pins.ps1`. The in-app install and the
+  packaged setup EXE therefore cannot deliver different compilers under the same
+  version claim.
+
+### Changed
+
+- `--generate-catalog` now applies the same trusted-catalog validation a station
+  applies before it writes anything, and refuses to emit a catalog that every
+  station would reject. The published 2026-08-09 catalog was refused in the
+  field for exactly this reason: its products carried no `target.flash_origin`,
+  so firmware load addresses could not be range checked. The failure now names
+  the product and the sidecar field to add, and happens in CI rather than on an
+  operator's screen.
+
+### Tests
+
+- 740 automated tests pass, up from 719. New coverage for cross-process
+  credential locking on every platform, catalog signing-key handling, BOM
+  tolerance and `flash_origin` enforcement in generated catalogs, pinned
+  toolchain download verification, and Device Flow colour contrast.
+
 ## [2.2.1] - 2026-08-28
 
 Engineering security release only. This version is not factory-approved until

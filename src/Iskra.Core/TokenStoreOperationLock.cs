@@ -89,9 +89,15 @@ internal static class TokenStoreOperationLock
         }
         catch (InvalidOperationException ex)
         {
+            // Name the underlying cause. Without it this surfaces as an
+            // unactionable wall on the operator's screen and in support logs --
+            // the platform-specific reason is the only thing that identifies
+            // whether the store, the OS, or contention is at fault.
+            var cause = (ex.InnerException ?? ex).Message;
             throw new TokenStoreException(
                 "could not establish the cross-process GitHub credential lock; " +
-                "authentication is disabled to protect rotating credentials",
+                "authentication is disabled to protect rotating credentials " +
+                $"({cause})",
                 ex);
         }
     }

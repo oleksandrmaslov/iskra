@@ -59,6 +59,13 @@ public sealed record TargetSidecar(
         if (System.Text.Encoding.UTF8.GetByteCount(json) > MaxSidecarBytes)
             throw new TargetSidecarException($"target.json exceeds {MaxSidecarBytes} bytes");
 
+        // Sidecars are hand-authored on Windows, where editors and PowerShell
+        // redirection both emit a UTF-8 BOM. System.Text.Json rejects a leading
+        // U+FEFF outright, so a perfectly good target.json fails with an opaque
+        // "'0xEF' is an invalid start of a value". CatalogJson already strips
+        // it from catalog bytes; do the same here.
+        json = json.TrimStart('﻿');
+
         TargetSidecar? s;
         try { s = JsonSerializer.Deserialize<TargetSidecar>(json, JsonOpts); }
         catch (JsonException ex) { throw new TargetSidecarException($"target.json invalid: {ex.Message}", ex); }

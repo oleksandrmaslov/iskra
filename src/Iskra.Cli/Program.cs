@@ -41,6 +41,9 @@ if (args.Contains("--doctor"))
 if (args.Contains("--list-probes"))
     return ListProbes();
 
+if (args.Contains("--install-toolchain"))
+    return await InstallToolchainAsync();
+
 if (args.Contains("--gen-keypair"))
     return GenKeypair(args);
 
@@ -498,6 +501,41 @@ var authFailure = outcome.ErrorCode is "E_NOT_SIGNED_IN"
     or "E_FW_DOWNLOAD_FAILED";
 return outcome.IsPass ? 0 : authFailure ? 5 : 1;
 
+/// <summary>
+/// Installs the pinned Arm GNU Toolchain so a station never needs a terminal or
+/// a vendor download page. Windows raises one UAC prompt; the toolchain has to
+/// land in an administrator-controlled location or GdbDiscovery will not trust
+/// it to write firmware.
+/// </summary>
+static async Task<int> InstallToolchainAsync()
+{
+    var progress = new Progress<ToolchainDownloadProgress>(p =>
+    {
+        var pct = p.Fraction is { } f ? $"{f * 100:F0}%" : $"{p.BytesRead / (1024 * 1024)} MB";
+        Console.Write($"\r  downloading Arm GNU Toolchain {ArmToolchainPins.Version}: {pct}   ");
+    });
+
+    var result = await ToolchainInstaller.EnsureInstalledAsync(progress);
+    Console.WriteLine();
+
+    switch (result.Status)
+    {
+        case ToolchainInstallStatus.AlreadyInstalled:
+        case ToolchainInstallStatus.Installed:
+            Console.WriteLine($"✓ {result.Message}");
+            return 0;
+        case ToolchainInstallStatus.Cancelled:
+            Console.Error.WriteLine(result.Message);
+            return 1;
+        case ToolchainInstallStatus.UnsupportedPlatform:
+            Console.Error.WriteLine(result.Message);
+            return 2;
+        default:
+            Console.Error.WriteLine($"✗ {result.Message}");
+            return 1;
+    }
+}
+
 static int GenKeypair(string[] args)
 {
     int i = Array.IndexOf(args, "--gen-keypair");
@@ -671,6 +709,28 @@ static int GenerateCatalog(string[] args)
     catch (ArgumentException ex)         { Console.Error.WriteLine(ex.Message); return 2; }
     catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
     catch (CatalogParseException ex)     { Console.Error.WriteLine($"generated catalog failed validation: {ex.Message}"); return 2; }
+
+    // Hold the generated catalog to the exact rule a station applies to a
+    // signed catalog. Without this the pipeline happily signs and publishes a
+    // catalog that every station then refuses to load -- which is how a whole
+    // fleet ended up with an unusable catalog because the target.json sidecars
+    // omitted flash_origin.
+    try { CatalogJson.ValidateTrustedArtifactPaths(catalog); }
+    catch (CatalogParseException ex)
+    {
+        Console.Error.WriteLine(
+            $"generated catalog would be refused by every station: {ex.Message}");
+        Console.Error.WriteLine(
+            "  fix the target.json sidecar for that product, then regenerate. A target");
+        Console.Error.WriteLine(
+            "  must declare its flash origin so load addresses can be range-checked:");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("    \"flash_kb\":     20,");
+        Console.Error.WriteLine("    \"flash_origin\": \"0x08000000\"");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("  Take the value from the linker script's FLASH region ORIGIN.");
+        return 2;
+    }
 
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
     File.WriteAllBytes(outPath, CatalogJson.WriteUtf8(catalog));

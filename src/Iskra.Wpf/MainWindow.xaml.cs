@@ -693,6 +693,7 @@ public partial class MainWindow : Window
         var src = CatalogTrust.OfficialCatalogSource;
         SettingsCatalogSourceLocked.Text = $"{src.Owner}/{src.Repo}";
         SettingsGdbPath.Text       = _settings.GdbPath ?? "";
+        RefreshToolchainStatus();
         SettingsBmpFreq.Text       = _settings.BmpFrequencyHz.ToString(CultureInfo.InvariantCulture);
         SettingsPowerExternal.IsChecked = _settings.Power == PowerMode.External;
         SettingsPowerProbe.IsChecked    = _settings.Power == PowerMode.Probe;
@@ -1037,6 +1038,76 @@ public partial class MainWindow : Window
             Title  = T("Dialog.Gdb.Title"),
         };
         if (dlg.ShowDialog() == true) SettingsGdbPath.Text = dlg.FileName;
+    }
+
+    /// <summary>
+    /// Refreshes the toolchain line without running anything, so an operator can
+    /// see at a glance whether the station already has a usable debugger.
+    /// </summary>
+    private void RefreshToolchainStatus()
+    {
+        string? found;
+        try { found = GdbDiscovery.Find(SettingsGdbPath.Text); }
+        catch (Exception) { found = null; }
+
+        var present = !string.IsNullOrWhiteSpace(found);
+        ToolchainStatus.Text = present ? T("Toolchain.Present") : T("Toolchain.Missing");
+        ToolchainStatus.Foreground = present
+            ? System.Windows.Media.Brushes.Green
+            : System.Windows.Media.Brushes.DarkOrange;
+        InstallToolchainButton.IsEnabled = !present;
+    }
+
+    private async void InstallToolchain_Click(object sender, RoutedEventArgs e)
+    {
+        InstallToolchainButton.IsEnabled = false;
+        ToolchainStatus.Foreground = System.Windows.Media.Brushes.Black;
+
+        // Progress arrives from a background thread; Progress<T> marshals the
+        // callback back to this dispatcher because it is created here.
+        var progress = new Progress<ToolchainDownloadProgress>(report =>
+        {
+            var amount = report.Fraction is { } fraction
+                ? $"{fraction * 100:F0}%"
+                : $"{report.BytesRead / (1024 * 1024)} MB";
+            ToolchainStatus.Text = string.Format(T("Toolchain.Downloading"), amount);
+        });
+
+        ToolchainInstallResult result;
+        try
+        {
+            result = await ToolchainInstaller.EnsureInstalledAsync(progress);
+        }
+        catch (Exception ex)
+        {
+            ToolchainStatus.Text = string.Format(T("Toolchain.Failed"), ex.Message);
+            ToolchainStatus.Foreground = System.Windows.Media.Brushes.Firebrick;
+            InstallToolchainButton.IsEnabled = true;
+            return;
+        }
+
+        switch (result.Status)
+        {
+            case ToolchainInstallStatus.AlreadyInstalled:
+            case ToolchainInstallStatus.Installed:
+                ToolchainStatus.Text = string.Format(T("Toolchain.Installed"), result.GdbPath);
+                ToolchainStatus.Foreground = System.Windows.Media.Brushes.Green;
+                // Leave the path box on auto-detect: the toolchain now sits in a
+                // location GdbDiscovery trusts, and pinning an absolute path here
+                // would break on the next toolchain update.
+                RefreshFlashReadiness(updateBanner: false);
+                break;
+            case ToolchainInstallStatus.Cancelled:
+                ToolchainStatus.Text = T("Toolchain.Cancelled");
+                ToolchainStatus.Foreground = System.Windows.Media.Brushes.DarkOrange;
+                break;
+            default:
+                ToolchainStatus.Text = string.Format(T("Toolchain.Failed"), result.Message);
+                ToolchainStatus.Foreground = System.Windows.Media.Brushes.Firebrick;
+                break;
+        }
+
+        InstallToolchainButton.IsEnabled = !result.IsUsable;
     }
 
     private void PickDbPath_Click(object sender, RoutedEventArgs e)

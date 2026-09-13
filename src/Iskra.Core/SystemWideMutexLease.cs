@@ -10,6 +10,13 @@ namespace Iskra.Core;
 /// </summary>
 internal sealed class SystemWideMutexLease : IDisposable, IAsyncDisposable
 {
+    /// <summary>
+    /// How long each ownership attempt blocks before cancellation is rechecked.
+    /// Short enough that a cancelled sign-in returns promptly, long enough that
+    /// an uncontended wait is a single blocking call.
+    /// </summary>
+    private static readonly TimeSpan OwnershipPollInterval = TimeSpan.FromMilliseconds(50);
+
     private readonly ManualResetEventSlim _release = new(initialState: false);
     private readonly TaskCompletionSource<bool> _ready = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -123,8 +130,7 @@ internal sealed class SystemWideMutexLease : IDisposable, IAsyncDisposable
             {
                 if (_waitForOwnership)
                 {
-                    var signaled = WaitHandle.WaitAny([mutex, _cancellationToken.WaitHandle]);
-                    if (signaled == 1)
+                    if (!WaitForOwnership(mutex))
                     {
                         _ready.TrySetCanceled(_cancellationToken);
                         return;
@@ -159,6 +165,33 @@ internal sealed class SystemWideMutexLease : IDisposable, IAsyncDisposable
             mutex?.Dispose();
             _ready.TrySetResult(acquired);
         }
+    }
+
+    /// <summary>
+    /// Waits for the mutex while staying responsive to cancellation. Returns
+    /// <c>false</c> only when cancellation was requested first.
+    /// <para>This polls rather than waiting on the mutex and the cancellation
+    /// handle together, because a combined wait is not portable:
+    /// <c>WaitHandle.WaitAny</c> over a set that contains a *named* primitive
+    /// throws <see cref="PlatformNotSupportedException"/> on Unix. Doing that
+    /// here disabled every credential mutation on Linux and macOS — sign-in,
+    /// refresh, and sign-out all failed with the generic
+    /// "could not establish the cross-process GitHub credential lock".</para>
+    /// <para>The poll costs nothing in practice: this lock is contended only
+    /// when two Iskra processes mutate the same stored credential at once, and
+    /// the operation it guards is a network round-trip.</para>
+    /// </summary>
+    private bool WaitForOwnership(Mutex mutex)
+    {
+        while (!_cancellationToken.IsCancellationRequested)
+        {
+            // An AbandonedMutexException here means the OS handed us ownership
+            // of a mutex whose previous owner died; the caller's catch treats
+            // that as acquired, exactly as it did for the combined wait.
+            if (mutex.WaitOne(OwnershipPollInterval)) return true;
+        }
+
+        return false;
     }
 
     public void Dispose()
