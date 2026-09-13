@@ -2,6 +2,20 @@
 
 All notable changes to Iskra are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed Black Magic Probe discovery on Linux, which reported no probe even with
+  one connected, so a Linux station could never pass readiness or flash. Every
+  entry under `/sys/class/tty` is a symlink with a relative target, and so is
+  the interface's `device` link. Discovery resolved those targets against the
+  link's textual parent, which lands outside `/sys/devices`, so the probe's USB
+  vendor and product IDs were never read. Links are now resolved the way the
+  kernel resolves them. The existing test built plain directories and could not
+  catch this; a new test uses the kernel's real symlink layout. Windows and
+  macOS discovery were not affected.
+
 ## [2.2.2] - 2026-09-13
 
 Engineering fix release for controlled lab evaluation. **Not factory-approved.**

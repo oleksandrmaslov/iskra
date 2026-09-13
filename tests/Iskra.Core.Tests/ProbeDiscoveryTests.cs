@@ -144,6 +144,70 @@ public class ProbeDiscoveryTests
         Assert.NotNull(result);
     }
 
+    [UnixOnlyFact("the kernel's sysfs layout needs POSIX symlinks and ':' in names")]
+    public void FindLinux_resolves_relative_sysfs_symlinks_like_the_kernel()
+    {
+        // On a real kernel /sys/class/tty/ttyACM0 is a symlink to
+        // ../../devices/.../1-2:1.0/tty/ttyACM0, and its device entry is a
+        // symlink to ../../../1-2:1.0. Resolving those targets against their
+        // textual parent lands outside /sys/devices, which hid every connected
+        // probe on Linux while the plain-directory fixture above still passed.
+        var root = Path.Combine(Path.GetTempPath(), $"iskra-sysfs-{Guid.NewGuid():N}");
+        var sys = Path.Combine(root, "sys");
+        try
+        {
+            CreateKernelSysfsUsbDevice(sys, "usb1/1-2", "1d50", "6018", "7BB180B4",
+                ("1-2:1.0", "00", "ttyACM0"), ("1-2:1.2", "02", "ttyACM1"));
+            CreateKernelSysfsUsbDevice(sys, "usb1/1-3", "0403", "6001", "FTDI-SERIAL",
+                ("1-3:1.0", "00", "ttyUSB0"));
+
+            var probes = ProbeDiscovery.FindLinux(Path.Combine(sys, "class", "tty"), "/dev");
+
+            Assert.Equal(2, probes.Count);
+            Assert.Equal("/dev/ttyACM0", probes[0].PortName);
+            Assert.Equal(ProbeInterface.Gdb, probes[0].Interface);
+            Assert.Equal("7BB180B4", probes[0].SerialNumber);
+            Assert.EndsWith("/devices/pci0000:00/usb1/1-2/1-2:1.0", probes[0].DeviceInstanceId, StringComparison.Ordinal);
+            Assert.Equal("/dev/ttyACM1", probes[1].PortName);
+            Assert.Equal(ProbeInterface.Uart, probes[1].Interface);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Builds one USB device the way sysfs presents it: real directories under
+    /// devices/, reached only through relative symlinks from class/tty.
+    /// </summary>
+    private static void CreateKernelSysfsUsbDevice(
+        string sys,
+        string usbPath,
+        string vendor,
+        string product,
+        string serial,
+        params (string Interface, string Number, string Tty)[] interfaces)
+    {
+        var device = Path.Combine(sys, "devices", "pci0000:00", usbPath);
+        var classTty = Path.Combine(sys, "class", "tty");
+        Directory.CreateDirectory(classTty);
+        foreach (var (iface, number, tty) in interfaces)
+        {
+            var interfaceDir = Path.Combine(device, iface);
+            var ttyDir = Path.Combine(interfaceDir, "tty", tty);
+            Directory.CreateDirectory(ttyDir);
+            File.WriteAllText(Path.Combine(interfaceDir, "bInterfaceNumber"), number + "\n");
+            Directory.CreateSymbolicLink(Path.Combine(ttyDir, "device"), $"../../../{iface}");
+            Directory.CreateSymbolicLink(
+                Path.Combine(classTty, tty),
+                $"../../devices/pci0000:00/{usbPath}/{iface}/tty/{tty}");
+        }
+        File.WriteAllText(Path.Combine(device, "idVendor"), vendor + "\n");
+        File.WriteAllText(Path.Combine(device, "idProduct"), product + "\n");
+        File.WriteAllText(Path.Combine(device, "serial"), serial + "\n");
+    }
+
     private static void CreateLinuxTtyFixture(
         string sysTty,
         string ttyName,

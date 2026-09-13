@@ -467,16 +467,15 @@ public static class ProbeDiscovery
             var devicePath = Path.Combine(entryPath, "device");
             if (!Directory.Exists(devicePath)) continue;
 
-            DirectoryInfo? current;
-            try
-            {
-                var device = new DirectoryInfo(devicePath);
-                current = device.ResolveLinkTarget(returnFinalTarget: true) as DirectoryInfo ?? device;
-            }
-            catch
-            {
-                current = new DirectoryInfo(devicePath);
-            }
+            // Every hop here is a sysfs symlink with a relative target:
+            // /sys/class/tty/ttyACM0 -> ../../devices/.../1-2:1.0/tty/ttyACM0,
+            // whose device -> ../../../1-2:1.0. ResolveLinkTarget and
+            // DirectoryInfo.Parent both work on the path text, so they climb
+            // from /sys/class/tty instead of /sys/devices and never reach the
+            // USB device's idVendor. Resolve the physical path first.
+            var physicalDevicePath = ResolvePhysicalPath(devicePath);
+            if (physicalDevicePath is null) continue;
+            DirectoryInfo? current = new DirectoryInfo(physicalDevicePath);
 
             string? vendor = null;
             string? productId = null;
@@ -513,6 +512,67 @@ public static class ProbeDiscovery
             .OrderBy(p => p.PortName, StringComparer.Ordinal)
             .ToList();
     }
+
+    /// <summary>
+    /// Resolves every symbolic link in <paramref name="path"/> the way the
+    /// kernel does: a relative target is taken from the directory that really
+    /// holds the link, and <c>..</c> climbs from where a link actually points.
+    /// Returns null past 40 links, the kernel's own loop limit.
+    /// </summary>
+    private static string? ResolvePhysicalPath(string path)
+    {
+        const int maxFollowedLinks = 40;
+        var unresolved = Path.IsPathFullyQualified(path)
+            ? path
+            : Path.Join(Directory.GetCurrentDirectory(), path);
+        var root = Path.GetPathRoot(unresolved) ?? string.Empty;
+        var pending = new List<string>(SplitPathComponents(unresolved[root.Length..]));
+        var resolved = root;
+        var followed = 0;
+
+        while (pending.Count > 0)
+        {
+            var component = pending[0];
+            pending.RemoveAt(0);
+            if (component == ".") continue;
+            if (component == "..")
+            {
+                // resolved never contains a link, so its textual parent is real.
+                resolved = Path.GetDirectoryName(resolved) ?? root;
+                continue;
+            }
+
+            var candidate = Path.Join(resolved, component);
+            string? target;
+            try { target = new FileInfo(candidate).LinkTarget; }
+            catch (IOException) { target = null; }
+            catch (UnauthorizedAccessException) { target = null; }
+
+            if (target is null)
+            {
+                resolved = candidate;
+                continue;
+            }
+
+            if (++followed > maxFollowedLinks) return null;
+            if (Path.IsPathRooted(target))
+            {
+                resolved = Path.GetPathRoot(target) ?? root;
+                pending.InsertRange(0, SplitPathComponents(target[resolved.Length..]));
+            }
+            else
+            {
+                pending.InsertRange(0, SplitPathComponents(target));
+            }
+        }
+
+        return resolved;
+    }
+
+    private static string[] SplitPathComponents(string path) =>
+        path.Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
 
     /// <summary>Official BMP exposes GDB on USB interface 00 and UART on 02.</summary>
     public static ProbeInterface ClassifyUsbInterfaceNumber(string? interfaceNumber)
