@@ -72,7 +72,11 @@ function Test-ExpectedHash([string] $Path, [string] $ExpectedSha256) {
 
 function Add-WixExtension([string] $ExtensionId) {
     & $dotnet tool run wix -- extension list --global 2>&1 | Out-String | Set-Variable -Name extList
-    if ($LASTEXITCODE -ne 0) { throw "wix extension list failed (exit $LASTEXITCODE)" }
+    # An empty global extension cache -- the normal state of a fresh CI runner
+    # -- makes `wix extension list` exit non-zero. Treat any failure here as
+    # "nothing installed" and let `extension add` below be the authority; its
+    # exit code is still checked, so a genuinely broken wix still fails loudly.
+    if ($LASTEXITCODE -ne 0) { $extList = "" }
 
     $exact = "$ExtensionId 5.0.2"
     $extensionLines = @($extList -split "\r?\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
