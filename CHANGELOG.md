@@ -2,7 +2,10 @@
 
 All notable changes to Iskra are documented here.
 
-## [Unreleased]
+## [2.2.3] - 2026-09-13
+
+Engineering fix release for controlled lab evaluation. **Not factory-approved.**
+Supersedes 2.2.2, whose Linux build could not find a connected probe.
 
 ### Fixed
 
