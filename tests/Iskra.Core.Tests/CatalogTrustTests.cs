@@ -257,6 +257,13 @@ public class CatalogTrustTests : IDisposable
         Assert.True(File.Exists(catalogPath + ".sig"),
             $"expected sibling .sig for {catalogPath}");
 
+        // A CRLF rewrite of the signed bytes is the one failure mode that shows
+        // up only on Windows checkouts, so name it before asserting the vaguer
+        // BadSignature. .gitattributes marks these paths -text to prevent it.
+        Assert.DoesNotContain(
+            (byte)'\r',
+            File.ReadAllBytes(catalogPath!));
+
         var result = CatalogTrust.VerifyCatalogFile(catalogPath!, requireSigned: true);
         Assert.Equal(CatalogTrustResult.Verified, result);
     }

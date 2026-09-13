@@ -1,0 +1,16 @@
+# Detached signatures cover the exact bytes of the file they sign, so these
+# paths must never be end-of-line normalized. Git checks LF-stored text out as
+# CRLF on Windows by default; that rewrite changes the signed bytes and the
+# catalog stops verifying. It presents as CatalogTrustResult.BadSignature on
+# Windows only, while Linux and macOS verify the same commit fine.
+examples/catalog.json      -text
+examples/catalog.json.sig  -text
+
+# Signature and key material generally: bytes, not text.
+*.sig   binary
+*.priv  binary
+*.pub   binary
+
+# Firmware images are compared byte-for-byte against a catalog SHA-256.
+*.elf   binary
+*.hex   binary

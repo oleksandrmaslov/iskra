@@ -403,7 +403,7 @@ public class RemoteCatalogClientTests : IDisposable
         var d = RemoteCatalogClient.DefaultCacheDir();
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         Assert.StartsWith(local, d);
-        Assert.EndsWith(@"Iskra\catalog", d);
+        Assert.EndsWith(Path.Combine("Iskra", "catalog"), d);
     }
 
     [Fact]

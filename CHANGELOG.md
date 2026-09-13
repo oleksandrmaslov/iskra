@@ -62,9 +62,16 @@ platform.
   the product and the sidecar field to add, and happens in CI rather than on an
   operator's screen.
 
+- The catalog generator now treats a product's memory map as part of its target
+  stack, so `flash_origin`, `ram_origin`, and `ram_kb` must agree across every
+  release of a product. The product target is taken from one canonical sidecar,
+  so releases that disagreed previously resolved to whichever sidecar was walked
+  first — silently deciding whether firmware load addresses were range checked at
+  all. A mismatch now fails generation and names the release to correct.
+
 ### Tests
 
-- 740 automated tests pass, up from 719. New coverage for cross-process
+- 742 automated tests pass, up from 719. New coverage for cross-process
   credential locking on every platform, catalog signing-key handling, BOM
   tolerance and `flash_origin` enforcement in generated catalogs, pinned
   toolchain download verification, and Device Flow colour contrast.

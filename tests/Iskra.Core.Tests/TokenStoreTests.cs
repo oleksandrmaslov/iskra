@@ -16,9 +16,9 @@ public class TokenStoreTests : IDisposable
 
     public TokenStoreTests()
     {
-        if (!OperatingSystem.IsWindows())
-            throw Xunit.Sdk.SkipException.ForSkip("DPAPI token-store tests require Windows");
-
+        // Every test here carries [WindowsOnlyFact], so on Linux and macOS this
+        // constructor never runs. A dynamic-skip throw here would surface as a
+        // failure instead: this project targets xunit v2.
         _path = Path.Combine(Path.GetTempPath(),
             $"iskra-tokenstore-{Guid.NewGuid():N}.bin");
     }
@@ -43,7 +43,7 @@ public class TokenStoreTests : IDisposable
             Scope:                    "");
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Save_then_Load_round_trips_all_fields()
     {
         var store = NewStore();
@@ -60,7 +60,7 @@ public class TokenStoreTests : IDisposable
         Assert.Equal(original.Scope,                    loaded.Scope);
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Save_overwrites_existing_blob()
     {
         var store = NewStore();
@@ -72,13 +72,13 @@ public class TokenStoreTests : IDisposable
         Assert.Equal("second_rt", loaded.RefreshToken);
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Load_returns_null_when_file_missing()
     {
         Assert.Null(NewStore().Load());
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Exists_reflects_file_presence()
     {
         var store = NewStore();
@@ -87,7 +87,7 @@ public class TokenStoreTests : IDisposable
         Assert.True(store.Exists());
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Delete_removes_the_file()
     {
         var store = NewStore();
@@ -98,7 +98,7 @@ public class TokenStoreTests : IDisposable
         Assert.False(store.Exists());
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Delete_on_missing_file_is_a_no_op()
     {
         var store = NewStore();
@@ -106,7 +106,7 @@ public class TokenStoreTests : IDisposable
         store.Delete(); // must not throw
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Load_throws_on_corrupted_cipher()
     {
         var store = NewStore();
@@ -121,7 +121,7 @@ public class TokenStoreTests : IDisposable
         Assert.IsType<CryptographicException>(ex.InnerException);
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Load_rejects_an_oversized_encrypted_blob()
     {
         File.WriteAllBytes(_path, new byte[TokenStore.MaxEncryptedTokenBytes + 1]);
@@ -132,7 +132,7 @@ public class TokenStoreTests : IDisposable
         Assert.IsType<FileSizeLimitExceededException>(ex.InnerException);
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Save_rejects_tokens_with_empty_access_token()
     {
         var store = NewStore();
@@ -141,7 +141,7 @@ public class TokenStoreTests : IDisposable
         Assert.False(store.Exists()); // nothing partial on disk
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Save_rejects_tokens_with_empty_refresh_token()
     {
         var store = NewStore();
@@ -149,7 +149,7 @@ public class TokenStoreTests : IDisposable
         Assert.Throws<TokenStoreException>(() => store.Save(bad));
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Save_creates_parent_directory_if_missing()
     {
         var nested = Path.Combine(Path.GetTempPath(),
@@ -167,7 +167,7 @@ public class TokenStoreTests : IDisposable
         }
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Save_does_not_leave_temp_file_behind()
     {
         var store = NewStore();
@@ -178,7 +178,7 @@ public class TokenStoreTests : IDisposable
             Path.GetFileName(_path) + ".*.tmp"));
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void DefaultPath_is_under_LocalAppData_Iskra_and_scope_is_current_user()
     {
         var p = TokenStore.DefaultPath();
@@ -188,7 +188,7 @@ public class TokenStoreTests : IDisposable
         Assert.Equal(DataProtectionScope.CurrentUser, new TokenStore(_path).Scope);
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Legacy_machine_token_cleanup_is_idempotent_and_preserves_siblings()
     {
         var root = Path.Combine(Path.GetTempPath(), $"iskra-legacy-{Guid.NewGuid():N}");
@@ -214,7 +214,7 @@ public class TokenStoreTests : IDisposable
         }
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public async Task Concurrent_legacy_cleanup_removes_only_the_exact_file()
     {
         var root = Path.Combine(Path.GetTempPath(), $"iskra-legacy-race-{Guid.NewGuid():N}");
@@ -243,7 +243,7 @@ public class TokenStoreTests : IDisposable
         }
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Legacy_machine_scope_blob_is_deleted_not_migrated()
     {
         var root = Path.Combine(Path.GetTempPath(), $"iskra-legacy-dpapi-{Guid.NewGuid():N}");
@@ -273,7 +273,7 @@ public class TokenStoreTests : IDisposable
         }
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Token_operations_fail_closed_when_legacy_path_is_not_a_regular_file()
     {
         var root = Path.Combine(Path.GetTempPath(), $"iskra-legacy-blocked-{Guid.NewGuid():N}");
@@ -295,7 +295,7 @@ public class TokenStoreTests : IDisposable
         }
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void Legacy_cleanup_rejects_non_auth_filename()
     {
         var path = Path.Combine(Path.GetTempPath(), $"iskra-{Guid.NewGuid():N}.bin");
@@ -303,7 +303,7 @@ public class TokenStoreTests : IDisposable
             LegacyMachineTokenCleanup.EnsureRemovedAtPath(path));
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void From_TokenResponse_computes_expiry_timestamps()
     {
         var now = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
@@ -320,7 +320,7 @@ public class TokenStoreTests : IDisposable
         Assert.Equal(now.AddSeconds(15897600), stored.RefreshTokenExpiresAtUtc);
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void AccessTokenIsFresh_returns_true_well_before_expiry()
     {
         var now = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
@@ -329,7 +329,7 @@ public class TokenStoreTests : IDisposable
         Assert.True(t.AccessTokenIsFresh(now.AddHours(7),              TimeSpan.FromMinutes(1)));
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void AccessTokenIsFresh_returns_false_inside_skew_window()
     {
         var now = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
@@ -339,7 +339,7 @@ public class TokenStoreTests : IDisposable
                                            TimeSpan.FromHours(1)));
     }
 
-    [Fact]
+    [WindowsOnlyFact("DPAPI token-store tests require Windows")]
     public void RefreshTokenIsExpired_uses_now_against_refresh_expiry()
     {
         var now = new DateTime(2026, 5, 26, 12, 0, 0, DateTimeKind.Utc);
