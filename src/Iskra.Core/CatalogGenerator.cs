@@ -244,8 +244,32 @@ public static class CatalogGenerator
             if (s.TimeoutSeconds != first.TimeoutSeconds)
                 throw new CatalogGeneratorException(
                     $"{productId}: sidecars disagree on timeout_s ({first.TimeoutSeconds} vs {s.TimeoutSeconds})");
+
+            // The memory map decides whether a firmware image's load addresses
+            // are range checked at all. It is taken from one canonical sidecar,
+            // so a product whose releases disagree would silently get whichever
+            // sidecar was walked first -- including one with no map, which
+            // downgrades the whole product to a size-only check. Disagreement is
+            // a data error; fail rather than pick.
+            if (s.FlashOrigin != first.FlashOrigin)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on flash_origin "
+                    + $"({Describe(first.FlashOrigin)} vs {Describe(s.FlashOrigin)}). "
+                    + "Every published release of a product must declare the same "
+                    + "memory map; add the field to the older release's target.json.");
+            if (s.RamOrigin != first.RamOrigin)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on ram_origin "
+                    + $"({Describe(first.RamOrigin)} vs {Describe(s.RamOrigin)})");
+            if (s.RamKb != first.RamKb)
+                throw new CatalogGeneratorException(
+                    $"{productId}: sidecars disagree on ram_kb "
+                    + $"({first.RamKb?.ToString() ?? "absent"} vs {s.RamKb?.ToString() ?? "absent"})");
         }
     }
+
+    private static string Describe(ulong? address) =>
+        address is { } value ? $"0x{value:X8}" : "absent";
 
     internal static string ExtensionFor(FirmwareKind kind) => kind switch
     {

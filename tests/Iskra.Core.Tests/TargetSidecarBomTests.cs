@@ -96,6 +96,54 @@ public class TargetSidecarBomTests
     }
 
     [Fact]
+    public void Releases_that_disagree_about_the_memory_map_are_refused()
+    {
+        // Mid-migration reality: an older release's sidecar predates
+        // flash_origin while the newer one declares it. The product target is
+        // taken from one canonical sidecar, so silently picking either would
+        // decide whether load addresses get range checked at all.
+        var withMap = TargetSidecar.Parse(SidecarJson());
+        var withoutMap = TargetSidecar.Parse(SidecarJson(withFlashOrigin: false)) with
+        {
+            Version = "1.0.3",
+            ElfSha256 = new string('b', 64),
+        };
+
+        var ex = Assert.Throws<CatalogGeneratorException>(() => CatalogGenerator.Build(
+            new[] { withMap, withoutMap },
+            "oleksandrmaslov",
+            new DateTime(2026, 9, 13, 12, 0, 0, DateTimeKind.Utc),
+            revoked: null,
+            distributionRepo: "Energy-for-Ukraine/iskra-firmware"));
+
+        Assert.Contains("flash_origin", ex.Message);
+        Assert.Contains("0x08000000", ex.Message);
+        Assert.Contains("absent", ex.Message);
+    }
+
+    [Fact]
+    public void Releases_that_agree_about_the_memory_map_are_accepted()
+    {
+        var first = TargetSidecar.Parse(SidecarJson());
+        var second = TargetSidecar.Parse(SidecarJson()) with
+        {
+            Version = "1.0.3",
+            ElfSha256 = new string('b', 64),
+        };
+
+        var catalog = CatalogGenerator.Build(
+            new[] { first, second },
+            "oleksandrmaslov",
+            new DateTime(2026, 9, 13, 12, 0, 0, DateTimeKind.Utc),
+            revoked: null,
+            distributionRepo: "Energy-for-Ukraine/iskra-firmware");
+
+        Assert.Equal(0x08000000UL, catalog.Products[0].Target.FlashOrigin);
+        Assert.Equal(2, catalog.Products[0].Releases.Count);
+        CatalogJson.ValidateTrustedArtifactPaths(catalog);
+    }
+
+    [Fact]
     public void A_sidecar_without_flash_origin_produces_a_catalog_no_station_accepts()
     {
         // Pins the failure the generator's own pre-publication check reports,
