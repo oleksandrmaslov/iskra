@@ -5,10 +5,27 @@ All notable changes to Iskra are documented here.
 ## [2.2.3] - 2026-09-13
 
 Engineering fix release for controlled lab evaluation. **Not factory-approved.**
-Supersedes 2.2.2, whose Linux build could not find a connected probe.
+Supersedes 2.2.2, in which no station on any platform could open the probe to
+flash, and a Linux station could not find one.
 
 ### Fixed
 
+- Fixed every flash failing before the probe was opened, on Windows, Linux, and
+  macOS alike. The GDB/MI session sent the endpoint to `-target-select` as a
+  quoted, escaped string, but gdb passes that command's arguments to its CLI
+  verbatim, so it tried to open a name that still contained the quotes and
+  doubled backslashes. Windows rejected it with error 123, and on Linux and
+  macOS the quoted path does not exist. The endpoint is now passed bare, which
+  the endpoint grammar already makes safe because it admits no whitespace,
+  quotes, or control characters. Reproduced against a Black Magic Probe v2.0.0
+  on Windows: the quoted form fails to open, and the bare form connects and runs
+  `swdp_scan`.
+- Fixed a probe that could not be opened being reported as `E_SCAN_NO_TARGET`,
+  whose hint sends the operator to check SWD wiring and board power. gdb's
+  open-failure wording was not recognised, so the scan simply found no targets.
+  It is now `E_PROBE_NOT_FOUND`, or `E_PROBE_BUSY` when Windows reports the port
+  in use, with gdb's message kept as the detail. A missing firmware file, which
+  gdb words like a missing Unix device, is not matched.
 - Fixed Black Magic Probe discovery on Linux, which reported no probe even with
   one connected, so a Linux station could never pass readiness or flash. Every
   entry under `/sys/class/tty` is a symlink with a relative target, and so is

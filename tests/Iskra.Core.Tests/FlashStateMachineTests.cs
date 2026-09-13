@@ -348,6 +348,35 @@ public class FlashStateMachineTests
     }
 
     [Fact]
+    public void ClassifyScan_reports_an_unopenable_probe_endpoint_as_probe_not_found()
+    {
+        // Verbatim from a Windows station whose MI session double-escaped the
+        // COM port: gdb never opened the probe, so there was nothing to scan.
+        var outcome = FlashStateMachine.ClassifyScan(Run(new[]
+        {
+            @"103^error,msg=""could not open file: \""\\\\\\\\.\\\\COM30\"" (error 123): Die Syntax fur den Dateinamen, Verzeichnisnamen oder die Datentragerbezeichnung ist falsch.""",
+            @"GDB/MI error: error,msg=""could not open file: \""\\\\\\\\.\\\\COM30\"" (error 123): Die Syntax fur den Dateinamen, Verzeichnisnamen oder die Datentragerbezeichnung ist falsch.""",
+        }), "PY32Fxxx");
+        Assert.NotNull(outcome);
+        Assert.Equal("E_PROBE_NOT_FOUND", outcome!.ErrorCode);
+    }
+
+    [Fact]
+    public void ClassifyScan_reports_missing_unix_probe_device_as_probe_not_found()
+    {
+        // Linux gdb 16's MI reply for an absent endpoint, as the session records
+        // it. It used to fall through to E_SCAN_NO_TARGET, whose hint blames SWD
+        // wiring and board power.
+        var outcome = FlashStateMachine.ClassifyScan(Run(new[]
+        {
+            @"103^error,msg=""could not open device: No such file or directory.""",
+            @"GDB/MI error: error,msg=""could not open device: No such file or directory.""",
+        }), "PY32Fxxx");
+        Assert.NotNull(outcome);
+        Assert.Equal("E_PROBE_NOT_FOUND", outcome!.ErrorCode);
+    }
+
+    [Fact]
     public void ClassifyScan_fails_on_probe_busy()
     {
         var outcome = FlashStateMachine.ClassifyScan(

@@ -40,18 +40,33 @@ public sealed class GdbMiSessionTests
         Assert.Equal(original, GdbMiSession.DecodeMiCString(encoded.AsSpan()));
     }
 
+    [Theory]
+    [InlineData("COM30", @"-target-select extended-remote \\.\COM30")]
+    [InlineData(@"\\.\COM7", @"-target-select extended-remote \\.\COM7")]
+    [InlineData("/dev/ttyACM0", "-target-select extended-remote /dev/ttyACM0")]
+    public void Target_select_passes_the_endpoint_to_gdb_verbatim(string endpoint, string expected)
+    {
+        // gdb hands -target-select arguments to its CLI without MI unescaping.
+        // Quoting them made gdb open a name containing the quotes and doubled
+        // backslashes, so no probe could be opened on any platform.
+        Assert.Equal(expected, GdbMiSession.BuildTargetSelectCommand(endpoint));
+    }
+
     [Fact]
     public void Probe_lock_is_exclusive_and_released_for_the_same_endpoint()
     {
+        // Ports no lab hardware uses. Discovery gives a real probe's GDB and UART
+        // ports one physical lock identity, so COM30/COM31 collide whenever a
+        // Black Magic Probe is plugged into the machine running the tests.
         var root = Path.Combine(Path.GetTempPath(), "Iskra.Core.Tests", Guid.NewGuid().ToString("N"));
         try
         {
-            var first = GdbMiSession.TryAcquireProbeLock(@"\\.\COM30", root);
+            var first = GdbMiSession.TryAcquireProbeLock(@"\\.\COM250", root);
             Assert.NotNull(first);
             try
             {
-                Assert.Null(GdbMiSession.TryAcquireProbeLock(@"\\.\COM30", root));
-                using var other = GdbMiSession.TryAcquireProbeLock(@"\\.\COM31", root);
+                Assert.Null(GdbMiSession.TryAcquireProbeLock(@"\\.\COM250", root));
+                using var other = GdbMiSession.TryAcquireProbeLock(@"\\.\COM251", root);
                 Assert.NotNull(other);
             }
             finally
@@ -59,7 +74,7 @@ public sealed class GdbMiSessionTests
                 first!.Dispose();
             }
 
-            using var reacquired = GdbMiSession.TryAcquireProbeLock(@"\\.\COM30", root);
+            using var reacquired = GdbMiSession.TryAcquireProbeLock(@"\\.\COM250", root);
             Assert.NotNull(reacquired);
         }
         finally

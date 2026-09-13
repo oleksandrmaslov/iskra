@@ -210,7 +210,7 @@ internal static class GdbMiSession
                 if (scanOk)
                 {
                     scanOk &= (await SendAsync(
-                        $"-target-select extended-remote \"{EscapeMiCString(normalizedEndpoint)}\"",
+                        BuildTargetSelectCommand(normalizedEndpoint),
                         scanCts.Token).ConfigureAwait(false)).Success;
                 }
                 if (scanOk && power == PowerMode.Probe)
@@ -407,6 +407,17 @@ internal static class GdbMiSession
         try { return process.HasExited; }
         catch (InvalidOperationException) { return true; }
     }
+
+    /// <summary>
+    /// gdb hands <c>-target-select</c> arguments to its CLI <c>target</c> command
+    /// verbatim, without MI c-string unescaping, so a quoted and escaped endpoint
+    /// reaches the serial layer with its quotes and doubled backslashes intact
+    /// and cannot be opened. The endpoint is therefore passed bare, which is safe
+    /// only because <see cref="GdbCommandBuilder.NormalizeProbeEndpoint"/> admits
+    /// no whitespace, quotes, or control characters.
+    /// </summary>
+    internal static string BuildTargetSelectCommand(string endpoint) =>
+        $"-target-select extended-remote {GdbCommandBuilder.NormalizeProbeEndpoint(endpoint)}";
 
     internal static string EscapeMiCString(string value)
     {

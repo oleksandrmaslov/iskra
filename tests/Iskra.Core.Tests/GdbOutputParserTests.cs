@@ -83,6 +83,38 @@ public class GdbOutputParserTests
         Assert.Contains(ev, e => e.Kind == GdbEventKind.RemoteError);
     }
 
+    [Theory]
+    [InlineData(@"103^error,msg=""could not open file: \""\\\\.\\COM99\"" (error 2): The system cannot find the file specified.""")]
+    [InlineData(@"GDB/MI error: error,msg=""could not open file: \""\\\\.\\COM30\"" (error 123): The filename, directory name, or volume label syntax is incorrect.""")]
+    [InlineData("could not open device: No such file or directory.")]
+    [InlineData(@"104^error,msg=""could not open device: Permission denied.""")]
+    [InlineData("/dev/ttyACM0: No such file or directory.")]
+    [InlineData("\"/dev/ttyACM0\": No such file or directory.")]
+    [InlineData("/dev/cu.usbmodem7BB180B41: No such file or directory.")]
+    [InlineData("/dev/ttyACM0: Permission denied.")]
+    public void Detects_probe_endpoint_that_cannot_be_opened(string line)
+    {
+        var ev = GdbOutputParser.Parse(Lines(line));
+        Assert.Contains(ev, e => e.Kind == GdbEventKind.RemoteError);
+    }
+
+    [Fact]
+    public void Windows_port_held_by_another_process_is_busy_in_any_language()
+    {
+        // Error 5 is ERROR_ACCESS_DENIED; the message after it is localized.
+        var ev = GdbOutputParser.Parse(Lines(
+            @"103^error,msg=""could not open file: \""\\\\.\\COM30\"" (error 5): Zugriff verweigert"""));
+        Assert.Contains(ev, e => e.Kind == GdbEventKind.ProbeBusy);
+    }
+
+    [Fact]
+    public void Missing_firmware_file_is_not_a_probe_error()
+    {
+        // gdb words a missing ELF the same way; only a /dev/ endpoint is the probe.
+        var ev = GdbOutputParser.Parse(Lines("/home/operator/dev/fw.elf: No such file or directory."));
+        Assert.DoesNotContain(ev, e => e.Kind == GdbEventKind.RemoteError);
+    }
+
     [Fact]
     public void Detects_probe_busy()
     {
