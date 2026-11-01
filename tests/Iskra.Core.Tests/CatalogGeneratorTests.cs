@@ -448,6 +448,149 @@ public class CatalogGeneratorTests
         Assert.Equal(28, s.TimeoutSeconds);
     }
 
+    [Fact]
+    public void Newest_sidecar_display_name_wins_whatever_the_read_order()
+    {
+        var older = Sidecar(version: "1.0.0", displayName: "Old name");
+        var newer = Sidecar(version: "1.1.0", sha: Sha2, displayName: "New name");
+
+        foreach (var order in new[] { new[] { older, newer }, new[] { newer, older } })
+            Assert.Equal("New name", CatalogGenerator.Build(order, "owner", FixedNow).Products[0].DisplayName);
+    }
+
+    [Fact]
+    public void Name_added_by_a_later_release_applies_over_an_unnamed_older_release()
+    {
+        var older = Sidecar(version: "1.0.0");
+        var newer = Sidecar(version: "1.1.0", sha: Sha2, displayName: "New name");
+
+        foreach (var order in new[] { new[] { older, newer }, new[] { newer, older } })
+            Assert.Equal("New name", CatalogGenerator.Build(order, "owner", FixedNow).Products[0].DisplayName);
+    }
+
+    [Fact]
+    public void Older_sidecar_name_survives_a_newer_release_that_omits_it()
+    {
+        var older = Sidecar(version: "1.0.0", displayName: "Old name");
+        var newer = Sidecar(version: "1.1.0", sha: Sha2);
+
+        foreach (var order in new[] { new[] { older, newer }, new[] { newer, older } })
+            Assert.Equal("Old name", CatalogGenerator.Build(order, "owner", FixedNow).Products[0].DisplayName);
+    }
+
+    [Fact]
+    public void Display_names_win_over_sidecars_and_the_title_case_fallback()
+    {
+        var c = CatalogGenerator.Build(
+            new[]
+            {
+                Sidecar(displayName: "From sidecar"),
+                Sidecar(productId: "venovisor"),
+                Sidecar(productId: "ampel"),
+            },
+            "owner", FixedNow,
+            displayNames: new Dictionary<string, string>
+            {
+                ["ci-clop"] = "E4U Ci-Clop",
+                ["venovisor"] = "E4U Venovisor",
+            });
+
+        Assert.Equal("E4U Ci-Clop", c.Products.Single(p => p.ProductId == "ci-clop").DisplayName);
+        Assert.Equal("E4U Venovisor", c.Products.Single(p => p.ProductId == "venovisor").DisplayName);
+        Assert.Equal("Ampel", c.Products.Single(p => p.ProductId == "ampel").DisplayName);
+    }
+
+    [Fact]
+    public void Display_names_leave_product_ids_and_releases_alone()
+    {
+        var plain = CatalogGenerator.Build(new[] { Sidecar() }, "owner", FixedNow);
+        var named = CatalogGenerator.Build(
+            new[] { Sidecar() }, "owner", FixedNow,
+            displayNames: new Dictionary<string, string> { ["ci-clop"] = "E4U Ci-Clop" });
+
+        Assert.Equal(plain.Products[0].ProductId, named.Products[0].ProductId);
+        Assert.Equal(plain.Products[0].DefaultRelease, named.Products[0].DefaultRelease);
+        Assert.Equal(plain.Products[0].Releases[0].ElfFilename, named.Products[0].Releases[0].ElfFilename);
+        Assert.Equal(plain.Products[0].Releases[0].ElfSha256, named.Products[0].Releases[0].ElfSha256);
+        Assert.Equal(plain.Products[0].Releases[0].ElfSource, named.Products[0].Releases[0].ElfSource);
+    }
+
+    [Fact]
+    public void Display_name_keys_match_product_ids_case_insensitively()
+    {
+        var c = CatalogGenerator.Build(
+            new[] { Sidecar() }, "owner", FixedNow,
+            displayNames: new Dictionary<string, string> { ["CI-CLOP"] = "E4U Ci-Clop" });
+
+        Assert.Equal("E4U Ci-Clop", c.Products[0].DisplayName);
+    }
+
+    [Fact]
+    public void Display_name_for_a_product_that_was_not_read_is_an_error()
+    {
+        var ex = Assert.Throws<CatalogGeneratorException>(() => CatalogGenerator.Build(
+            new[] { Sidecar() }, "owner", FixedNow,
+            displayNames: new Dictionary<string, string> { ["ampel"] = "E4U Ampel" }));
+
+        Assert.Contains("ampel", ex.Message);
+    }
+
+    [Fact]
+    public void Read_display_names_returns_null_when_no_path_is_given()
+    {
+        Assert.Null(CatalogGenerator.ReadDisplayNamesFile(null));
+        Assert.Null(CatalogGenerator.ReadDisplayNamesFile(""));
+    }
+
+    [Fact]
+    public void Read_display_names_refuses_a_named_file_that_is_missing()
+    {
+        Assert.Throws<CatalogGeneratorException>(() =>
+            CatalogGenerator.ReadDisplayNamesFile(
+                Path.Combine(Path.GetTempPath(), $"no-such-{Guid.NewGuid():N}.json")));
+    }
+
+    [Fact]
+    public void Read_display_names_parses_a_valid_file()
+    {
+        var names = ReadDisplayNames("""{ "ampel": "E4U Ampel", "ci-clop": "E4U Ci-Clop" }""");
+
+        Assert.Equal(2, names!.Count);
+        Assert.Equal("E4U Ampel", names["AMPEL"]);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{")]
+    [InlineData("""{ "ampel": 1 }""")]
+    [InlineData("""{ "ampel": null }""")]
+    [InlineData("""{ "ampel": "" }""")]
+    [InlineData("""{ "ampel": "   " }""")]
+    [InlineData("""{ "ampel": " padded" }""")]
+    [InlineData("""{ "ampel": "line\nbreak" }""")]
+    [InlineData("""{ "ampel": "one", "AMPEL": "two" }""")]
+    public void Read_display_names_refuses_a_bad_file(string json)
+    {
+        Assert.Throws<CatalogGeneratorException>(() => ReadDisplayNames(json));
+    }
+
+    [Fact]
+    public void Read_display_names_enforces_the_length_limit()
+    {
+        var longest = new string('x', CatalogGenerator.MaxDisplayNameLength);
+        Assert.Equal(longest, ReadDisplayNames($$"""{ "ampel": "{{longest}}" }""")!["ampel"]);
+        Assert.Throws<CatalogGeneratorException>(() =>
+            ReadDisplayNames($$"""{ "ampel": "{{longest}}x" }"""));
+    }
+
+    private static IReadOnlyDictionary<string, string>? ReadDisplayNames(string json)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"iskra-names-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, json);
+        try { return CatalogGenerator.ReadDisplayNamesFile(path); }
+        finally { File.Delete(path); }
+    }
+
     private static string ToJson(string productId, string version, string partNumber, string bmpMatch, int flashKb, string sha) =>
         $$"""
         {

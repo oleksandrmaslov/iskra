@@ -2,6 +2,29 @@
 
 All notable changes to Iskra are documented here.
 
+## [2.2.4] - 2026-11-01
+
+Engineering release for controlled lab evaluation. **Not factory-approved.**
+Changes how the catalog is generated. Nothing in the flashing path, the station
+UI, or the catalog format changed since 2.2.3.
+
+### Added
+
+- `Iskra.Cli --generate-catalog --display-names <file>` reads a JSON object of
+  product_id to the name operators see, and it wins over any `target.json`. A
+  published `target.json` is immutable, so renaming a product used to need a
+  firmware release. Stations pick the new name up from the signed catalog.
+- A display name for a product the run did not read now fails generation. A token
+  that loses access to a firmware repository used to sign a catalog without that
+  product and report success.
+
+### Fixed
+
+- `display_name` came from whichever `target.json` was read first, in no particular
+  order. It now comes from the newest release that sets one.
+- Merged the legacy ci-clop flash metadata correction from `main` (`b33552d`). The
+  release line was missing it, and `main` was missing every fix since 2.2.1.
+
 ## [2.2.3] - 2026-09-13
 
 Engineering fix release for controlled lab evaluation. **Not factory-approved.**

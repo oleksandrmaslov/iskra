@@ -692,6 +692,20 @@ static int GenerateCatalog(string[] args)
         ? args[distIdx + 1]
         : null;
 
+    // Operator-facing names, kept outside the sidecars because those are
+    // immutable once published.
+    string? displayNamesPath = null;
+    int namesIdx = Array.IndexOf(args, "--display-names");
+    if (namesIdx >= 0)
+    {
+        if (namesIdx + 1 >= args.Length)
+        {
+            Console.Error.WriteLine("--display-names requires a path");
+            return 2;
+        }
+        displayNamesPath = args[namesIdx + 1];
+    }
+
     var targetsDir = args[from + 1];
     var outPath    = args[outIdx + 1];
 
@@ -704,8 +718,12 @@ static int GenerateCatalog(string[] args)
     try { revoked = CatalogGenerator.ReadRevokedFile(revokedPath); }
     catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
 
+    IReadOnlyDictionary<string, string>? displayNames;
+    try { displayNames = CatalogGenerator.ReadDisplayNamesFile(displayNamesPath); }
+    catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
+
     Catalog catalog;
-    try { catalog = CatalogGenerator.Build(sidecars, owner, DateTime.UtcNow, revoked, distRepo); }
+    try { catalog = CatalogGenerator.Build(sidecars, owner, DateTime.UtcNow, revoked, distRepo, displayNames); }
     catch (ArgumentException ex)         { Console.Error.WriteLine(ex.Message); return 2; }
     catch (CatalogGeneratorException ex) { Console.Error.WriteLine(ex.Message); return 2; }
     catch (CatalogParseException ex)     { Console.Error.WriteLine($"generated catalog failed validation: {ex.Message}"); return 2; }
@@ -740,6 +758,8 @@ static int GenerateCatalog(string[] args)
         Console.WriteLine($"  · {revoked.Count} revoked release(s)");
     if (distRepo is not null)
         Console.WriteLine($"  · firmware served from {distRepo} (source repos not referenced)");
+    if (displayNames is not null)
+        Console.WriteLine($"  · display names from {displayNamesPath}");
     foreach (var p in catalog.Products)
         Console.WriteLine($"  · {p.ProductId} → default v{p.DefaultRelease} ({p.Releases.Count} release(s))");
     return 0;

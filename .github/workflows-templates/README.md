@@ -83,6 +83,20 @@ Approving an operator is then adding their GitHub account as a **Read**
 collaborator on `iskra-firmware`; revoking is removing them. See
 [`docs/FIRMWARE_ACCESS.md`](../../docs/FIRMWARE_ACCESS.md).
 
+## Product display names
+
+To rename a product without a firmware release, keep a `display-names.json` in
+`iskra-catalog`:
+
+```json
+{ "ampel": "E4U Ampel" }
+```
+
+`regenerate-catalog.yml` passes it as `--display-names`, and it wins over any
+`target.json`. Stations pick the name up with their next catalog refresh, with no
+app update. `product_id` stays as it is: logs, revocations, batch locks, file names
+and release tags all depend on it.
+
 ## Catalog smoke test
 
 1. Run `workflow_dispatch` in `iskra-catalog`.
