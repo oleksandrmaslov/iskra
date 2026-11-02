@@ -15,7 +15,12 @@ public enum GdbEventKind
     Warning,
 }
 
-public sealed record GdbEvent(GdbEventKind Kind, string Detail, int LineNumber);
+public sealed record GdbEvent(
+    GdbEventKind Kind,
+    string Detail,
+    int LineNumber,
+    ulong? Address = null,
+    ulong? Length = null);
 
 /// <summary>
 /// Parses Black Magic Probe gdb stdout/stderr into typed events. Pure (no IO);
@@ -28,13 +33,29 @@ public static class GdbOutputParser
         new(@"^\s*\d+\s+(?<name>.+?)\s*$", RegexOptions.Compiled);
 
     private static readonly Regex LoadingSectionRegex =
-        new(@"^Loading section\s+(?<sec>\S+?)\s*,", RegexOptions.Compiled);
+        new(
+            @"^Loading section\s+(?<sec>\S+?)\s*,\s*size\s+0x(?<size>[0-9a-f]+)\s+lma\s+0x(?<lma>[0-9a-f]+)\s*$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex SectionMatchedRegex =
         new(@"Section\s+(?<sec>\S+?)\s*,.*?:\s*matched\.", RegexOptions.Compiled);
 
     private static readonly Regex SectionMismatchedRegex =
         new(@"Section\s+(?<sec>\S+?)\s*,.*?MIS-MATCHED", RegexOptions.Compiled);
+
+    // gdb's wording when it cannot open the probe endpoint: Windows gdb 15 says
+    // 'could not open file: "\\.\COM30" (error 2): ...' with a localized system
+    // message, Linux gdb 16 says 'could not open device: No such file or
+    // directory.', and older gdb names the path, '/dev/ttyACM0: No such file or
+    // directory.'. That last form must start at /dev/ so a missing firmware
+    // file, worded the same way, is not taken for the probe.
+    private static readonly Regex ProbeEndpointOpenFailedRegex =
+        new(@"could not open (?:file|device):|(?<![\w/.-])/dev/[^\s:""]+""?: (?:No such file or directory|Permission denied)", RegexOptions.Compiled);
+
+    // Windows error 5 (ERROR_ACCESS_DENIED) on open means another process holds
+    // the COM port. The system message is localized; the error number is not.
+    private static readonly Regex ProbeEndpointInUseRegex =
+        new(@"could not open file:.*\(error 5\)", RegexOptions.Compiled);
 
     public static IReadOnlyList<GdbEvent> Parse(IEnumerable<GdbLine> lines)
     {
@@ -94,7 +115,8 @@ public static class GdbOutputParser
 
             if (t.Contains("Resource busy", StringComparison.OrdinalIgnoreCase) ||
                 t.Contains("Access is denied", StringComparison.OrdinalIgnoreCase) ||
-                t.Contains("Device or resource busy", StringComparison.OrdinalIgnoreCase))
+                t.Contains("Device or resource busy", StringComparison.OrdinalIgnoreCase) ||
+                ProbeEndpointInUseRegex.IsMatch(t))
             {
                 events.Add(new GdbEvent(GdbEventKind.ProbeBusy, t.Trim(), idx));
                 continue;
@@ -102,6 +124,7 @@ public static class GdbOutputParser
 
             if (t.Contains("Remote communication error", StringComparison.Ordinal) ||
                 t.Contains("cannot find the file specified", StringComparison.OrdinalIgnoreCase) ||
+                ProbeEndpointOpenFailedRegex.IsMatch(t) ||
                 t.Contains("Couldn't establish connection", StringComparison.Ordinal) ||
                 t.Contains("Target disconnected", StringComparison.OrdinalIgnoreCase))
             {
@@ -112,7 +135,24 @@ public static class GdbOutputParser
             var lm = LoadingSectionRegex.Match(t);
             if (lm.Success)
             {
-                events.Add(new GdbEvent(GdbEventKind.LoadingSection, lm.Groups["sec"].Value, idx));
+                if (ulong.TryParse(
+                        lm.Groups["size"].Value,
+                        System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var size)
+                    && ulong.TryParse(
+                        lm.Groups["lma"].Value,
+                        System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var address))
+                {
+                    events.Add(new GdbEvent(
+                        GdbEventKind.LoadingSection,
+                        lm.Groups["sec"].Value,
+                        idx,
+                        address,
+                        size));
+                }
                 continue;
             }
 

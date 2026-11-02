@@ -222,6 +222,7 @@ public sealed partial class MainWindowViewModel
 
             default:
                 _settings = result.Settings!;
+                _cloudLogScheduler?.NotifySettingsChanged();
                 IsSettingsDirty = false;
                 SetSettingsStatus(Text.SettingsSaved, StatusOkBrush);
                 OnSettingsPersisted();
@@ -272,6 +273,7 @@ public sealed partial class MainWindowViewModel
         SettingsField.BmpFrequencyHz => Text.SettingsSwdFrequency,
         SettingsField.TimeoutSeconds => Text.SettingsTimeout,
         SettingsField.LogShipIntervalMinutes => Text.SettingsCloudInterval,
+        SettingsField.DbPath => Text.SettingsLogFile,
         _ => string.Empty,
     };
 

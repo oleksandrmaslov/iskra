@@ -7,28 +7,28 @@ namespace Iskra.Desktop;
 /// <summary>
 /// Cross-platform remote-firmware adapter for the Avalonia frontend.
 ///
-/// Windows reuses the DPAPI-backed <see cref="TokenStore"/>, which is the same
-/// credential store the shipping WPF station uses, so a station can be switched
-/// between the two frontends without re-authenticating. Linux and macOS have no
-/// encrypted <see cref="ITokenStore"/> implementation yet, so this fails closed
-/// instead of falling back to a plaintext token file. Local (non-remote)
-/// releases never reach this adapter, so sideload and file-backed catalogs keep
-/// working on every platform.
+/// Windows reuses the WPF/CLI DPAPI store, Linux uses Secret Service through
+/// <c>secret-tool</c>, and macOS uses the login Keychain through
+/// <c>/usr/bin/security</c>. <see cref="PlatformTokenStoreFactory"/> returns
+/// <c>null</c> when the encrypted OS store is unavailable, so this still fails
+/// closed instead of ever falling back to a plaintext token file. Local
+/// releases never reach this adapter.
 /// </summary>
 internal sealed class DesktopRemoteFirmwareProvider : IRemoteFirmwareProvider
 {
     /// <summary>
-    /// Cheap, read-only probe of the station credential state so the Flash tab
-    /// can hide the sign-in hint when a remote release is already fetchable. It
-    /// never decrypts or refreshes; a stale or rejected token still fails
-    /// closed inside the workflow with E_AUTH_EXPIRED.
+    /// Read-only classification of the stored credential state. The shared auth
+    /// workflow loads the native-store value but never refreshes it; a stale or
+    /// rejected token still fails closed inside the workflow with
+    /// E_AUTH_EXPIRED.
     /// </summary>
     public static bool CanFetchRemoteFirmware()
     {
-        if (!OperatingSystem.IsWindows()) return false;
         try
         {
-            return new TokenStore().Exists();
+            var store = PlatformTokenStoreFactory.Create();
+            return store is not null
+                && new AuthWorkflow(store).Evaluate().CanFetchRemoteFirmware;
         }
         catch
         {
@@ -44,17 +44,16 @@ internal sealed class DesktopRemoteFirmwareProvider : IRemoteFirmwareProvider
         if (release.ElfSource is null)
             throw new InvalidOperationException("release.ElfSource is null but IsRemote is true");
 
-        if (!OperatingSystem.IsWindows())
+        var store = PlatformTokenStoreFactory.Create();
+        if (store is null)
         {
             throw new PlatformNotSupportedException(
-                "remote firmware download needs an encrypted token store; "
-                + "only Windows DPAPI is implemented. Use a local or sideload catalog "
-                + "on this platform.");
+                "remote firmware download needs the encrypted OS credential store; "
+                + "install secret-tool on Linux or unlock Keychain on macOS");
         }
 
         using var http = new HttpClient();
         var flow = new GitHubDeviceFlow(http, GitHubAppConfig.ClientId);
-        var store = new TokenStore();
         var provider = new AccessTokenProvider(store, flow);
         var api = new GitHubReleaseAssetClient(http);
         var cache = new FirmwareCache(api, provider.GetFreshAccessTokenAsync);

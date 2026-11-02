@@ -11,6 +11,38 @@
     Background="#FFF4F6F9"
     mc:Ignorable="d">
 
+  <Window.Styles>
+    <!-- Same on-dark button treatment as the MainWindow header bar. Without an
+         explicit style, Fluent's light-theme button fill is a translucent white
+         that composites down over the dark user-code panel and leaves
+         near-black label text on dark navy (measured 1.21:1). Fluent applies
+         its hover and pressed brushes to the template part, so every state is
+         pinned there. -->
+    <Style Selector="Button.on-dark">
+      <Setter Property="Foreground" Value="#FFF2F5F9" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="Button.on-dark /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF3C4350" />
+      <Setter Property="BorderBrush" Value="#FF5A6472" />
+      <Setter Property="TextElement.Foreground" Value="#FFF2F5F9" />
+    </Style>
+    <Style Selector="Button.on-dark:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF4C5563" />
+      <Setter Property="BorderBrush" Value="#FF76808F" />
+      <Setter Property="TextElement.Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.on-dark:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF2A303A" />
+      <Setter Property="TextElement.Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.on-dark:disabled /template/ ContentPresenter">
+      <Setter Property="Background" Value="#FF33383F" />
+      <Setter Property="TextElement.Foreground" Value="#FF8A929C" />
+    </Style>
+  </Window.Styles>
+
   <StackPanel Margin="28,24" Spacing="14">
     <TextBlock x:Name="TitleText"
                FontSize="21" FontWeight="SemiBold" Foreground="#FF162033"
@@ -37,7 +69,7 @@
                              FontSize="38" FontWeight="Bold" Foreground="White"
                              FontFamily="Cascadia Mono,Consolas,DejaVu Sans Mono,monospace"
                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <Button Grid.Column="1" x:Name="CopyCodeButton" Padding="14,6"
+        <Button Grid.Column="1" x:Name="CopyCodeButton" Classes="on-dark" Padding="14,6"
                 VerticalAlignment="Center" Click="CopyCode_Click" />
       </Grid>
     </Border>

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.InteropServices;
 using Iskra.Core;
 
 namespace Iskra.Core.Tests;
@@ -24,6 +25,27 @@ public class CatalogTrustTests : IDisposable
     }
 
     [Fact]
+    public void Runtime_environment_cannot_enable_a_feature_compiled_out_of_release()
+    {
+        if (CatalogTrust.UnsignedLabFeatureCompiled)
+            return;
+
+        var previous = Environment.GetEnvironmentVariable(
+            CatalogTrust.UnsignedLabModeEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                CatalogTrust.UnsignedLabModeEnvironmentVariable, "1");
+            Assert.False(CatalogTrust.IsUnsignedLabModeEnabled());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                CatalogTrust.UnsignedLabModeEnvironmentVariable, previous);
+        }
+    }
+
+    [Fact]
     public void Verified_when_signature_matches_key()
     {
         var kp = CatalogSignature.GenerateKeypair();
@@ -33,6 +55,95 @@ public class CatalogTrustTests : IDisposable
 
         var result = CatalogTrust.VerifyCatalogFile(_catalogPath, requireSigned: false, publicKey: kp.PublicKey);
         Assert.Equal(CatalogTrustResult.Verified, result);
+    }
+
+    [Fact]
+    public void ReadAndVerify_returns_the_exact_buffer_covered_by_the_signature()
+    {
+        var kp = CatalogSignature.GenerateKeypair();
+        var verifiedBytes = File.ReadAllBytes(_catalogPath);
+        var sig = CatalogSignature.Sign(verifiedBytes, kp.PrivateKey);
+        File.WriteAllText(_sigPath, Convert.ToBase64String(sig));
+
+        var result = CatalogTrust.ReadAndVerifyCatalogFile(
+            _catalogPath,
+            requireSigned: true,
+            publicKey: kp.PublicKey);
+        File.WriteAllText(_catalogPath, "replacement");
+
+        Assert.Equal(CatalogTrustResult.Verified, result.TrustResult);
+        Assert.True(result.CatalogBytes.HasValue);
+        Assert.Equal(verifiedBytes, result.CatalogBytes.Value.ToArray());
+    }
+
+    [Fact]
+    public void Verification_snapshot_cannot_be_mutated_through_readonly_memory()
+    {
+        var kp = CatalogSignature.GenerateKeypair();
+        var verifiedBytes = File.ReadAllBytes(_catalogPath);
+        File.WriteAllText(
+            _sigPath,
+            Convert.ToBase64String(CatalogSignature.Sign(verifiedBytes, kp.PrivateKey)));
+        var result = CatalogTrust.ReadAndVerifyCatalogFile(
+            _catalogPath,
+            requireSigned: true,
+            publicKey: kp.PublicKey);
+
+        var exposedCopy = result.CatalogBytes!.Value;
+        Assert.True(MemoryMarshal.TryGetArray(exposedCopy, out var segment));
+        segment.Array![segment.Offset] ^= 0xFF;
+
+        Assert.Equal(verifiedBytes, result.CatalogBytes!.Value.ToArray());
+    }
+
+    [Fact]
+    public void Public_verification_api_cannot_substitute_an_attacker_key()
+    {
+        var publicOverloads = typeof(CatalogTrust)
+            .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(method => method.Name is nameof(CatalogTrust.VerifyCatalogFile)
+                or nameof(CatalogTrust.ReadAndVerifyCatalogFile))
+            .ToArray();
+
+        Assert.Equal(2, publicOverloads.Length);
+        Assert.All(publicOverloads, method => Assert.Equal(2, method.GetParameters().Length));
+    }
+
+    [Fact]
+    public void Catalog_source_allowlist_is_not_backed_by_a_mutable_array()
+    {
+        Assert.False(CatalogTrust.AllowedCatalogSources is (string Owner, string Repo)[]);
+        var list = Assert.IsAssignableFrom<IList<(string Owner, string Repo)>>(
+            CatalogTrust.AllowedCatalogSources);
+        Assert.True(list.IsReadOnly);
+        Assert.Throws<NotSupportedException>(() =>
+            list[0] = ("attacker", "catalog"));
+        Assert.True(CatalogTrust.IsAllowedCatalogSource("oleksandrmaslov", "iskra-catalog"));
+    }
+
+    [Fact]
+    public void Production_remote_catalog_constructor_has_no_key_or_policy_override()
+    {
+        var constructors = typeof(RemoteCatalogClient).GetConstructors();
+        var constructor = Assert.Single(constructors);
+        var parameter = Assert.Single(constructor.GetParameters());
+        Assert.Equal(typeof(HttpClient), parameter.ParameterType);
+    }
+
+    [Fact]
+    public void Raw_physical_flash_driver_is_not_exported_as_public_api()
+    {
+        Assert.False(typeof(GdbProcess).IsPublic);
+        Assert.False(typeof(FlashStateMachine).IsPublic);
+    }
+
+    [Fact]
+    public void Shared_catalog_serializer_options_are_not_publicly_mutable()
+    {
+        var property = typeof(CatalogJson).GetProperty(
+            "DefaultOptions",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        Assert.Null(property);
     }
 
     [Fact]
@@ -104,6 +215,32 @@ public class CatalogTrustTests : IDisposable
     }
 
     [Fact]
+    public void Catalog_larger_than_the_strict_limit_is_not_loaded()
+    {
+        File.WriteAllBytes(_catalogPath, new byte[CatalogJson.MaxCatalogBytes + 1]);
+
+        var result = CatalogTrust.ReadAndVerifyCatalogFile(
+            _catalogPath,
+            requireSigned: false);
+
+        Assert.Equal(CatalogTrustResult.IoError, result.TrustResult);
+        Assert.False(result.CatalogBytes.HasValue);
+    }
+
+    [Fact]
+    public void Signature_sidecar_larger_than_the_strict_limit_is_not_loaded()
+    {
+        File.WriteAllBytes(_sigPath, new byte[CatalogTrust.MaxSignatureFileBytes + 1]);
+
+        var result = CatalogTrust.ReadAndVerifyCatalogFile(
+            _catalogPath,
+            requireSigned: true);
+
+        Assert.Equal(CatalogTrustResult.IoError, result.TrustResult);
+        Assert.True(result.CatalogBytes.HasValue);
+    }
+
+    [Fact]
     public void Embedded_dev_key_verifies_the_signed_example_catalog()
     {
         // Skip if the example catalog or its signature isn't present in the test
@@ -119,6 +256,13 @@ public class CatalogTrustTests : IDisposable
         Assert.NotNull(catalogPath);
         Assert.True(File.Exists(catalogPath + ".sig"),
             $"expected sibling .sig for {catalogPath}");
+
+        // A CRLF rewrite of the signed bytes is the one failure mode that shows
+        // up only on Windows checkouts, so name it before asserting the vaguer
+        // BadSignature. .gitattributes marks these paths -text to prevent it.
+        Assert.DoesNotContain(
+            (byte)'\r',
+            File.ReadAllBytes(catalogPath!));
 
         var result = CatalogTrust.VerifyCatalogFile(catalogPath!, requireSigned: true);
         Assert.Equal(CatalogTrustResult.Verified, result);

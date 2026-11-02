@@ -130,7 +130,7 @@ public class FirmwareCacheTests : IDisposable
     {
         var (bytes, sha) = SyntheticElf("hello-world-elf-payload");
         var (cache, h, calls) = NewCache(
-            JsonResp(ReleaseJson(Src.Asset, "https://api/asset/1")),
+            JsonResp(ReleaseJson(Src.Asset, "https://api.github.com/repos/o/r/releases/assets/1")),
             BinaryResp(bytes));
 
         var localPath = await cache.GetOrDownloadAsync(Src, sha);
@@ -162,7 +162,7 @@ public class FirmwareCacheTests : IDisposable
     {
         var (newBytes, newSha) = SyntheticElf("new-version");
         var (cache, h, _) = NewCache(
-            JsonResp(ReleaseJson(Src.Asset, "https://api/asset/1")),
+            JsonResp(ReleaseJson(Src.Asset, "https://api.github.com/repos/o/r/releases/assets/1")),
             BinaryResp(newBytes));
 
         var dest = cache.PathFor(Src);
@@ -181,7 +181,7 @@ public class FirmwareCacheTests : IDisposable
         var (bytes, _) = SyntheticElf("garbage");
         var wrongExpected = new string('0', 63) + "1";
         var (cache, _, _) = NewCache(
-            JsonResp(ReleaseJson(Src.Asset, "https://api/asset/1")),
+            JsonResp(ReleaseJson(Src.Asset, "https://api.github.com/repos/o/r/releases/assets/1")),
             BinaryResp(bytes));
 
         var ex = await Assert.ThrowsAsync<FirmwareCacheException>(() =>
@@ -200,7 +200,7 @@ public class FirmwareCacheTests : IDisposable
         var (downloadedBytes, _) = SyntheticElf("downloaded-with-wrong-hash");
         var (_, expectedSha) = SyntheticElf("the-expected-replacement");
         var (cache, _, _) = NewCache(
-            JsonResp(ReleaseJson(Src.Asset, "https://api/asset/1")),
+            JsonResp(ReleaseJson(Src.Asset, "https://api.github.com/repos/o/r/releases/assets/1")),
             BinaryResp(downloadedBytes));
         var dest = cache.PathFor(Src);
         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -218,7 +218,7 @@ public class FirmwareCacheTests : IDisposable
     {
         var (bytes, sha) = SyntheticElf("verified-replacement");
         var (cache, _, _) = NewCache(
-            JsonResp(ReleaseJson(Src.Asset, "https://api/asset/1")),
+            JsonResp(ReleaseJson(Src.Asset, "https://api.github.com/repos/o/r/releases/assets/1")),
             BinaryResp(bytes));
         var dest = cache.PathFor(Src);
         var legacyTemp = dest + ".tmp";
@@ -288,7 +288,7 @@ public class FirmwareCacheTests : IDisposable
         var (newBytes, newSha)   = SyntheticElf("replacement");
 
         var (cache, h, _) = NewCache(
-            JsonResp(ReleaseJson(Src.Asset, "https://api/asset/1")),
+            JsonResp(ReleaseJson(Src.Asset, "https://api.github.com/repos/o/r/releases/assets/1")),
             BinaryResp(newBytes));
         var dest = cache.PathFor(Src);
         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);

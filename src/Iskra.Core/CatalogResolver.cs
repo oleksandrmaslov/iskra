@@ -24,12 +24,29 @@ public sealed record ResolveResult(
 /// (by <c>--firmware-version</c> or the product's default), then fills in any
 /// missing flags — <c>--target</c>, <c>--flash-kb</c>, <c>--firmware-version</c>,
 /// <c>--firmware-sha256</c>, <c>--firmware-kind</c>, <c>--elf</c>, and optional
-/// target overrides — from the catalog entry. Explicit CLI flags always win
-/// (dev override).
+/// target overrides — from the catalog entry. Catalog-controlled flags are
+/// rejected by default when supplied explicitly; the caller must opt into the
+/// lab/manual override path to allow them.
 /// </summary>
 public static class CatalogResolver
 {
-    public static ResolveResult Resolve(string[] args)
+    private static readonly HashSet<string> CatalogControlledFlags = new(StringComparer.Ordinal)
+    {
+        "--target",
+        "--flash-kb",
+        "--firmware-sha256",
+        "--firmware-kind",
+        "--elf",
+        "--freq",
+        "--power",
+        "--connect-reset",
+        "--timeout",
+        "--flash-origin",
+        "--ram-origin",
+        "--ram-kb",
+    };
+
+    public static ResolveResult Resolve(string[] args, bool allowCatalogOverrides = false)
     {
         var catalogPath = FindValue(args, "--catalog");
         var sideloadDir = FindValue(args, "--sideload-dir");
@@ -55,14 +72,29 @@ public static class CatalogResolver
             resolveArgs = StripFlag(args, "--sideload-dir").ToArray();
         }
 
-        return ResolveWithCatalog(resolveArgs, catalog, catalogDir);
+        return ResolveWithCatalog(resolveArgs, catalog, catalogDir, allowCatalogOverrides);
     }
 
     /// <summary>
     /// Pure resolution against an in-memory catalog. No IO.
     /// </summary>
-    public static ResolveResult ResolveWithCatalog(string[] args, Catalog catalog, string catalogDir)
+    public static ResolveResult ResolveWithCatalog(
+        string[] args,
+        Catalog catalog,
+        string catalogDir,
+        bool allowCatalogOverrides = false)
     {
+        if (!allowCatalogOverrides)
+        {
+            var forbiddenFlag = args.FirstOrDefault(CatalogControlledFlags.Contains);
+            if (forbiddenFlag is not null)
+            {
+                return ResolveResult.Failure(
+                    $"catalog-controlled flag '{forbiddenFlag}' cannot be supplied in production mode; " +
+                    "use the explicit lab/manual gate to override catalog values");
+            }
+        }
+
         var productId = FindValue(args, "--product");
         if (productId is null)
             return ResolveResult.Failure("catalog resolution requires --product <id>");

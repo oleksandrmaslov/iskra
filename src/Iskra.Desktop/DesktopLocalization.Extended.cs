@@ -83,7 +83,7 @@ public static partial class DesktopLocalization
 
         // --- GitHub auth ---
         (DesktopTextKey.AuthSignIn, "Увійти в GitHub"),
-        (DesktopTextKey.AuthUnsupportedPlatform, "Вхід GitHub доступний лише у Windows: на інших системах немає зашифрованого сховища токенів."),
+        (DesktopTextKey.AuthUnsupportedPlatform, "Захищене сховище облікових даних недоступне. У Linux установіть secret-tool і розблокуйте сховище ключів; у macOS розблокуйте Keychain."),
         (DesktopTextKey.AuthClientMissing, "✗ Client ID застосунку GitHub не налаштовано у цій збірці."),
         (DesktopTextKey.AuthNotSignedIn, "Не виконано вхід"),
         (DesktopTextKey.AuthSessionExpired, "✗ Сесію GitHub протерміновано — увійдіть знову."),
@@ -234,7 +234,7 @@ public static partial class DesktopLocalization
         (DesktopTextKey.DialogUnavailable, "✗ Dialogs are not available from this window."),
 
         (DesktopTextKey.AuthSignIn, "Sign in to GitHub"),
-        (DesktopTextKey.AuthUnsupportedPlatform, "GitHub sign-in is Windows-only: no encrypted token store exists on other systems yet."),
+        (DesktopTextKey.AuthUnsupportedPlatform, "The secure credential store is unavailable. On Linux, install secret-tool and unlock the keyring; on macOS, unlock Keychain."),
         (DesktopTextKey.AuthClientMissing, "✗ The GitHub App client ID is not configured in this build."),
         (DesktopTextKey.AuthNotSignedIn, "Not signed in"),
         (DesktopTextKey.AuthSessionExpired, "✗ The GitHub session expired — sign in again."),
@@ -381,7 +381,7 @@ public static partial class DesktopLocalization
         (DesktopTextKey.DialogUnavailable, "✗ Dialoge sind aus diesem Fenster nicht verfügbar."),
 
         (DesktopTextKey.AuthSignIn, "Bei GitHub anmelden"),
-        (DesktopTextKey.AuthUnsupportedPlatform, "Die GitHub-Anmeldung gibt es nur unter Windows: auf anderen Systemen existiert noch kein verschlüsselter Token-Speicher."),
+        (DesktopTextKey.AuthUnsupportedPlatform, "Der sichere Anmeldedatenspeicher ist nicht verfügbar. Unter Linux secret-tool installieren und den Schlüsselbund entsperren; unter macOS Keychain entsperren."),
         (DesktopTextKey.AuthClientMissing, "✗ Die GitHub-App-Client-ID ist in diesem Build nicht konfiguriert."),
         (DesktopTextKey.AuthNotSignedIn, "Nicht angemeldet"),
         (DesktopTextKey.AuthSessionExpired, "✗ Die GitHub-Sitzung ist abgelaufen — bitte erneut anmelden."),

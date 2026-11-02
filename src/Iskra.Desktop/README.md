@@ -36,18 +36,29 @@ a non-empty operator, a batch ID when batch mode is on, and a resolved
 product/release. Discovery re-runs immediately before the request snapshot, so a
 probe unplugged after the last refresh cannot be flashed against a stale port.
 
-## Known gaps versus WPF
+## Platform credential stores
 
-- **No GitHub Device Flow UI.** Remote releases reuse the Windows DPAPI token
-  store written by WPF or `Iskra.Cli --login`; the Flash tab shows a hint when a
-  remote release is selected and no credentials are stored. Linux and macOS fail
-  closed on remote firmware — there is no encrypted `ITokenStore` for them yet,
-  and no plaintext fallback will be added.
-- **Settings are read-only** apart from the language selector, which reloads the
-  latest settings and atomically saves only the language change so a stale
-  session cannot clobber newer WPF values.
-- **No CSV export** on the History tab.
-- **No hardware-in-the-loop acceptance yet.** The header badge says so.
+Private GitHub firmware uses one fail-closed `ITokenStore` factory across the
+Avalonia UI and CLI:
+
+- Windows: the existing DPAPI store shared with WPF.
+- Ubuntu/Debian: Secret Service through `/usr/bin/secret-tool`; the package and
+  an unlocked per-user keyring are required.
+- macOS: the login Keychain through `/usr/bin/security`.
+
+Secrets are never passed in process arguments or environment variables. Linux
+`secret-tool` receives JSON on stdin; macOS uses `security` interactive mode on
+stdin with a base64-safe command. Helper calls are time-bounded and kill their
+process tree on timeout. If a helper is absent, remote downloads and sign-in stay
+disabled; there is no plaintext fallback.
+
+## Remaining acceptance gaps
+
+- Hardware-in-the-loop acceptance on Windows, Linux, and macOS. The header badge
+  remains explicit until those runs pass.
+- Linux/macOS clean-machine packaging and the documented serial-device policy.
+- Signed/notarized macOS distribution and review of final Keychain access
+  behavior from the signed app and CLI binaries.
 
 `global.json` pins .NET SDK 10.0.301, the project targets .NET 10, and Avalonia
 is pinned to 12.1.0.

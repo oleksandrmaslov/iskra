@@ -14,12 +14,13 @@ namespace Iskra.Desktop;
 /// </summary>
 public sealed partial class MainWindowViewModel
 {
-    // Windows DPAPI is the only encrypted token store today; elsewhere the
-    // workflow is handed null and reports SecureStoreUnavailable rather than
-    // offering a sign-in that could not be persisted safely.
-    private readonly AuthWorkflow _authWorkflow =
-        new(OperatingSystem.IsWindows() ? new TokenStore() : null);
+    // One shared platform store instance backs status, sign-in, sign-out, and
+    // refresh. The factory returns null rather than a plaintext fallback when
+    // DPAPI, Secret Service, or Keychain is unavailable.
+    private readonly ITokenStore? _tokenStore;
+    private readonly AuthWorkflow _authWorkflow;
     private readonly CloudLogWorkflow _cloudLogWorkflow = new();
+    private CloudLogScheduler? _cloudLogScheduler;
 
     private AuthSnapshot? _authSnapshot;
     private string _authStatusText = string.Empty;
@@ -69,6 +70,24 @@ public sealed partial class MainWindowViewModel
         });
     }
 
+    public void StartBackgroundServices()
+    {
+        if (_cloudLogScheduler is not null) return;
+        _cloudLogScheduler = new CloudLogScheduler(
+            () => _settings.Clone(),
+            (settings, cancellationToken) => _cloudLogWorkflow.ShipAsync(
+                settings,
+                cancellationToken: cancellationToken),
+            _ => Avalonia.Threading.Dispatcher.UIThread.Post(RefreshCloudStatus));
+        _cloudLogScheduler.Start();
+    }
+
+    public void StopBackgroundServices()
+    {
+        _cloudLogScheduler?.Dispose();
+        _cloudLogScheduler = null;
+    }
+
     public RelayCommand ReloadCatalogCommand { get; private set; } = null!;
 
     public string AuthStatusText { get => _authStatusText; private set => SetProperty(ref _authStatusText, value); }
@@ -101,11 +120,10 @@ public sealed partial class MainWindowViewModel
         Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
 
     /// <summary>
-    /// Device Flow needs an encrypted token store, which currently exists only
-    /// on Windows. Elsewhere the whole section is shown disabled instead of
-    /// offering a sign-in that could not be persisted safely.
+    /// Device Flow is offered only when the current OS has its encrypted store
+    /// helper. A Linux station without secret-tool remains visibly fail-closed.
     /// </summary>
-    public bool IsAuthSupported => OperatingSystem.IsWindows();
+    public bool IsAuthSupported => _tokenStore is not null;
 
     // ============================================================
     // GitHub sign-in
@@ -124,6 +142,8 @@ public sealed partial class MainWindowViewModel
             AuthStatus.SecureStoreUnavailable => (Text.AuthUnsupportedPlatform, StatusWarnBrush),
             AuthStatus.ClientNotConfigured => (Text.AuthClientMissing, StatusErrorBrush),
             AuthStatus.TokenStoreCorrupt =>
+                (Text.AuthTokenCorrupt(_authSnapshot.Diagnostic ?? string.Empty), StatusErrorBrush),
+            AuthStatus.LegacyTokenCleanupRequired =>
                 (Text.AuthTokenCorrupt(_authSnapshot.Diagnostic ?? string.Empty), StatusErrorBrush),
             AuthStatus.NotSignedIn => (Text.AuthNotSignedIn, StatusWarnBrush),
             AuthStatus.SessionExpired => (Text.AuthSessionExpired, StatusErrorBrush),
@@ -193,17 +213,16 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private static void SaveTokens(StoredTokens tokens)
+    private void SaveTokens(StoredTokens tokens)
     {
-        if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException("no encrypted token store on this platform");
-        new TokenStore().Save(tokens);
+        _authWorkflow.SaveTokens(tokens);
     }
 
     private void SignOut()
     {
         var after = _authWorkflow.SignOut();
-        if (after.Status == AuthStatus.TokenStoreCorrupt && after.Diagnostic is { } diagnostic)
+        if ((after.Status is AuthStatus.TokenStoreCorrupt or AuthStatus.LegacyTokenCleanupRequired)
+            && after.Diagnostic is { } diagnostic)
         {
             _authSnapshot = after;
             AuthStatusText = Text.AuthDeleteFailed(diagnostic);
@@ -217,9 +236,7 @@ public sealed partial class MainWindowViewModel
     private async Task RefreshAuthTokenAsync()
     {
         RefreshAuthStatus();
-        // Explicit OS check rather than IsAuthSupported: the platform analyzer
-        // only recognises OperatingSystem.IsWindows() as a guard for TokenStore.
-        if (!OperatingSystem.IsWindows() || !GitHubAppConfig.IsConfigured) return;
+        if (_tokenStore is null || !GitHubAppConfig.IsConfigured) return;
 
         if (!_authWorkflow.Evaluate().CanSignOut) return;
 
@@ -227,7 +244,7 @@ public sealed partial class MainWindowViewModel
         {
             using var http = new HttpClient();
             var flow = new GitHubDeviceFlow(http, GitHubAppConfig.ClientId);
-            var provider = new AccessTokenProvider(new TokenStore(), flow);
+            var provider = new AccessTokenProvider(_tokenStore, flow);
             await provider.GetFreshAccessTokenAsync();
             RefreshAuthStatus();
         }

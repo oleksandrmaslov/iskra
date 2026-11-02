@@ -168,6 +168,13 @@ jobs:
             extra_args+=(--dist-repo "$DIST_REPO")
           fi
 
+          # Operator-facing names, reviewed here because a published target.json
+          # is immutable. A name for a product this run did not read fails
+          # generation rather than signing a catalog without that product.
+          if [ -f display-names.json ]; then
+            extra_args+=(--display-names display-names.json)
+          fi
+
           dotnet run --project iskra-app/src/Iskra.Cli --no-restore -- \
             --generate-catalog \
             --from-targets targets \

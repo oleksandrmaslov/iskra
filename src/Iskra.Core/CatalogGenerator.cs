@@ -24,6 +24,8 @@ public sealed class CatalogGeneratorException : Exception
 /// </summary>
 public static class CatalogGenerator
 {
+    public const int MaxDisplayNameLength = 64;
+
     /// <param name="sidecars">All known target.json sidecars across products and versions.</param>
     /// <param name="owner">GitHub owner / org for <c>elf_source.repo</c> derivation.</param>
     /// <param name="generatedAtUtc">Stamps <c>catalog.generated_at</c>.</param>
@@ -40,12 +42,18 @@ public static class CatalogGenerator
     /// <para>Omit it to keep the historical
     /// <c>&lt;owner&gt;/&lt;product_id&gt;-firmware</c> convention.</para>
     /// </param>
+    /// <param name="displayNames">
+    /// Optional product_id to operator-facing name overrides, which win over any
+    /// sidecar. A published sidecar is immutable, so this is the way to rename a
+    /// product without cutting a firmware release.
+    /// </param>
     public static Catalog Build(
         IEnumerable<TargetSidecar> sidecars,
         string owner,
         DateTime generatedAtUtc,
         IReadOnlyList<RevokedRelease>? revoked = null,
-        string? distributionRepo = null)
+        string? distributionRepo = null,
+        IReadOnlyDictionary<string, string>? displayNames = null)
     {
         if (sidecars is null) throw new ArgumentNullException(nameof(sidecars));
         if (string.IsNullOrWhiteSpace(owner))
@@ -85,6 +93,19 @@ public static class CatalogGenerator
         if (byProduct.Count == 0)
             throw new CatalogGeneratorException("no sidecars provided — catalog would be empty");
 
+        // A name for a product that was not read means the sidecar walk lost that
+        // product, for example to a token that cannot see its repository. Signing
+        // anyway would silently remove it from every station.
+        if (displayNames is not null)
+        {
+            foreach (var named in displayNames.Keys)
+            {
+                if (!byProduct.ContainsKey(named))
+                    throw new CatalogGeneratorException(
+                        $"display name given for '{named}', but no target.json was read for that product");
+            }
+        }
+
         var products = new List<Product>(byProduct.Count);
         foreach (var (productId, list) in byProduct.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
         {
@@ -100,13 +121,9 @@ public static class CatalogGenerator
                 .ToList();
             var latest = corrected.OrderByDescending(s => s, SemVerComparer.Instance).First();
 
-            var displayName = !string.IsNullOrWhiteSpace(canonical.DisplayName)
-                ? canonical.DisplayName
-                : TitleCase(productId);
-
             products.Add(new Product(
                 ProductId:      productId,
-                DisplayName:    displayName,
+                DisplayName:    ResolveDisplayName(productId, corrected, displayNames),
                 Target:         new TargetDescriptor(
                                     canonical.BmpMatch,
                                     canonical.PartNumber,
@@ -148,14 +165,55 @@ public static class CatalogGenerator
             return Array.Empty<RevokedRelease>();
         try
         {
-            var json = File.ReadAllText(path);
+            var json = BoundedFileReader.ReadUtf8String(path, CatalogJson.MaxCatalogBytes);
             var list = System.Text.Json.JsonSerializer.Deserialize<List<RevokedRelease>>(
                 json, CatalogJson.DefaultOptions);
             return list ?? new List<RevokedRelease>();
         }
-        catch (System.Text.Json.JsonException ex)
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or FileSizeLimitExceededException)
         {
             throw new CatalogGeneratorException($"{path}: invalid revoked.json — {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Reads a <c>display-names.json</c> object mapping product_id to the name
+    /// operators see, or returns null when no path is given. Unlike the revocation
+    /// list, a file that was named but cannot be read is an error, because carrying
+    /// on would quietly publish the wrong names.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string>? ReadDisplayNamesFile(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+        if (!File.Exists(path))
+            throw new CatalogGeneratorException($"{path}: display names file not found");
+        try
+        {
+            var json = BoundedFileReader.ReadUtf8String(path, CatalogJson.MaxCatalogBytes);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                throw new CatalogGeneratorException($"{path}: expected an object of product_id to name");
+
+            var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in doc.RootElement.EnumerateObject())
+            {
+                var name = entry.Value.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? entry.Value.GetString()
+                    : null;
+                if (string.IsNullOrWhiteSpace(name) ||
+                    name != name.Trim() ||
+                    name.Length > MaxDisplayNameLength ||
+                    name.Any(char.IsControl))
+                    throw new CatalogGeneratorException($"{path}: invalid display name for '{entry.Name}'");
+                if (!names.TryAdd(entry.Name, name))
+                    throw new CatalogGeneratorException($"{path}: duplicate display name for '{entry.Name}'");
+            }
+            return names;
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or FileSizeLimitExceededException)
+        {
+            throw new CatalogGeneratorException($"{path}: invalid display names file — {ex.Message}", ex);
         }
     }
 
@@ -277,17 +335,32 @@ public static class CatalogGenerator
             if (s.TimeoutSeconds != first.TimeoutSeconds)
                 throw new CatalogGeneratorException(
                     $"{productId}: sidecars disagree on timeout_s ({first.TimeoutSeconds} vs {s.TimeoutSeconds})");
+
+            // The memory map decides whether a firmware image's load addresses
+            // are range checked at all. It is taken from one canonical sidecar,
+            // so a product whose releases disagree would silently get whichever
+            // sidecar was walked first -- including one with no map, which
+            // downgrades the whole product to a size-only check. Disagreement is
+            // a data error; fail rather than pick.
             if (s.FlashOrigin != first.FlashOrigin)
                 throw new CatalogGeneratorException(
-                    $"{productId}: sidecars disagree on flash_origin ({first.FlashOrigin} vs {s.FlashOrigin})");
+                    $"{productId}: sidecars disagree on flash_origin "
+                    + $"({Describe(first.FlashOrigin)} vs {Describe(s.FlashOrigin)}). "
+                    + "Every published release of a product must declare the same "
+                    + "memory map; add the field to the older release's target.json.");
             if (s.RamOrigin != first.RamOrigin)
                 throw new CatalogGeneratorException(
-                    $"{productId}: sidecars disagree on ram_origin ({first.RamOrigin} vs {s.RamOrigin})");
+                    $"{productId}: sidecars disagree on ram_origin "
+                    + $"({Describe(first.RamOrigin)} vs {Describe(s.RamOrigin)})");
             if (s.RamKb != first.RamKb)
                 throw new CatalogGeneratorException(
-                    $"{productId}: sidecars disagree on ram_kb ({first.RamKb} vs {s.RamKb})");
+                    $"{productId}: sidecars disagree on ram_kb "
+                    + $"({first.RamKb?.ToString() ?? "absent"} vs {s.RamKb?.ToString() ?? "absent"})");
         }
     }
+
+    private static string Describe(ulong? address) =>
+        address is { } value ? $"0x{value:X8}" : "absent";
 
     internal static string ExtensionFor(FirmwareKind kind) => kind switch
     {
@@ -295,6 +368,30 @@ public static class CatalogGenerator
         FirmwareKind.Hex => "hex",
         _                => "elf",
     };
+
+    private static string ResolveDisplayName(
+        string productId,
+        List<TargetSidecar> sidecars,
+        IReadOnlyDictionary<string, string>? displayNames)
+    {
+        if (displayNames is not null)
+        {
+            foreach (var (named, name) in displayNames)
+            {
+                if (string.Equals(named, productId, StringComparison.OrdinalIgnoreCase))
+                    return name;
+            }
+        }
+
+        // Newest first. Published sidecars are immutable, so only a later release
+        // can add a name, and the targets tree is walked in no particular order.
+        var fromSidecar = sidecars
+            .OrderByDescending(s => s, SemVerComparer.Instance)
+            .Select(s => s.DisplayName)
+            .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
+
+        return fromSidecar ?? TitleCase(productId);
+    }
 
     private static string TitleCase(string productId)
     {

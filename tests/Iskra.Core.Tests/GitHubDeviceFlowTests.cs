@@ -60,6 +60,16 @@ public class GitHubDeviceFlowTests
     }
 
     [Fact]
+    public async Task RequestDeviceCode_rejects_an_oversized_response()
+    {
+        var h = new StubHandler(JsonResp(new string('x', GitHubDeviceFlow.MaxResponseBytes + 1)));
+        var flow = Flow(h);
+
+        await Assert.ThrowsAsync<HttpContentSizeLimitException>(() =>
+            flow.RequestDeviceCodeAsync());
+    }
+
+    [Fact]
     public async Task RequestDeviceCode_throws_on_missing_field()
     {
         var bad = DeviceCodeOk.Replace("\"device_code\":      \"dev-123\",", "\"device_code\": \"\",");
@@ -68,6 +78,21 @@ public class GitHubDeviceFlowTests
 
         var ex = await Assert.ThrowsAsync<GitHubAuthException>(() => flow.RequestDeviceCodeAsync());
         Assert.Contains("device_code missing", ex.Message);
+    }
+
+    [Fact]
+    public async Task RequestDeviceCode_rejects_a_browser_uri_outside_github_https()
+    {
+        var malicious = DeviceCodeOk.Replace(
+            "https://github.com/login/device",
+            "https://github.com.evil.example/steal-code",
+            StringComparison.Ordinal);
+        var h = new StubHandler(JsonResp(malicious));
+
+        var ex = await Assert.ThrowsAsync<GitHubAuthException>(() =>
+            Flow(h).RequestDeviceCodeAsync());
+
+        Assert.Contains("verification_uri", ex.Message);
     }
 
     [Fact]

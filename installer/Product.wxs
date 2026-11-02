@@ -81,6 +81,7 @@
       <ComponentGroupRef Id="ExampleFiles" />
       <ComponentGroupRef Id="StationCheckFiles" />
       <ComponentRef Id="AppStartMenuShortcut" />
+      <ComponentRef Id="LegacyMachineTokenCleanup" />
     </Feature>
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -104,6 +105,24 @@
                        Value="1"
                        KeyPath="yes" />
       </Component>
+    </StandardDirectory>
+
+    <!-- 2.2.0 and earlier stored GitHub Device Flow credentials under
+         CommonAppData using DPAPI LocalMachine. Never migrate that shared bearer
+         credential into the new per-user store: remove only the exact legacy
+         file during an elevated install and require a fresh sign-in. -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="LegacyCommonDataFolder" Name="Iskra">
+        <Component Id="LegacyMachineTokenCleanup" Guid="D9E26D05-0C4F-4B5B-9F6F-A9D9B2D0B271">
+          <RemoveFile Id="RemoveLegacyMachineAuth" Name="auth.bin" On="install" />
+          <RegistryValue Root="HKLM"
+                         Key="Software\Iskra"
+                         Name="LegacyMachineTokenCleanup"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
     </StandardDirectory>
 
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">

@@ -2,7 +2,227 @@
 
 All notable changes to Iskra are documented here.
 
-## [Unreleased]
+## [2.2.4] - 2026-11-01
+
+Engineering release for controlled lab evaluation. **Not factory-approved.**
+Changes how the catalog is generated. Nothing in the flashing path, the station
+UI, or the catalog format changed since 2.2.3.
+
+### Added
+
+- `Iskra.Cli --generate-catalog --display-names <file>` reads a JSON object of
+  product_id to the name operators see, and it wins over any `target.json`. A
+  published `target.json` is immutable, so renaming a product used to need a
+  firmware release. Stations pick the new name up from the signed catalog.
+- A display name for a product the run did not read now fails generation. A token
+  that loses access to a firmware repository used to sign a catalog without that
+  product and report success.
+
+### Fixed
+
+- `display_name` came from whichever `target.json` was read first, in no particular
+  order. It now comes from the newest release that sets one.
+- Merged the legacy ci-clop flash metadata correction from `main` (`b33552d`). The
+  release line was missing it, and `main` was missing every fix since 2.2.1.
+
+## [2.2.3] - 2026-09-13
+
+Engineering fix release for controlled lab evaluation. **Not factory-approved.**
+Supersedes 2.2.2, in which no station on any platform could open the probe to
+flash, and a Linux station could not find one.
+
+### Fixed
+
+- Fixed every flash failing before the probe was opened, on Windows, Linux, and
+  macOS alike. The GDB/MI session sent the endpoint to `-target-select` as a
+  quoted, escaped string, but gdb passes that command's arguments to its CLI
+  verbatim, so it tried to open a name that still contained the quotes and
+  doubled backslashes. Windows rejected it with error 123, and on Linux and
+  macOS the quoted path does not exist. The endpoint is now passed bare, which
+  the endpoint grammar already makes safe because it admits no whitespace,
+  quotes, or control characters. Reproduced against a Black Magic Probe v2.0.0
+  on Windows: the quoted form fails to open, and the bare form connects and runs
+  `swdp_scan`.
+- Fixed a probe that could not be opened being reported as `E_SCAN_NO_TARGET`,
+  whose hint sends the operator to check SWD wiring and board power. gdb's
+  open-failure wording was not recognised, so the scan simply found no targets.
+  It is now `E_PROBE_NOT_FOUND`, or `E_PROBE_BUSY` when Windows reports the port
+  in use, with gdb's message kept as the detail. A missing firmware file, which
+  gdb words like a missing Unix device, is not matched.
+- Fixed Black Magic Probe discovery on Linux, which reported no probe even with
+  one connected, so a Linux station could never pass readiness or flash. Every
+  entry under `/sys/class/tty` is a symlink with a relative target, and so is
+  the interface's `device` link. Discovery resolved those targets against the
+  link's textual parent, which lands outside `/sys/devices`, so the probe's USB
+  vendor and product IDs were never read. Links are now resolved the way the
+  kernel resolves them. The existing test built plain directories and could not
+  catch this; a new test uses the kernel's real symlink layout. Windows and
+  macOS discovery were not affected.
+
+## [2.2.2] - 2026-09-13
+
+Engineering fix release for controlled lab evaluation. **Not factory-approved.**
+Three defects in this release each blocked a station outright on at least one
+platform.
+
+### Fixed
+
+- Fixed GitHub Device Flow authentication on Linux and macOS, where signing in,
+  refreshing a token, and signing out all failed with "could not establish the
+  cross-process GitHub credential lock; authentication is disabled to protect
+  rotating credentials". The cross-process credential lock waited on a named
+  mutex and a cancellation handle together, which throws
+  `PlatformNotSupportedException` on Unix, so every credential mutation was
+  unreachable. The lease now waits on the mutex alone and polls for
+  cancellation. Windows was never affected.
+- The credential-lock failure message now names the underlying cause instead of
+  reporting only that the lock could not be taken, which left the actual reason
+  invisible in support logs.
+- Fixed `target.json` sidecars saved with a UTF-8 BOM failing to parse, which
+  broke catalog generation with `'0xEF' is an invalid start of a value`. These
+  files are hand-authored on Windows, where editors and PowerShell redirection
+  both emit a BOM. Catalog bytes were already BOM-tolerant; sidecars now are
+  too.
+- Fixed the Device Flow user-code panel rendering its copy button as black text
+  on dark navy, measured at 1.21:1 contrast. The Fluent light-theme button fill
+  is translucent, so on a dark parent it composited down to the panel colour.
+  The button now uses the same explicit `on-dark` treatment as the main window
+  header, and a headless render test fails the build if either that button or
+  the user code itself drops below the 4.5:1 minimum.
+
+### Added
+
+- Added an in-app Arm GNU Toolchain install, so a station no longer needs a
+  terminal or a manual vendor download to get `arm-none-eabi-gdb`. Available
+  from the WPF Settings tab and as `Iskra.Cli --install-toolchain`. The pinned
+  vendor installer is verified against its SHA-256 before anything is executed;
+  a mismatched download is deleted, never run, and a verified one is cached so a
+  declined prompt does not re-download it.
+  The install is deliberately elevated rather than per-user: `GdbDiscovery`
+  accepts GDB only from an administrator-controlled location, because GDB is the
+  process that writes firmware, so a per-user install would place a toolchain
+  the app then refuses to use. Windows raises one consent dialog. Linux and
+  macOS report the exact distribution command instead of installing.
+- Added `ArmToolchainPins`, a single in-app source for the pinned toolchain
+  version, filename, URL, and hash, with a test that fails the build if it
+  drifts from `installer/arm-toolchain.pins.ps1`. The in-app install and the
+  packaged setup EXE therefore cannot deliver different compilers under the same
+  version claim.
+
+### Changed
+
+- `--generate-catalog` now applies the same trusted-catalog validation a station
+  applies before it writes anything, and refuses to emit a catalog that every
+  station would reject. The published 2026-08-09 catalog was refused in the
+  field for exactly this reason: its products carried no `target.flash_origin`,
+  so firmware load addresses could not be range checked. The failure now names
+  the product and the sidecar field to add, and happens in CI rather than on an
+  operator's screen.
+
+- The catalog generator now treats a product's memory map as part of its target
+  stack, so `flash_origin`, `ram_origin`, and `ram_kb` must agree across every
+  release of a product. The product target is taken from one canonical sidecar,
+  so releases that disagreed previously resolved to whichever sidecar was walked
+  first — silently deciding whether firmware load addresses were range checked at
+  all. A mismatch now fails generation and names the release to correct.
+
+### Tests
+
+- 742 automated tests pass, up from 719. New coverage for cross-process
+  credential locking on every platform, catalog signing-key handling, BOM
+  tolerance and `flash_origin` enforcement in generated catalogs, pinned
+  toolchain download verification, and Device Flow colour contrast.
+
+## [2.2.1] - 2026-08-28
+
+Engineering security release only. This version is not factory-approved until
+the production signing/key-custody, append-only central audit, trustworthy board
+identity, clean-machine, and HIL gates in the architecture/security audit are
+closed.
+
+### Added
+
+- Added a machine-wide, identity-based probe lease. Windows COM aliases, Linux
+  device symlinks, and macOS callout devices resolve to the physical BMP
+  VID/PID plus USB serial (or a stable physical-instance fallback), preventing
+  a second Iskra process or OS session from opening the same probe concurrently.
+- Added a durable audit lifecycle: every accepted transaction commits a
+  `STARTED` SQLite row before firmware/network/GDB work and finalizes that same
+  row to `TERMINAL`. Cancellation is recorded as `E_CANCELLED`; a crash leaves
+  an explicit recoverable `STARTED` record instead of erasing the attempt.
+- Added exact GDB load-plan verification. ELF32 allocatable, file-backed
+  sections are mapped through their containing `PT_LOAD` LMA, range checked,
+  and compared as a name/address/size multiset with the sections GDB reports.
+- Added immutable verified firmware staging. Iskra copies and re-hashes the
+  approved ELF/HEX into a random private lease before GDB can open it, narrowing
+  the validation/use race and ensuring the load plan and flashed bytes refer to
+  one snapshot.
+- Added opaque `CatalogActivationPermit` authorization at the public flash API,
+  digest-bound cache generations/current pointer, and timestamp+digest rollback
+  floors. Signed catalog collections are deep-frozen before reaching a UI.
+- Added an immediate and persisted-interval cloud-log scheduler with settings
+  wake-up, overlap prevention, and shutdown cancellation.
+- Added SPDX SBOM generation/validation plus GitHub build and SBOM attestations
+  to the native release workflow.
+
+### Changed
+
+- macOS probe discovery now uses bounded `ioreg`/IOKit plist data to bind
+  `/dev/cu.usbmodem*` endpoints to USB VID/PID, interface number, serial, and
+  location identity. Unidentified endpoints fail closed.
+- Windows Device Flow credentials moved from machine-scope DPAPI under
+  `%PROGRAMDATA%` to per-user DPAPI under `%LOCALAPPDATA%`. Refresh, login,
+  logout, and replacement writes now share one per-user cross-process mutation
+  lock so a stale refresh cannot resurrect signed-out credentials. The exact
+  legacy `%PROGRAMDATA%\Iskra\auth.bin` is deleted without decryption or
+  migration; private authentication fails closed when cleanup needs an
+  administrator, and operators must revoke the old grant and sign in again.
+- GDB discovery now accepts only administrator/package-controlled roots in
+  production, resolves symlink chains, and reports canonical path, SHA-256, and
+  bounded version evidence through `--doctor`. Arbitrary paths remain available
+  only in an explicitly lab-enabled build.
+- GDB/MI, UI-console, native-helper, sysfs, and Intel HEX line retention are
+  bounded before attacker-sized strings can be allocated. Overlong MI records
+  cannot complete a command waiter.
+- Corrupt, oversized, or semantically unsafe station settings are preserved and
+  block startup/flash instead of silently falling back to defaults.
+- Authenticated GitHub asset URLs must use the exact HTTPS API origin before a
+  bearer token is attached. Device Flow browser URIs, catalog assets, and app
+  update links likewise require the exact GitHub HTTPS web origin.
+- Linux `.deb` dependencies now express the official .NET 10 ICU/OpenSSL
+  alternatives for Ubuntu 22.04/24.04 and Debian 12/13.
+- CLI `--dry-run` now exits nonzero when the firmware hash or address-range gate
+  fails instead of printing a refusal while returning success.
+
+### Security
+
+- Production callers can no longer construct a raw flash engine, substitute a
+  catalog key/source policy, inject a GDB factory, mutate shared JSON options,
+  or hand an arbitrary deserialized catalog to `FlashWorkflow`.
+- Firmware acquisition, validation, target gating, GDB load/verify, audit
+  finalization, and cleanup are one fail-closed workflow. A missing terminal
+  audit write converts even a physically verified flash to
+  `E_AUDIT_WRITE_FAILED`.
+- Release/API response URLs are treated as untrusted metadata. Tokens are never
+  sent to a host supplied by a release response, and unsafe update/browser URLs
+  are not exposed to the operator UI.
+- Both Windows MSIs remove only the legacy machine-wide `auth.bin` during an
+  elevated install. `--doctor` reports the migration state and no longer
+  requires general write access to `%PROGRAMDATA%\Iskra`.
+
+### Verification
+
+- Locked .NET 10.0.301 Release build: zero warnings and zero errors.
+- Core 605, Application 93, Desktop 21; 719 total automated tests with no
+  failures or skips. NuGet reported zero known vulnerable direct/transitive
+  packages.
+- Classification remains **engineering only / STOP-SHIP for factory use**.
+
+## [2.2.0] - 2026-08-26
+
+Engineering release only. This version is not factory-approved until the
+signing, catalog-key, append-only logging, board-identity, clean-machine, and HIL
+gates in the architecture/security audit are closed.
 
 ### Added
 
@@ -56,6 +276,23 @@ All notable changes to Iskra are documented here.
 - Added a full-screen mode to the Avalonia app: a header toggle, F11, and Escape
   to leave. Full screen is the intended factory-floor mode — only the PASS/FAIL
   band and the FLASH button, with no desktop behind them.
+- Added fail-closed secure credential adapters for portable clients: Linux
+  Secret Service through `/usr/bin/secret-tool` and the macOS login Keychain
+  through `/usr/bin/security`. Secrets are supplied on stdin, helper calls are
+  time-bounded, and there is no plaintext fallback.
+- Added activation-time catalog anti-rollback. Every verified catalog activated
+  from disk or the network now advances an interprocess-serialized, atomically
+  written `generated_at` floor; older catalogs, malformed floor state, and
+  implausibly future catalogs are rejected.
+- Added native CI definitions for Windows x64, Ubuntu x64/arm64, and macOS
+  arm64/x64 with locked restore, warning and vulnerability gates, native tests,
+  publish, and CLI smoke execution.
+- Added deterministic Linux/macOS portable archives, native Debian packaging
+  with a least-privilege BMP udev rule, and native macOS `.app`, zip, and DMG
+  packaging. Release paths fail closed when Linux signing or macOS Developer ID
+  and notarization credentials are absent.
+- Added the complete architecture/security audit and cross-platform acceptance
+  matrix in `docs/ARCHITECTURE_SECURITY_AUDIT_2026-08-25.md`.
 
 ### Changed
 
@@ -66,6 +303,50 @@ All notable changes to Iskra are documented here.
 - Gave buttons on the dark header and status strip an explicit light-on-dark
   style. The BMP "Check again" button was rendering Fluent's dark text on the
   dark strip and was effectively unreadable.
+- Replaced the scan/flash process handoff with one guarded GDB/MI session. It
+  takes an exclusive per-probe lock, scans and safely attaches the physical
+  target before the application gate, and opens/loads firmware only after the
+  gate accepts. Cancellation, timeout, gate rejection, and exceptions all make
+  a bounded attempt to terminate the complete process tree.
+- Made catalog verification and parsing consume the same bounded in-memory
+  snapshot, eliminating separate-read check/use races and oversized-file memory
+  exposure.
+- Hardened Cortex-M ELF parsing to little-endian ELF32 ARM `ET_EXEC`/`ET_DYN`,
+  bounded program headers, `filesz <= memsz`, and complete in-file PT_LOAD
+  payloads.
+- Bounded GitHub update/catalog metadata, API error bodies, and firmware asset
+  downloads. Firmware streams to disk with a 64 MiB ceiling and failed partial
+  files are removed.
+- Bounded HTTP consumers now request headers-only completion before applying
+  their read limits, preventing the HTTP stack from buffering a body ahead of
+  the application ceiling.
+- Signed catalogs now require an absolute `flash_origin`, persistent audit paths
+  reject in-memory/URI/device targets, HEX records cannot wrap the 32-bit address
+  space, and frequency/timeout inputs have defensive upper bounds.
+- Unsigned-catalog and manual-flash support is compiled out of ordinary Release
+  binaries and can only exist in an explicitly lab-enabled build.
+- Station IDs used in cloud-log paths now reject traversal names and retain a
+  hash suffix after normalization so distinct IDs cannot silently collide.
+- Exact runtime identifiers now select updates and packages for Linux x64/arm64
+  and macOS arm64/x64; architecture-family fallbacks are not accepted.
+- Installer builds restore the repository-local WiX manifest and exact pinned
+  extensions instead of depending on mutable global tools.
+
+### Security
+
+- Signed-catalog target, firmware, and hash overrides now require the explicit
+  manual-flash flag and lab environment gate together. Normal operator use
+  cannot replace signed values from command-line arguments.
+- A verified physical flash cannot report PASS when its mandatory SQLite audit
+  row cannot be persisted. WPF, Avalonia, and CLI return
+  `E_AUDIT_WRITE_FAILED` with localized operator guidance.
+- Tagged Windows artifact publication is intentionally refused until an
+  Authenticode and trusted-timestamp pipeline is configured. Manual workflow
+  runs produce labelled engineering artifacts only.
+- Tagged Linux and macOS packaging ignores unsigned engineering overrides and
+  fails closed without signing credentials; macOS publishing also requires
+  notarization. Release signing jobs use the reviewer-gated `release-signing`
+  environment.
 
 ### Fixed
 
@@ -73,6 +354,10 @@ All notable changes to Iskra are documented here.
   PASS/FAIL band. `Progress<T>` posts to the UI thread, so a late "Flashing…"
   could overwrite the verdict an operator relies on. Fixed in both Avalonia and
   WPF; found by the new headless tests.
+- Fixed Avalonia allowing the window to close during an active flash. Close is
+  now refused with a localized warning until the guarded transaction reaches a
+  terminal state. Invalid or unwritable settings likewise block exit instead of
+  being silently discarded.
 
 ### Notes
 

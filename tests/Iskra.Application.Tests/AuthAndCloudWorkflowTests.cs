@@ -73,6 +73,23 @@ public sealed class AuthAndCloudWorkflowTests : IDisposable
     }
 
     [Fact]
+    public void A_blocked_legacy_machine_token_disables_private_authentication()
+    {
+        var store = new FakeTokenStore
+        {
+            LoadThrows = new LegacyMachineTokenCleanupException("remove legacy auth.bin"),
+        };
+
+        var snapshot = new AuthWorkflow(store, clientConfigured: true).Evaluate(Now);
+
+        Assert.Equal(AuthStatus.LegacyTokenCleanupRequired, snapshot.Status);
+        Assert.Equal("remove legacy auth.bin", snapshot.Diagnostic);
+        Assert.False(snapshot.CanSignIn);
+        Assert.False(snapshot.CanSignOut);
+        Assert.False(snapshot.CanFetchRemoteFirmware);
+    }
+
+    [Fact]
     public void An_expired_refresh_token_is_a_session_expiry_not_a_valid_session()
     {
         var store = new FakeTokenStore
@@ -131,6 +148,21 @@ public sealed class AuthAndCloudWorkflowTests : IDisposable
 
         Assert.True(store.Deleted);
         Assert.Equal(AuthStatus.NotSignedIn, after.Status);
+    }
+
+    [Fact]
+    public void Saving_a_completed_device_flow_persists_the_new_session()
+    {
+        var store = new FakeTokenStore();
+        var workflow = new AuthWorkflow(store, clientConfigured: true);
+        var tokens = Tokens(
+            accessExpires: Now.AddHours(6),
+            refreshExpires: Now.AddDays(90));
+
+        workflow.SaveTokens(tokens);
+
+        Assert.Same(tokens, store.Tokens);
+        Assert.Equal(AuthStatus.SignedIn, workflow.Evaluate(Now).Status);
     }
 
     [Fact]

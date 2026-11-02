@@ -6,9 +6,14 @@ using System.Text.Json.Serialization;
 
 namespace Iskra.Core;
 
-public sealed class TokenStoreException : Exception
+public class TokenStoreException : Exception
 {
     public TokenStoreException(string message, Exception? inner = null) : base(message, inner) { }
+}
+
+public sealed class LegacyMachineTokenCleanupException : TokenStoreException
+{
+    public LegacyMachineTokenCleanupException(string message) : base(message) { }
 }
 
 /// <summary>
@@ -62,10 +67,11 @@ public sealed record StoredTokens(
 }
 
 /// <summary>
-/// Per-machine token store backed by <c>%PROGRAMDATA%\Iskra\auth.bin</c>.
-/// Uses Windows DPAPI <see cref="DataProtectionScope.LocalMachine"/> so any
-/// Windows user on the station can use the cached credentials — operators
-/// don't need to re-auth when Windows account-switches.
+/// Per-user token store backed by <c>%LOCALAPPDATA%\Iskra\auth.bin</c>.
+/// Uses Windows DPAPI <see cref="DataProtectionScope.CurrentUser"/> so another
+/// local account cannot decrypt or race the GitHub credentials. A station that
+/// changes its locked-down Windows operator account must authenticate once for
+/// that account instead of sharing a machine-wide bearer token.
 /// <para>Atomic write: serialize → encrypt → write to <c>.tmp</c> → rename.</para>
 /// </summary>
 [SupportedOSPlatform("windows")]
@@ -73,6 +79,7 @@ public sealed class TokenStore : ITokenStore
 {
     public const string DefaultDirectoryName = "Iskra";
     public const string DefaultFileName      = "auth.bin";
+    public const int MaxEncryptedTokenBytes = 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -83,23 +90,39 @@ public sealed class TokenStore : ITokenStore
 
     public string Path { get; }
     public DataProtectionScope Scope { get; }
+    private readonly string? _legacyMachineTokenPath;
 
-    public TokenStore(
-        string? overridePath = null,
-        DataProtectionScope scope = DataProtectionScope.LocalMachine)
+    public TokenStore(string? overridePath = null)
     {
         Path = overridePath ?? DefaultPath();
-        Scope = scope;
+        Scope = DataProtectionScope.CurrentUser;
+        _legacyMachineTokenPath = PathsEqual(Path, DefaultPath())
+            ? LegacyMachineTokenCleanup.DefaultPath()
+            : null;
     }
 
-    /// <summary><c>%PROGRAMDATA%\Iskra\auth.bin</c> on Windows.</summary>
+    internal TokenStore(
+        string overridePath,
+        DataProtectionScope scope,
+        string? legacyMachineTokenPath = null)
+    {
+        Path = overridePath;
+        Scope = scope;
+        _legacyMachineTokenPath = legacyMachineTokenPath;
+    }
+
+    /// <summary><c>%LOCALAPPDATA%\Iskra\auth.bin</c> on Windows.</summary>
     public static string DefaultPath()
     {
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-        return System.IO.Path.Combine(programData, DefaultDirectoryName, DefaultFileName);
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return System.IO.Path.Combine(local, DefaultDirectoryName, DefaultFileName);
     }
 
-    public bool Exists() => File.Exists(Path);
+    public bool Exists()
+    {
+        EnsureLegacyMachineTokenRemoved();
+        return File.Exists(Path);
+    }
 
     /// <summary>
     /// Returns the decrypted snapshot, or <c>null</c> if no file is present.
@@ -109,10 +132,11 @@ public sealed class TokenStore : ITokenStore
     /// </summary>
     public StoredTokens? Load()
     {
+        EnsureLegacyMachineTokenRemoved();
         if (!File.Exists(Path)) return null;
 
         byte[] cipher;
-        try { cipher = File.ReadAllBytes(Path); }
+        try { cipher = BoundedFileReader.ReadAllBytes(Path, MaxEncryptedTokenBytes); }
         catch (IOException ex) { throw new TokenStoreException($"could not read {Path}: {ex.Message}", ex); }
         catch (UnauthorizedAccessException ex) { throw new TokenStoreException($"access denied reading {Path}", ex); }
 
@@ -123,6 +147,10 @@ public sealed class TokenStore : ITokenStore
             throw new TokenStoreException(
                 $"token blob at {Path} could not be decrypted (wrong scope, corrupted, or " +
                 "machine credentials changed) — delete the file and re-authenticate", ex);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(cipher);
         }
 
         try
@@ -136,26 +164,40 @@ public sealed class TokenStore : ITokenStore
         {
             throw new TokenStoreException($"token blob at {Path} is not valid JSON: {ex.Message}", ex);
         }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plain);
+        }
     }
 
     public void Save(StoredTokens tokens)
     {
+        EnsureLegacyMachineTokenRemoved();
         if (tokens is null) throw new ArgumentNullException(nameof(tokens));
         ValidateLoaded(tokens);
 
-        var json   = JsonSerializer.SerializeToUtf8Bytes(tokens, JsonOpts);
-        var cipher = ProtectedData.Protect(json, optionalEntropy: null, scope: Scope);
-
-        var dir = System.IO.Path.GetDirectoryName(Path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-        var tmp = Path + ".tmp";
-        File.WriteAllBytes(tmp, cipher);
-        try { File.Move(tmp, Path, overwrite: true); }
-        catch
+        var json = JsonSerializer.SerializeToUtf8Bytes(tokens, JsonOpts);
+        byte[]? cipher = null;
+        try
         {
-            try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
-            throw;
+            cipher = ProtectedData.Protect(json, optionalEntropy: null, scope: Scope);
+
+            var dir = System.IO.Path.GetDirectoryName(Path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+            var tmp = Path + $".{Guid.NewGuid():N}.tmp";
+            File.WriteAllBytes(tmp, cipher);
+            try { File.Move(tmp, Path, overwrite: true); }
+            catch
+            {
+                try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
+                throw;
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(json);
+            if (cipher is not null) CryptographicOperations.ZeroMemory(cipher);
         }
     }
 
@@ -165,8 +207,28 @@ public sealed class TokenStore : ITokenStore
     /// </summary>
     public void Delete()
     {
+        EnsureLegacyMachineTokenRemoved();
         if (File.Exists(Path)) File.Delete(Path);
     }
+
+    private void EnsureLegacyMachineTokenRemoved()
+    {
+        if (_legacyMachineTokenPath is null) return;
+
+        var result = LegacyMachineTokenCleanup.EnsureRemovedAtPath(_legacyMachineTokenPath);
+        if (result.Status != LegacyMachineTokenCleanupStatus.CleanupRequired) return;
+
+        throw new LegacyMachineTokenCleanupException(
+            $"legacy machine-wide GitHub credential at {result.Path} could not be removed: "
+            + $"{result.Diagnostic ?? "no diagnostic"}. Remove that exact file as a station "
+            + "administrator, revoke the old GitHub authorization, and sign in again");
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            System.IO.Path.GetFullPath(left),
+            System.IO.Path.GetFullPath(right),
+            StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateLoaded(StoredTokens t)
     {

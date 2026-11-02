@@ -24,8 +24,13 @@ public sealed record FlashOptions(
     // --target mode leaves these null, which limits validation to total size.
     ulong? TargetFlashOrigin = null,
     ulong? TargetRamOrigin = null,
-    int? TargetRamKb = null)
+    int? TargetRamKb = null,
+    string? ProbeLockIdentity = null,
+    IReadOnlyList<FirmwareLoadSection>? ExpectedLoadSections = null)
 {
+    public const int MaxBmpFrequencyHz = 50_000_000;
+    public const int MaxTimeoutSeconds = 3_600;
+
     /// <summary>
     /// The subset of the catalog target descriptor that firmware range checking
     /// needs, rebuilt from the flattened options the CLI parses.
@@ -68,7 +73,8 @@ public sealed record FlashOptions(
                     else return null;
                     break;
                 case "--freq":
-                    if (!int.TryParse(Next(args, ref i), out freq)) return null;
+                    if (!int.TryParse(Next(args, ref i), out freq)
+                        || freq <= 0 || freq > MaxBmpFrequencyHz) return null;
                     break;
                 case "--connect-reset": connectReset = true; break;
                 case "--product":       product = Next(args, ref i); break;
@@ -95,7 +101,8 @@ public sealed record FlashOptions(
                     if (!TryParseFirmwareKind(Next(args, ref i), out firmwareKind)) return null;
                     break;
                 case "--timeout":
-                    if (!int.TryParse(Next(args, ref i), out timeoutSeconds) || timeoutSeconds <= 0) return null;
+                    if (!int.TryParse(Next(args, ref i), out timeoutSeconds)
+                        || timeoutSeconds <= 0 || timeoutSeconds > MaxTimeoutSeconds) return null;
                     break;
                 case "--gdb-path":      gdbPath = Next(args, ref i); break;
                 case "--db-path":       dbPath = Next(args, ref i); break;

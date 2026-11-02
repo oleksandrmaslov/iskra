@@ -8,8 +8,10 @@ public enum AuthStatus
     SecureStoreUnavailable,
     /// <summary>The build carries no GitHub App client ID.</summary>
     ClientNotConfigured,
-    /// <summary>Credentials exist on disk but could not be decrypted.</summary>
+    /// <summary>The native store failed at runtime or its credential payload is invalid.</summary>
     TokenStoreCorrupt,
+    /// <summary>A pre-2.2.1 machine-wide bearer token could not be safely removed.</summary>
+    LegacyTokenCleanupRequired,
     NotSignedIn,
     /// <summary>The refresh token has expired; a new sign-in is required.</summary>
     SessionExpired,
@@ -25,7 +27,9 @@ public sealed record AuthSnapshot(
 {
     /// <summary>Offering sign-in is pointless without a store or a client ID.</summary>
     public bool CanSignIn =>
-        Status is not (AuthStatus.SecureStoreUnavailable or AuthStatus.ClientNotConfigured);
+        Status is not (AuthStatus.SecureStoreUnavailable
+            or AuthStatus.ClientNotConfigured
+            or AuthStatus.LegacyTokenCleanupRequired);
 
     /// <summary>There is something on disk worth deleting.</summary>
     public bool CanSignOut =>
@@ -43,10 +47,11 @@ public sealed record AuthSnapshot(
 /// Classifies the station's stored GitHub credentials for presentation, shared
 /// by WPF and Avalonia so both frontends agree on what "signed in" means.
 ///
-/// <para>The store is injected rather than constructed: it is Windows-only
-/// today, and a platform without an encrypted implementation must pass
-/// <c>null</c> and get <see cref="AuthStatus.SecureStoreUnavailable"/> instead of
-/// a plaintext fallback.</para>
+/// <para>The store is injected rather than constructed. Frontends use
+/// <see cref="PlatformTokenStoreFactory"/> for DPAPI, Linux Secret Service, or
+/// macOS Keychain; a platform without an encrypted implementation passes
+/// <c>null</c> and gets <see cref="AuthStatus.SecureStoreUnavailable"/> instead
+/// of a plaintext fallback.</para>
 /// </summary>
 public sealed class AuthWorkflow
 {
@@ -77,6 +82,15 @@ public sealed class AuthWorkflow
         try
         {
             stored = _store.Load();
+        }
+        catch (LegacyMachineTokenCleanupException ex)
+        {
+            return new AuthSnapshot(
+                AuthStatus.LegacyTokenCleanupRequired,
+                false,
+                null,
+                null,
+                ex.Message);
         }
         catch (TokenStoreException ex)
         {
@@ -121,7 +135,11 @@ public sealed class AuthWorkflow
 
         try
         {
-            _store.Delete();
+            TokenStoreOperationLock.Run(_store, () =>
+            {
+                _store.Delete();
+                return true;
+            });
         }
         catch (Exception ex)
         {
@@ -129,6 +147,23 @@ public sealed class AuthWorkflow
         }
 
         return Evaluate();
+    }
+
+    /// <summary>
+    /// Persists a newly completed Device Flow session under the same
+    /// cross-process mutation lock used by refresh and sign-out.
+    /// </summary>
+    public void SaveTokens(StoredTokens tokens)
+    {
+        ArgumentNullException.ThrowIfNull(tokens);
+        if (_store is null)
+            throw new PlatformNotSupportedException("no encrypted token store on this platform");
+
+        TokenStoreOperationLock.Run(_store, () =>
+        {
+            _store.Save(tokens);
+            return true;
+        });
     }
 
     private static AuthSnapshot Simple(AuthStatus status) => new(status, false, null, null, null);
